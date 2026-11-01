@@ -1,6 +1,7 @@
 name: GitHub 开发者服务
-desc: 'RC4 parity-first; source: v1.3; do not reorder.'
+desc: 将 GitHub 下载、静态资源和相关服务转发至「⚡ 自動選優」。
 author: HJ
+category: HJ Stash
 rule-providers:
   hj-40-developer-domain-1:
     type: inline

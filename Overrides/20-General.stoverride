@@ -1,6 +1,7 @@
 name: Google / Microsoft / Apple 常规服务
-desc: 'RC4 parity-first; source: v1.3; do not reorder.'
+desc: Google 服务走通用代理；Microsoft、Apple 与常用 iCloud、App Store 服务保持直连。
 author: HJ
+category: HJ Stash
 rule-providers:
   hj-20-general-domain-1:
     type: inline

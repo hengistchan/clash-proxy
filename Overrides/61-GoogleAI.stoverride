@@ -1,6 +1,7 @@
 name: Google AI 精准分流
-desc: 'RC4 parity-first; source: v1.3; do not reorder.'
+desc: 将 Gemini、AI Studio、NotebookLM 和 Google AI API 流量转发至「🤖 AI 服務」。
 author: HJ
+category: HJ Stash
 rule-providers:
   hj-61-googleai-domain-1:
     type: inline

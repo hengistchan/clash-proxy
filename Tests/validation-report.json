@@ -1,6 +1,6 @@
 {
   "status": "STATIC_PARITY_PASS",
-  "checks": 450,
+  "checks": 486,
   "failures": [],
   "source_rule_count": 150,
   "expanded_rule_count": 150,

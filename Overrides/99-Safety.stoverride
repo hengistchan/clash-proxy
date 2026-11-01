@@ -1,6 +1,7 @@
 name: 关键安全 / LAN / APNs / AppleAI / 国内服务
-desc: 'RC4 parity-first; source: v1.3; do not reorder.'
+desc: 放行局域网与国内常用服务，并为 APNs 与 Apple 智能提供专用分流。
 author: HJ
+category: HJ Stash
 rule-providers:
   hj-99-safety-domain-1:
     type: inline
