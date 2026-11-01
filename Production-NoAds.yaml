@@ -1,0 +1,385 @@
+# RC4 NO-ADS alternative: intentionally changes ad route behavior.
+mode: rule
+log-level: info
+dns:
+  nameserver:
+  - 223.5.5.5
+  - 119.29.29.29
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter:
+  - '*.lan'
+  - '*.local'
+  - +.home.arpa
+  - +.miwifi.com
+  - +.msftconnecttest.com
+  - +.msftncsi.com
+  - +.stun.*.*
+  - +.stun.*.*.*
+  - +.stun.*.*.*.*
+  - +.servicewechat.com
+  - +.wxs.qq.com
+  - +.weixin.qq.com
+  - +.feishu.cn
+  - +.meituan.net
+  proxy-server-nameserver:
+  - 223.5.5.5
+  - 119.29.29.29
+proxy-providers:
+  GLaDOS:
+    url: https://example.invalid/REPLACE_WITH_PRIVATE_GLADOS_CLASH_YAML_URL
+    path: ./providers/hj-glados.yaml
+    interval: 43200
+    benchmark-url: http://www.gstatic.com/generate_204
+    benchmark-timeout: 5
+proxy-groups:
+- name: 🌐 通用代理
+  type: select
+  proxies:
+  - ⚡ 自動選優
+  - 🇺🇸 美國・故障備援
+  - 🇹🇼 台灣・故障備援
+  - 🇯🇵 日本・故障備援
+  - 🇺🇸 美國・手動固定
+  - 🇹🇼 台灣・手動固定
+  - 🇯🇵 日本・手動固定
+  - 🧰 全部節點（含 X5）
+  - DIRECT
+- name: ⚡ 自動選優
+  type: url-test
+  use:
+  - GLaDOS
+  filter: ^((Fast|Balancer)-B[0-9]+|(US|TW|JP)-X1)-[0-9]+$
+  url: http://www.gstatic.com/generate_204
+  interval: 300
+  tolerance: 100
+  lazy: true
+- name: 🇺🇸 美國・手動固定
+  type: select
+  use:
+  - GLaDOS
+  filter: ^US-Fixed-[0-9]+$
+- name: 🇹🇼 台灣・手動固定
+  type: select
+  use:
+  - GLaDOS
+  filter: ^TW-Fixed-[0-9]+$
+- name: 🇯🇵 日本・手動固定
+  type: select
+  use:
+  - GLaDOS
+  filter: ^JP-Fixed-[0-9]+$
+- name: 🇺🇸 美國・故障備援
+  type: fallback
+  use:
+  - GLaDOS
+  filter: ^US-Fixed-[0-9]+$
+  url: http://www.gstatic.com/generate_204
+  interval: 180
+  lazy: true
+- name: 🇹🇼 台灣・故障備援
+  type: fallback
+  use:
+  - GLaDOS
+  filter: ^TW-Fixed-[0-9]+$
+  url: http://www.gstatic.com/generate_204
+  interval: 180
+  lazy: true
+- name: 🇯🇵 日本・故障備援
+  type: fallback
+  use:
+  - GLaDOS
+  filter: ^JP-Fixed-[0-9]+$
+  url: http://www.gstatic.com/generate_204
+  interval: 180
+  lazy: true
+- name: 🤖 AI 服務
+  type: select
+  proxies:
+  - 🇺🇸 美國・故障備援
+  - 🇺🇸 美國・手動固定
+  - 🇯🇵 日本・故障備援
+  - 🇹🇼 台灣・故障備援
+  - 🇯🇵 日本・手動固定
+  - 🇹🇼 台灣・手動固定
+  - ⚡ 自動選優
+- name: 🍎 Apple 智慧
+  type: select
+  proxies:
+  - 🇺🇸 美國・故障備援
+  - 🇺🇸 美國・手動固定
+  - 🇯🇵 日本・故障備援
+  - 🇹🇼 台灣・故障備援
+  - 🇯🇵 日本・手動固定
+  - 🇹🇼 台灣・手動固定
+- name: 🔔 Apple 推送
+  type: select
+  proxies:
+  - 🇹🇼 台灣・手動固定
+  - 🇺🇸 美國・手動固定
+  - 🇯🇵 日本・手動固定
+  - 🇹🇼 台灣・故障備援
+  - 🇺🇸 美國・故障備援
+  - 🇯🇵 日本・故障備援
+- name: 🛡️ 廣告攔截
+  type: select
+  proxies:
+  - REJECT
+  - DIRECT
+- name: 🧰 全部節點（含 X5）
+  type: select
+  use:
+  - GLaDOS
+rule-providers:
+  hj-31-media-streaming-domain-1:
+    type: inline
+    behavior: domain
+    payload:
+    - +.larksuite.com
+    - +.netflix.com
+    - +.nflxvideo.net
+    - +.disneyplus.com
+    - +.spotify.com
+  hj-31-media-streaming-domain-2:
+    type: inline
+    behavior: domain
+    payload:
+    - +.huggingface.co
+    - +.hf.co
+    - +.steamcontent.com
+  hj-20-general-domain-1:
+    type: inline
+    behavior: domain
+    payload:
+    - +.google.com
+    - +.gstatic.com
+    - +.googleapis.com
+  hj-20-general-domain-2:
+    type: inline
+    behavior: domain
+    payload:
+    - +.microsoft.com
+    - +.microsoftonline.com
+    - +.office.com
+    - +.office365.com
+    - +.live.com
+    - +.windows.net
+    - +.azure.com
+    - +.apple.com.cn
+    - +.icloud.com
+    - +.apple.com
+    - +.cdn-apple.com
+    - +.itunes.com
+    - +.appstore.com
+    - +.mzstatic.com
+  Repcz-Google:
+    behavior: classical
+    format: text
+    url: https://raw.githubusercontent.com/Repcz/Tool/X/Stash/Rules/Google.list
+    path: ./rules/hj-google.list
+    interval: 86400
+  hj-61-googleai-domain-1:
+    type: inline
+    behavior: domain
+    payload:
+    - +.gemini.google.com
+    - +.gemini.google
+    - +.aistudio.google.com
+    - +.ai.google.dev
+    - +.generativelanguage.googleapis.com
+    - +.aiplatform.googleapis.com
+    - +.notebooklm.google.com
+    - +.notebooklm.google
+    - +.flow.google
+    - +.jules.google
+  hj-30-media-youtube-domain-1:
+    type: inline
+    behavior: domain
+    payload:
+    - +.youtube.com
+    - +.ytimg.com
+    - +.googlevideo.com
+  hj-40-developer-domain-1:
+    type: inline
+    behavior: domain
+    payload:
+    - +.github-releases.githubusercontent.com
+    - +.github.com
+    - +.githubusercontent.com
+    - +.githubassets.com
+    - +.github.io
+    - +.github.dev
+    - +.githubapp.com
+  hj-60-ai-domain-1:
+    type: inline
+    behavior: domain
+    payload:
+    - +.openai.com
+    - +.chatgpt.com
+    - +.oaistatic.com
+    - +.oaiusercontent.com
+    - +.oaistatsig.com
+    - +.sora.com
+    - events.statsigapi.net
+    - +.anthropic.com
+    - +.claude.ai
+    - +.claude.com
+    - +.claudeusercontent.com
+    - +.claudemcpcontent.com
+  hj-50-social-domain-1:
+    type: inline
+    behavior: domain
+    payload:
+    - +.telegram.org
+    - +.telegram.me
+    - +.telegram-cdn.org
+    - +.t.me
+    - +.telegra.ph
+  hj-50-social-ipcidr-2:
+    type: inline
+    behavior: ipcidr
+    payload:
+    - 149.154.160.0/20
+    - 5.28.192.0/18
+    - 91.108.0.0/16
+    - 2001:67c:4e8::/48
+    - 2001:b28:f23c::/47
+  hj-50-social-domain-3:
+    type: inline
+    behavior: domain
+    payload:
+    - +.x.com
+    - +.twitter.com
+    - +.twimg.com
+    - +.t.co
+    - +.twttr.com
+  Repcz-Telegram:
+    behavior: classical
+    format: text
+    url: https://raw.githubusercontent.com/Repcz/Tool/X/Stash/Rules/Telegram.list
+    path: ./rules/hj-telegram.list
+    interval: 86400
+  Repcz-Twitter:
+    behavior: classical
+    format: text
+    url: https://raw.githubusercontent.com/Repcz/Tool/X/Stash/Rules/Twitter.list
+    path: ./rules/hj-twitter.list
+    interval: 86400
+  hj-99-safety-domain-1:
+    type: inline
+    behavior: domain
+    payload:
+    - +.lan
+    - +.local
+    - +.home.arpa
+  hj-99-safety-ipcidr-2:
+    type: inline
+    behavior: ipcidr
+    payload:
+    - 127.0.0.0/8
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 169.254.0.0/16
+    - 100.64.0.0/10
+    - fc00::/7
+    - fe80::/10
+  hj-99-safety-domain-3:
+    type: inline
+    behavior: domain
+    payload:
+    - +.push.apple.com
+    - +.akadns.net
+  hj-99-safety-ipcidr-4:
+    type: inline
+    behavior: ipcidr
+    payload:
+    - 17.249.0.0/16
+    - 17.252.0.0/16
+    - 17.57.144.0/22
+    - 17.188.128.0/18
+    - 17.188.20.0/23
+    - 2620:149:a44::/48
+    - 2403:300:a42::/48
+    - 2403:300:a51::/48
+    - 2a01:b740:a42::/48
+  hj-99-safety-domain-5:
+    type: inline
+    behavior: domain
+    payload:
+    - guzzoni.apple.com
+    - +.smoot.apple.com
+    - apple-relay.apple.com
+    - apple-relay.cloudflare.com
+    - apple-relay.fastly-edge.com
+    - cp4.cloudflare.com
+  hj-99-safety-domain-6:
+    type: inline
+    behavior: domain
+    payload:
+    - +.servicewechat.com
+    - +.wxs.qq.com
+    - +.weixin.qq.com
+    - +.wx.qq.com
+    - +.wx.gtimg.com
+    - +.wxamedia.com
+    - +.weixin.com
+    - +.wechat.com
+    - +.wechatpay.com
+    - +.tenpay.com
+    - +.qpic.cn
+    - +.qlogo.cn
+    - +.qq.com
+    - +.gtimg.com
+    - +.tencent-cloud.net
+    - +.feishu.cn
+    - +.feishu.net
+    - +.feishucdn.com
+    - +.feishuimg.com
+    - +.feishuapp.cn
+    - +.feishupkg.com
+    - +.larkoffice.com
+    - +.bytedance.com
+    - +.bytedance.net
+    - +.byteimg.com
+    - +.bytescm.com
+    - +.bytetos.com
+    - +.snssdk.com
+    - +.pstatp.com
+    - +.zijieapi.com
+    - +.bdurl.net
+    - +.ctobsnssdk.com
+    - +.toutiaocloud.com
+    - +.meituan.com
+    - +.meituan.net
+    - +.meituanimg.com
+    - +.meituanstatic.com
+    - +.dianping.com
+    - +.dpfile.com
+    - +.sankuai.com
+    - +.sankuai.cn
+rules:
+- RULE-SET,hj-99-safety-domain-1,DIRECT
+- RULE-SET,hj-99-safety-ipcidr-2,DIRECT,no-resolve
+- RULE-SET,hj-99-safety-domain-3,🔔 Apple 推送
+- DOMAIN-KEYWORD,apple.com.edgekey.net,🔔 Apple 推送
+- RULE-SET,hj-99-safety-ipcidr-4,🔔 Apple 推送,no-resolve
+- RULE-SET,hj-99-safety-domain-5,🍎 Apple 智慧
+- RULE-SET,hj-99-safety-domain-6,DIRECT
+- PROTOCOL,MTPROTO,🇹🇼 台灣・故障備援
+- RULE-SET,hj-50-social-domain-1,🇹🇼 台灣・故障備援
+- RULE-SET,hj-50-social-ipcidr-2,🇹🇼 台灣・故障備援,no-resolve
+- RULE-SET,Repcz-Telegram,🇹🇼 台灣・故障備援
+- RULE-SET,hj-50-social-domain-3,🇹🇼 台灣・故障備援
+- RULE-SET,Repcz-Twitter,🇹🇼 台灣・故障備援
+- RULE-SET,hj-60-ai-domain-1,🤖 AI 服務
+- RULE-SET,hj-40-developer-domain-1,⚡ 自動選優
+- RULE-SET,hj-30-media-youtube-domain-1,🌐 通用代理
+- RULE-SET,hj-61-googleai-domain-1,🤖 AI 服務
+- RULE-SET,hj-20-general-domain-1,🌐 通用代理
+- RULE-SET,Repcz-Google,🌐 通用代理
+- RULE-SET,hj-20-general-domain-2,DIRECT
+- RULE-SET,hj-31-media-streaming-domain-1,🌐 通用代理
+- RULE-SET,hj-31-media-streaming-domain-2,⚡ 自動選優
+- GEOSITE,CN,DIRECT
+- GEOIP,CN,DIRECT,no-resolve
+- MATCH,🌐 通用代理

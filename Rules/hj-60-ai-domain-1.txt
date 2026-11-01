@@ -1,0 +1,12 @@
++.openai.com
++.chatgpt.com
++.oaistatic.com
++.oaiusercontent.com
++.oaistatsig.com
++.sora.com
+events.statsigapi.net
++.anthropic.com
++.claude.ai
++.claude.com
++.claudeusercontent.com
++.claudemcpcontent.com

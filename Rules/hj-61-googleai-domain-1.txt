@@ -1,0 +1,10 @@
++.gemini.google.com
++.gemini.google
++.aistudio.google.com
++.ai.google.dev
++.generativelanguage.googleapis.com
++.aiplatform.googleapis.com
++.notebooklm.google.com
++.notebooklm.google
++.flow.google
++.jules.google

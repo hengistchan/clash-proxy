@@ -1,0 +1,13 @@
+name: YouTube 媒体分流
+desc: 'RC4 parity-first; source: v1.3; do not reorder.'
+author: HJ
+rule-providers:
+  hj-30-media-youtube-domain-1:
+    type: inline
+    behavior: domain
+    payload:
+    - +.youtube.com
+    - +.ytimg.com
+    - +.googlevideo.com
+rules:
+- RULE-SET,hj-30-media-youtube-domain-1,🌐 通用代理

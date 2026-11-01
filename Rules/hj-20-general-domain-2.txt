@@ -1,0 +1,14 @@
++.microsoft.com
++.microsoftonline.com
++.office.com
++.office365.com
++.live.com
++.windows.net
++.azure.com
++.apple.com.cn
++.icloud.com
++.apple.com
++.cdn-apple.com
++.itunes.com
++.appstore.com
++.mzstatic.com

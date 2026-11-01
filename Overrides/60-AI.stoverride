@@ -1,0 +1,22 @@
+name: OpenAI / Claude 精准分流
+desc: 'RC4 parity-first; source: v1.3; do not reorder.'
+author: HJ
+rule-providers:
+  hj-60-ai-domain-1:
+    type: inline
+    behavior: domain
+    payload:
+    - +.openai.com
+    - +.chatgpt.com
+    - +.oaistatic.com
+    - +.oaiusercontent.com
+    - +.oaistatsig.com
+    - +.sora.com
+    - events.statsigapi.net
+    - +.anthropic.com
+    - +.claude.ai
+    - +.claude.com
+    - +.claudeusercontent.com
+    - +.claudemcpcontent.com
+rules:
+- RULE-SET,hj-60-ai-domain-1,🤖 AI 服務

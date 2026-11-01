@@ -1,0 +1,17 @@
+name: GitHub 开发者服务
+desc: 'RC4 parity-first; source: v1.3; do not reorder.'
+author: HJ
+rule-providers:
+  hj-40-developer-domain-1:
+    type: inline
+    behavior: domain
+    payload:
+    - +.github-releases.githubusercontent.com
+    - +.github.com
+    - +.githubusercontent.com
+    - +.githubassets.com
+    - +.github.io
+    - +.github.dev
+    - +.githubapp.com
+rules:
+- RULE-SET,hj-40-developer-domain-1,⚡ 自動選優

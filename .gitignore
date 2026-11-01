@@ -1,0 +1,10 @@
+.DS_Store
+**/__pycache__/
+*.py[cod]
+*.private.yaml
+.env
+.env.*
+providers/
+rules/hj-*.list
+runtime-*.json
+Tests/live-remote-report.json
