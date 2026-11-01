@@ -9,6 +9,44 @@ base=yaml.safe_load((ROOT/'Sources/v13-normalized-for-audit.yaml').read_text(enc
 assert len(base['rules'])==150
 source_original_providers=base['rule-providers']
 owner={'Repcz-Telegram':'50-Social.stoverride','Repcz-Twitter':'50-Social.stoverride','Repcz-Google':'20-General.stoverride','Repcz-Ads-AWAvenue':'10-Ads.stoverride'}
+override_metadata={
+    '99-Safety.stoverride':{
+        'name':'关键安全 / LAN / APNs / AppleAI / 国内服务',
+        'desc':'放行局域网与国内常用服务，并为 APNs 与 Apple 智能提供专用分流。',
+    },
+    '50-Social.stoverride':{
+        'name':'Telegram / X 完整规则',
+        'desc':'将 Telegram、X/Twitter 和 MTProto 流量转发至「🇹🇼 台灣・故障備援」。',
+    },
+    '60-AI.stoverride':{
+        'name':'OpenAI / Claude 精准分流',
+        'desc':'将 OpenAI、ChatGPT、Claude 及相关 API 流量转发至「🤖 AI 服務」。',
+    },
+    '40-Developer.stoverride':{
+        'name':'GitHub 开发者服务',
+        'desc':'将 GitHub 下载、静态资源和相关服务转发至「⚡ 自動選優」。',
+    },
+    '30-Media-YouTube.stoverride':{
+        'name':'YouTube 媒体分流',
+        'desc':'将 YouTube 及视频 CDN 流量转发至「🌐 通用代理」。',
+    },
+    '61-GoogleAI.stoverride':{
+        'name':'Google AI 精准分流',
+        'desc':'将 Gemini、AI Studio、NotebookLM 和 Google AI API 流量转发至「🤖 AI 服務」。',
+    },
+    '20-General.stoverride':{
+        'name':'Google / Microsoft / Apple 常规服务',
+        'desc':'Google 服务走通用代理；Microsoft、Apple 与常用 iCloud、App Store 服务保持直连。',
+    },
+    '31-Media-Streaming.stoverride':{
+        'name':'流媒体和下载',
+        'desc':'流媒体与 Lark 走通用代理；Hugging Face 和 Steam 下载走自动优选。',
+    },
+    '10-Ads.stoverride':{
+        'name':'AWAvenue 原版完整广告策略',
+        'desc':'使用 AWAvenue 原版广告规则，将命中流量转发至「🛡️ 廣告攔截」。',
+    },
+}
 def render(obj,comment=''):
     return comment+yaml.safe_dump(obj,allow_unicode=True,sort_keys=False,width=150)
 def optimize_slice(name,rules):
@@ -48,17 +86,8 @@ for item in manifest['segments']:
     origins.update(orig)
     for k,v in snaps.items():expected[f'Rules/{k}.txt']=v
     other={k:copy.deepcopy(v) for k,v in source_original_providers.items() if owner[k]==name}
-    mod={'name':next(x[1] for x in [
-    ('99-Safety.stoverride','关键安全 / LAN / APNs / AppleAI / 国内服务'),
-    ('50-Social.stoverride','Telegram / X 完整规则'),
-    ('60-AI.stoverride','OpenAI / Claude 精准分流'),
-    ('40-Developer.stoverride','GitHub 开发者服务'),
-    ('30-Media-YouTube.stoverride','YouTube 媒体分流'),
-    ('61-GoogleAI.stoverride','Google AI 精准分流'),
-    ('20-General.stoverride','Google / Microsoft / Apple 常规服务'),
-    ('31-Media-Streaming.stoverride','流媒体和下载'),
-    ('10-Ads.stoverride','AWAvenue 原版完整广告策略')] if x[0]==name),
-    'desc':'RC4 parity-first; source: v1.3; do not reorder.','author':'HJ','rule-providers':{**inline,**other},'rules':data}
+    metadata=override_metadata[name]
+    mod={'name':metadata['name'],'desc':metadata['desc'],'author':'HJ','category':'HJ Stash','rule-providers':{**inline,**other},'rules':data}
     mods[name]=mod
     expected[f'Overrides/{name}']=render(mod)
 for name in manifest['override_order_top_to_bottom']:

@@ -1,6 +1,7 @@
 name: AWAvenue 原版完整广告策略
-desc: 'RC4 parity-first; source: v1.3; do not reorder.'
+desc: 使用 AWAvenue 原版广告规则，将命中流量转发至「🛡️ 廣告攔截」。
 author: HJ
+category: HJ Stash
 rule-providers:
   Repcz-Ads-AWAvenue:
     behavior: classical

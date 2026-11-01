@@ -1,6 +1,7 @@
 name: YouTube 媒体分流
-desc: 'RC4 parity-first; source: v1.3; do not reorder.'
+desc: 将 YouTube 及视频 CDN 流量转发至「🌐 通用代理」。
 author: HJ
+category: HJ Stash
 rule-providers:
   hj-30-media-youtube-domain-1:
     type: inline

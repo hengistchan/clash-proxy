@@ -1,6 +1,7 @@
 name: 流媒体和下载
-desc: 'RC4 parity-first; source: v1.3; do not reorder.'
+desc: 流媒体与 Lark 走通用代理；Hugging Face 和 Steam 下载走自动优选。
 author: HJ
+category: HJ Stash
 rule-providers:
   hj-31-media-streaming-domain-1:
     type: inline

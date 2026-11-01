@@ -1,6 +1,7 @@
 name: Telegram / X 完整规则
-desc: 'RC4 parity-first; source: v1.3; do not reorder.'
+desc: 将 Telegram、X/Twitter 和 MTProto 流量转发至「🇹🇼 台灣・故障備援」。
 author: HJ
+category: HJ Stash
 rule-providers:
   hj-50-social-domain-1:
     type: inline

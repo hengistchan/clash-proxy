@@ -68,6 +68,10 @@ check(core['rules']==base['rules'][-3:],'Core must contain only v1.3 fallback; m
 merged=core['rules'][:];rp=core['rule-providers'].copy()
 for filename in manifest['override_order_top_to_bottom']:
     mod=yaml.safe_load((ROOT/'Overrides'/filename).read_text(encoding='utf8'))
+    check(mod.get('name'),'Override display name missing: '+filename)
+    check(mod.get('desc'),'Override description missing: '+filename)
+    check(mod.get('author')=='HJ','Override author changed: '+filename)
+    check(mod.get('category')=='HJ Stash','Override category changed: '+filename)
     merged=mod['rules']+merged
     for k,v in mod['rule-providers'].items():
         check(k not in rp,'Duplicate provider defined in overrides '+k)
