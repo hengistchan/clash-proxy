@@ -122,23 +122,25 @@ GitHub 网页的 `/blob/` 链接返回 HTML，Contents API 默认返回 JSON，�
 
 ### 使用 main 中的覆写
 
-9 个覆写可以直接使用 `main` 的 Raw 地址。例如：
+在安装了 Stash 的 iPhone/iPad 上点击以下链接即可打开覆写安装页面。请按编号依次
+安装，并最终按相同顺序启用：
 
-```text
-https://raw.githubusercontent.com/hengistchan/clash-proxy/main/Overrides/50-Social.stoverride
-```
+| 顺序 | 覆写 | 快速安装 |
+|---:|---|---|
+| 1 | `10-Ads.stoverride` | [安装 AWAvenue 广告策略](https://link.stash.ws/install-override/raw.githubusercontent.com/hengistchan/clash-proxy/main/Overrides/10-Ads.stoverride) |
+| 2 | `31-Media-Streaming.stoverride` | [安装流媒体和下载](https://link.stash.ws/install-override/raw.githubusercontent.com/hengistchan/clash-proxy/main/Overrides/31-Media-Streaming.stoverride) |
+| 3 | `20-General.stoverride` | [安装 Google / Microsoft / Apple 常规服务](https://link.stash.ws/install-override/raw.githubusercontent.com/hengistchan/clash-proxy/main/Overrides/20-General.stoverride) |
+| 4 | `61-GoogleAI.stoverride` | [安装 Google AI 精准分流](https://link.stash.ws/install-override/raw.githubusercontent.com/hengistchan/clash-proxy/main/Overrides/61-GoogleAI.stoverride) |
+| 5 | `30-Media-YouTube.stoverride` | [安装 YouTube 媒体分流](https://link.stash.ws/install-override/raw.githubusercontent.com/hengistchan/clash-proxy/main/Overrides/30-Media-YouTube.stoverride) |
+| 6 | `40-Developer.stoverride` | [安装 GitHub 开发者服务](https://link.stash.ws/install-override/raw.githubusercontent.com/hengistchan/clash-proxy/main/Overrides/40-Developer.stoverride) |
+| 7 | `60-AI.stoverride` | [安装 OpenAI / Claude 精准分流](https://link.stash.ws/install-override/raw.githubusercontent.com/hengistchan/clash-proxy/main/Overrides/60-AI.stoverride) |
+| 8 | `50-Social.stoverride` | [安装 Telegram / X 完整规则](https://link.stash.ws/install-override/raw.githubusercontent.com/hengistchan/clash-proxy/main/Overrides/50-Social.stoverride) |
+| 9 | `99-Safety.stoverride` | [安装关键安全 / LAN / APNs / 国内服务](https://link.stash.ws/install-override/raw.githubusercontent.com/hengistchan/clash-proxy/main/Overrides/99-Safety.stoverride) |
 
-Stash 一键安装地址：
-
-```text
-https://link.stash.ws/install-override/raw.githubusercontent.com/hengistchan/clash-proxy/main/Overrides/50-Social.stoverride
-```
-
-该链接会继续跳转到 `stash://`；桌面浏览器或 `curl` 提示不支持此协议属于预期行为，
-应在安装了 Stash 的 iPhone/iPad 上打开。
-
-安装后仍须严格遵守下一节的启用顺序。使用 `main` 时，每次手动更新覆写都会获得
-最新版本；该分支可移动，不适合作为不可复现的生产快照。
+这些链接会跳转到 `stash://`；桌面浏览器或 `curl` 提示不支持此协议属于预期行为，
+应在安装了 Stash 的 iPhone/iPad 上打开。安装后仍须严格遵守下一节的启用顺序。
+使用 `main` 时，每次手动更新覆写都会获得最新版本；该分支可移动，不适合作为
+不可复现的生产快照。
 
 ### main、标签和提交版本的选择
 
