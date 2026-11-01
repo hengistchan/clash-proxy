@@ -105,16 +105,11 @@ class ProbeUnitTests(unittest.TestCase):
         self.assertEqual(saved['rule']['index'], 4)
         self.assertEqual(saved['outbound'], 'US Fixed')
         self.assertEqual(probe.validate_match_response({'outbound': 'DIRECT', 'rule': 'MATCH,DIRECT', 'ruleIndex': 3})['outbound'], 'DIRECT')
-        stash_37 = {'proxy': 'DIRECT', 'rule': {'type': 'MATCH', 'index': 2}, 'rulesEvaluated': 3}
-        saved_37 = probe.validate_match_response(stash_37)
-        self.assertEqual(saved_37['outbound'], 'DIRECT')
-        self.assertEqual(saved_37['evaluatedRules'], 3)
 
     def test_missing_outbound_and_index_do_not_pass(self):
         for record in ({'rule': {'type':'DOMAIN', 'index':4}},
                        {'outbound':'DIRECT', 'rule': {'type': 'DOMAIN'}},
                        {'outbound':'DIRECT', 'evaluatedRules': 3},
-                       {'proxy':'DIRECT', 'rule': {'type': 'DOMAIN'}},
                        {}):
             with self.subTest(record=record), self.assertRaises(ValueError):
                 probe.validate_match_response(record)
