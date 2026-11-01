@@ -1,5 +1,8 @@
 # HJ Stash v1.4-RC5 VerifiedTools（规则等价 + 验收工具修复）
 
+[![Offline CI](https://github.com/hengistchan/clash-proxy/actions/workflows/offline-ci.yml/badge.svg?branch=main)](https://github.com/hengistchan/clash-proxy/actions/workflows/offline-ci.yml)
+[![Online Rule Check](https://github.com/hengistchan/clash-proxy/actions/workflows/online-rules.yml/badge.svg?branch=main)](https://github.com/hengistchan/clash-proxy/actions/workflows/online-rules.yml)
+
 **结论：静态规则还原一致，真机运行尚未验收。** RC3 优化时默认丢弃了部分 Repcz Telegram/Twitter/Google 成员、把 969 条 Repcz 广告源换为约 661 条 Only.Ads。RC4 **撤销这些有损优化**。
 
 > **RC5 变更范围：仅修复验收脚本与私人输出目录保护。** `Core.yaml`、`Production*.yaml`、9 个覆写、17 个规则快照、原始 v1.3 源文件及 manifest 与 RC4 **逐字节一致**；150 条分流规则、4 个 Repcz 远程 Provider、13 个代理组均未改变。
@@ -146,6 +149,20 @@ https://link.stash.ws/install-override/raw.githubusercontent.com/hengistchan/cla
 - 更新已有本地工程时，先执行 `git pull --ff-only origin main`，再运行
   `Scripts/rebuild.py` 和 `Tests/validate_parity.py`。`configure.py` 不会覆盖已有私人配置；
   请保留旧文件以便回滚，并通过 `--out` 创建新的带日期配置。
+
+## CI 和维护流程
+
+仓库使用两个相互独立的 GitHub Actions 工作流：
+
+- `Offline CI`：在 Pull Request、`main` push 或手动触发时运行。它在 Python 3.9
+  和 3.12 上执行 `Scripts/rebuild.py`、`Tests/validate_parity.py` 和
+  `test_tool_fixes.py`，并检查生成文件是否已经提交。该工作流不访问实时规则源。
+- `Online Rule Check`：每天北京时间 09:17 检查 4 个 Repcz 上游源，保存 30 天内的
+  sanitized 报告；也可在 Actions 页面手动触发。它不会阻塞离线 CI。
+
+更新仓库时，从最新 `main` 创建独立分支，通过 Pull Request 提交修改。PR 合并前至少
+要求 `Offline CI` 的 Python 3.9 和 3.12 两个检查通过；`Online Rule Check` 的偶发
+网络失败只用于判断上游可达性，不应被解释为规则配置不一致。
 
 ## 模块化部署（Mac + iPhone Stash）
 
