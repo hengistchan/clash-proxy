@@ -32,11 +32,120 @@
 | `Production.yaml` | 与 Core+全部 9 个覆写结构一致的单文件参考，不能同时启用这些覆写 |
 | `Production-Legacy-v1.3.yaml` | 150 条原规则 + 4 个远程 provider 的原版语义复刻；用于 A/B 回退与审计 |
 | `Production-NoAds.yaml` | **显式功能差异**：去掉广告 provider；非完整等价版 |
-| `Rules/*.txt` | 17 个索引快照，仅供调试；Stash 使用 inline 定义，不必手动导入 |
+| `Rules/*.txt` | 17 个索引快照；当前完整配置使用 inline 定义，也可通过 `main` 的 Raw 地址作为远程规则集引用 |
 | `Sources/` | 用户原始 Markdown 和独立 YAML 解析基线 |
 | `Tests/validate_parity.py` | 检验 SHA、150 条还原、4 个 provider 定义、覆写合并、分流抽查 |
 | `Tests/live_remote_check.py` | 在本地网络下载并检查所有 4 个远程规则的当前内容 |
 | `Tests/runtime_probe.py` | Stash 只读 API 监控，20 次以上成功采样输出 p95 |
+
+## 从 GitHub main 分支获取
+
+公开仓库：<https://github.com/hengistchan/clash-proxy>
+
+`main` 代表最新模板。当前 `Core.yaml` 和 `Production*.yaml` 中的 GLaDOS 地址仍是
+`example.invalid` 占位符，**不能直接作为可联网的完整配置导入**。完整配置应拉取
+`main` 后在本地生成私人版本；只有 `Rules/*.txt` 和 `Overrides/*.stoverride`
+可以直接通过 Raw 地址供 Stash 获取。完整配置包含 `PROTOCOL,MTPROTO` 规则，
+需要 Stash iOS/tvOS 3.7+。
+
+### 获取整份配置模板
+
+```bash
+git clone --branch main https://github.com/hengistchan/clash-proxy.git
+cd clash-proxy
+python3 -m pip install PyYAML
+python3 Scripts/rebuild.py
+python3 Tests/validate_parity.py
+python3 Scripts/configure.py --profile Core.yaml
+```
+
+`configure.py` 会从环境变量 `GLADOS_URL` 或隐藏提示中读取私人订阅地址，并生成
+`~/.config/hj-stash/private/Core.private.yaml`。将该本地文件导入 Stash，再按下一节
+的顺序启用 9 个覆写。不要把生成的文件、真实订阅地址或 API Token 提交回仓库。
+
+如果只需要查看配置，可以使用网页地址：
+
+```text
+https://github.com/hengistchan/clash-proxy/blob/main/Production.yaml
+```
+
+如果只需下载原始模板文件，使用 Raw 地址：
+
+```text
+https://raw.githubusercontent.com/hengistchan/clash-proxy/main/Production.yaml
+```
+
+下载后仍需替换 GLaDOS 占位符。GitHub Contents API 默认返回 JSON，不是 Stash
+可直接加载的 YAML：
+
+```text
+https://api.github.com/repos/hengistchan/clash-proxy/contents/Production.yaml?ref=main
+```
+
+### 使用 main 中的远程规则集
+
+`Rules/*.txt` 可以作为 Stash `rule-providers` 的 `url`。`*-domain-*.txt` 对应
+`behavior: domain`，`*-ipcidr-*.txt` 对应 `behavior: ipcidr`。例如，将现有
+`hj-60-ai-domain-1` inline Provider 替换为：
+
+```yaml
+rule-providers:
+  hj-60-ai-domain-1:
+    behavior: domain
+    format: text
+    url: https://raw.githubusercontent.com/hengistchan/clash-proxy/main/Rules/hj-60-ai-domain-1.txt
+    path: ./rules/hj-60-ai-domain-1.txt
+    interval: 86400
+
+rules:
+  - RULE-SET,hj-60-ai-domain-1,🤖 AI 服務
+```
+
+IP 集合使用 `behavior: ipcidr`，并保留原规则中的 `no-resolve`：
+
+```yaml
+rules:
+  - RULE-SET,hj-50-social-ipcidr-2,🇹🇼 台灣・故障備援,no-resolve
+```
+
+这里是**替换**同名 inline 定义，而不是在 `rule-providers` 中重复添加同名项。
+当前 `Production.yaml` 和 `Core.yaml` 默认使用 inline 规则；把 17 个本地集合改为
+远程 `main` 引用会引入网络下载和上游变更风险，必须重新执行静态验收及真机匹配测试。
+4 个 `Repcz-*` Provider 仍直接引用其原始上游 URL，不受本仓库 `main` 控制。
+
+GitHub 网页的 `/blob/` 链接返回 HTML，Contents API 默认返回 JSON，都不能直接填入
+`rule-providers.url`。Stash 应使用上述 `raw.githubusercontent.com` 地址；如确实要
+使用 Contents API，需配置 `Accept: application/vnd.github.raw+json` 请求头。
+
+### 使用 main 中的覆写
+
+9 个覆写可以直接使用 `main` 的 Raw 地址。例如：
+
+```text
+https://raw.githubusercontent.com/hengistchan/clash-proxy/main/Overrides/50-Social.stoverride
+```
+
+Stash 一键安装地址：
+
+```text
+https://link.stash.ws/install-override/raw.githubusercontent.com/hengistchan/clash-proxy/main/Overrides/50-Social.stoverride
+```
+
+该链接会继续跳转到 `stash://`；桌面浏览器或 `curl` 提示不支持此协议属于预期行为，
+应在安装了 Stash 的 iPhone/iPad 上打开。
+
+安装后仍须严格遵守下一节的启用顺序。使用 `main` 时，每次手动更新覆写都会获得
+最新版本；该分支可移动，不适合作为不可复现的生产快照。
+
+### main、标签和提交版本的选择
+
+- `main`：适合持续获取最新模板或规则；文件和规则可能随时变化。
+- 标签或完整提交 SHA：适合需要可复现、可回滚的部署。把 URL 中的 `main` 换成标签
+  或提交 SHA 即可，例如
+  `https://raw.githubusercontent.com/hengistchan/clash-proxy/<COMMIT_SHA>/Rules/hj-60-ai-domain-1.txt`。
+- 更新已有本地工程时，先执行 `git pull --ff-only origin main`，再运行
+  `Scripts/rebuild.py` 和 `Tests/validate_parity.py`。`configure.py` 不会覆盖已有私人配置；
+  请保留旧文件以便回滚，并通过 `--out` 创建新的带日期配置。
 
 ## 模块化部署（Mac + iPhone Stash）
 
