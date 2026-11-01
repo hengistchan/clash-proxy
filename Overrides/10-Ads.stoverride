@@ -3,11 +3,130 @@ desc: 使用 AWAvenue 原版广告规则，将命中流量转发至「🛡️ �
 author: HJ
 category: HJ Stash
 rule-providers:
+  hj-10-ads-exclusions:
+    type: inline
+    behavior: domain
+    payload:
+    - +.lan
+    - +.local
+    - +.home.arpa
+    - +.push.apple.com
+    - +.akadns.net
+    - +.apple.com.edgekey.net
+    - guzzoni.apple.com
+    - +.smoot.apple.com
+    - apple-relay.apple.com
+    - apple-relay.cloudflare.com
+    - apple-relay.fastly-edge.com
+    - cp4.cloudflare.com
+    - +.servicewechat.com
+    - +.wxs.qq.com
+    - +.weixin.qq.com
+    - +.wx.qq.com
+    - +.wx.gtimg.com
+    - +.wxamedia.com
+    - +.weixin.com
+    - +.wechat.com
+    - +.wechatpay.com
+    - +.tenpay.com
+    - +.qpic.cn
+    - +.qlogo.cn
+    - +.qq.com
+    - +.gtimg.com
+    - +.tencent-cloud.net
+    - +.feishu.cn
+    - +.feishu.net
+    - +.feishucdn.com
+    - +.feishuimg.com
+    - +.feishuapp.cn
+    - +.feishupkg.com
+    - +.larkoffice.com
+    - +.bytedance.com
+    - +.bytedance.net
+    - +.byteimg.com
+    - +.bytescm.com
+    - +.bytetos.com
+    - +.snssdk.com
+    - +.pstatp.com
+    - +.zijieapi.com
+    - +.bdurl.net
+    - +.ctobsnssdk.com
+    - +.toutiaocloud.com
+    - +.meituan.com
+    - +.meituan.net
+    - +.meituanimg.com
+    - +.meituanstatic.com
+    - +.dianping.com
+    - +.dpfile.com
+    - +.sankuai.com
+    - +.sankuai.cn
+    - +.telegram.org
+    - +.telegram.me
+    - +.telegram-cdn.org
+    - +.t.me
+    - +.telegra.ph
+    - +.x.com
+    - +.twitter.com
+    - +.twimg.com
+    - +.t.co
+    - +.twttr.com
+    - +.openai.com
+    - +.chatgpt.com
+    - +.oaistatic.com
+    - +.oaiusercontent.com
+    - +.oaistatsig.com
+    - +.sora.com
+    - events.statsigapi.net
+    - +.anthropic.com
+    - +.claude.ai
+    - +.claude.com
+    - +.claudeusercontent.com
+    - +.claudemcpcontent.com
+    - +.github-releases.githubusercontent.com
+    - +.github.com
+    - +.githubusercontent.com
+    - +.githubassets.com
+    - +.github.io
+    - +.github.dev
+    - +.githubapp.com
+    - +.youtube.com
+    - +.ytimg.com
+    - +.googlevideo.com
+    - +.gemini.google.com
+    - +.gemini.google
+    - +.aistudio.google.com
+    - +.ai.google.dev
+    - +.generativelanguage.googleapis.com
+    - +.aiplatform.googleapis.com
+    - +.notebooklm.google.com
+    - +.notebooklm.google
+    - +.flow.google
+    - +.jules.google
+    - +.larksuite.com
+    - +.netflix.com
+    - +.nflxvideo.net
+    - +.disneyplus.com
+    - +.spotify.com
+    - +.huggingface.co
+    - +.hf.co
+    - +.steamcontent.com
   Repcz-Ads-AWAvenue:
     behavior: classical
     format: text
     url: https://raw.githubusercontent.com/Repcz/Tool/X/Stash/Rules/Ads_AWAvenue.list
     path: ./rules/hj-ads-awavenue.list
     interval: 86400
+  hj-10-telegram-exclusion:
+    behavior: classical
+    format: text
+    url: https://raw.githubusercontent.com/Repcz/Tool/X/Stash/Rules/Telegram.list
+    path: ./rules/hj-10-telegram-exclusion.list
+    interval: 86400
+  hj-10-twitter-exclusion:
+    behavior: classical
+    format: text
+    url: https://raw.githubusercontent.com/Repcz/Tool/X/Stash/Rules/Twitter.list
+    path: ./rules/hj-10-twitter-exclusion.list
+    interval: 86400
 rules:
-- RULE-SET,Repcz-Ads-AWAvenue,🛡️ 廣告攔截
+- AND,((RULE-SET,Repcz-Ads-AWAvenue),(NOT,((RULE-SET,hj-10-ads-exclusions))),(NOT,((RULE-SET,hj-10-telegram-exclusion))),(NOT,((RULE-SET,hj-10-twitter-exclusion))),(NOT,((DOMAIN-KEYWORD,apple.com.edgekey.net)))),🛡️ 廣告攔截

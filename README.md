@@ -1,32 +1,37 @@
-# HJ Stash v1.4-RC5 VerifiedTools（规则等价 + 验收工具修复）
+# HJ Stash v1.4（顺序无关覆写 / AND NOT）
 
 [![Offline CI](https://github.com/hengistchan/clash-proxy/actions/workflows/offline-ci.yml/badge.svg?branch=main)](https://github.com/hengistchan/clash-proxy/actions/workflows/offline-ci.yml)
 [![Online Rule Check](https://github.com/hengistchan/clash-proxy/actions/workflows/online-rules.yml/badge.svg?branch=main)](https://github.com/hengistchan/clash-proxy/actions/workflows/online-rules.yml)
 
-**结论：静态规则还原一致，真机运行尚未验收。** RC3 优化时默认丢弃了部分 Repcz Telegram/Twitter/Google 成员、把 969 条 Repcz 广告源换为约 661 条 Only.Ads。RC4 **撤销这些有损优化**。
+**结论：完整启用 9 个覆写后，路由不再依赖它们的启用顺序；真机运行仍待最终验收。**
+本次 4 个 Repcz 上游源在线下载均通过，Stash 3.7.0 只读 `/rules/match` 字段也已核对。
+用当前上游快照构造 1,151 个目标，覆盖 1,079 条远程规则时，4 种顺序的静态模拟差异为 0。
 
-> **RC5 发布时变更范围：仅修复验收脚本与私人输出目录保护。** `Core.yaml`、`Production*.yaml`、9 个覆写、17 个规则快照、原始 v1.3 源文件及 manifest 与 RC4 **逐字节一致**；150 条分流规则、4 个 Repcz 远程 Provider、13 个代理组均未改变。
->
-> **后续展示元数据更新：** 9 个覆写已补充中文 `desc`，并统一使用 `category: 'HJ Stash'`；路由规则和启用顺序未改变。
->
-> 当前状态：本地静态验收通过；**线上规则可达性和 iPhone 真机验收仍待本地执行**。
+当前语义优先级是：
 
-## RC5 验收工具修复
+```text
+具体服务 > 广告拦截 > Google / Microsoft / Apple 通用规则
+```
 
-1. `Tests/live_remote_check.py` 修复 UTF-8-SIG 编码名，保存原始响应字节的 SHA-256；断网时仍会失败，不把本地模拟当在线验证。
-2. `Scripts/configure.py` 对新创建的专用目录设置 `0700`；已有目录不执行 `chmod`，如果组/其他用户有权限则**拒绝写入**且保留原有模式；私有配置为 `0600`。
-3. `Tests/runtime_probe.py` 改用 **nearest-rank p95**：20 个升序样本取第 19 个值。
-4. `/rules/match` 必须有有效 `outbound`、命中规则和 `ruleIndex` / `evaluatedRules` / 内嵌序号之一，允许保留白名单化的嵌套规则字段；无效 JSON 不能计入成功样本。
-5. 探针默认 `--mode performance`，同时强制检查规则数量、规则源、代理组、使用和可用内存，以及每目标至少 20 次有效请求；`--mode functional` 可只做功能级检查。
+具体服务包括 Safety、Social、AI、Developer、YouTube、Google AI 和 Streaming。
+`10-Ads` 与 `20-General` 使用 Stash 逻辑规则 `AND` + `NOT`：广告排除所有具体服务，
+通用规则再排除具体服务和广告。因此即使广告、通用或其他覆写被重新排序，最终命中结果
+也应保持一致。
 
-本次不修改 Stash 版本相关内容，按现有最新版客户端测试即可。
+> 有意行为：属于具体服务域名族的广告子域会跟随具体服务。例如 `ad.qq.com` 按
+> Safety 规则直连，`ads.youtube.com` 按 YouTube 规则走通用代理；普通广告域名
+> （如 `doubleclick.net`）仍进入「🛡️ 廣告攔截」。
 
-## 修复原则
+## 顺序无关的实现
 
-- **覆盖完整性优先**：保留 v1.3 的 4 个原始 Repcz `classical/text` 远程提供者，提供者名称、URL、缓存路径、更新周期和首次匹配位置都保持不变。
-- **仅优化可证明等价的本地规则**：把原版中连续、相同策略的 DOMAIN/DOMAIN-SUFFIX 或 IP-CIDR 段转换为 17 个 `inline domain/ipcidr` 索引集合。原始 150 条规则能被逐条、原顺序地恢复；`DOMAIN-KEYWORD`、MTProto 及 GeoSite/GeoIP/MATCH 不改变。
-- **不做隐式策略调整**：Google、Twitter、Telegram、Apple、AI、国内服务的最终匹配优先级与 v1.3 相同。广告也保留原版位置；这意味着原版中已存在的广告提前放行问题仍在，属于独立待修复的功能缺陷，不能混进性能修复里。
-- **高性能不等于追求 0 classical**：17 个本地索引集合 + 4 个原始远程 `classical`，共 26 条热路径显式匹配项。不能将 150→26 理解为实际速度提升 5.7 倍。
+- **Ads**：`AND,((RULE-SET,广告源),(NOT,((RULE-SET,具体服务排除集))),...)`。只要广告域名属于任何具体服务，广告规则就不命中。
+- **General**：同时排除具体服务、广告源和 Social 的两组远程规则。这样 General 位于 Ads 上方时，广告仍由后方 Ads 规则处理；位于下方时，General 也不会抢占广告。
+- **独立可加载**：Ads 和 General 各自携带所需的排除集合与远程 provider 别名，不依赖另一个覆写先定义某个名称。代价是两个宽泛覆写会各自缓存一部分相同上游规则，网络更新和磁盘占用略高。
+- **远程 Social 交集**：Telegram/Twitter 上游会变化，不能只写死当前域名。Ads 和 General 各自用唯一缓存路径引用同一官方 URL，并在 `NOT` 中排除完整规则集。
+- **保留回退**：`Production-Legacy-v1.3.yaml` 仍保留原始 150 条首匹配顺序，可用于 A/B 和回滚；新语义不等同于旧版。
+
+`Tests/validate_parity.py` 现在会检查 150 条源规则覆盖、17 个索引集合、模块自包含、
+4 种规则排列和 18 个代表域名。远程 provider 使用离线代表夹具，不伪装成实时检查。
 
 ## 包内文件
 
@@ -34,12 +39,13 @@
 |---|---|
 | `Core.yaml` | 13 个策略组、DNS、GLaDOS 代理 provider、3 条最终兜底；**不能单独生产启用** |
 | `Overrides/*.stoverride` | 9 个必需的功能覆写；**完整兼容版本需要全部启用** |
-| `Production.yaml` | 与 Core+全部 9 个覆写结构一致的单文件参考，不能同时启用这些覆写 |
+| `Production.yaml` | Core + 全部 9 个顺序无关覆写的单文件合并结果；不要再同时启用这些覆写 |
 | `Production-Legacy-v1.3.yaml` | 150 条原规则 + 4 个远程 provider 的原版语义复刻；用于 A/B 回退与审计 |
 | `Production-NoAds.yaml` | **显式功能差异**：去掉广告 provider；非完整等价版 |
+| `RELEASE-NOTES-ORDER-INDEPENDENT.md` | 本次 `AND NOT` 行为变化、代价和验收摘要 |
 | `Rules/*.txt` | 17 个索引快照；当前完整配置使用 inline 定义，也可通过 `main` 的 Raw 地址作为远程规则集引用 |
 | `Sources/` | 用户原始 Markdown 和独立 YAML 解析基线 |
-| `Tests/validate_parity.py` | 检验 SHA、150 条还原、4 个 provider 定义、覆写合并、分流抽查 |
+| `Tests/validate_parity.py` | 检验源数据覆盖、模块自包含、provider 镜像、`AND NOT` 语义和顺序无关性 |
 | `Tests/live_remote_check.py` | 在本地网络下载并检查所有 4 个远程规则的当前内容 |
 | `Tests/runtime_probe.py` | Stash 只读 API 监控，20 次以上成功采样输出 p95 |
 
@@ -65,8 +71,9 @@ python3 Scripts/configure.py --profile Core.yaml
 ```
 
 `configure.py` 会从环境变量 `GLADOS_URL` 或隐藏提示中读取私人订阅地址，并生成
-`~/.config/hj-stash/private/Core.private.yaml`。将该本地文件导入 Stash，再按下一节
-的顺序启用 9 个覆写。不要把生成的文件、真实订阅地址或 API Token 提交回仓库。
+`~/.config/hj-stash/private/Core.private.yaml`。将该本地文件导入 Stash，再启用全部
+9 个覆写；编号顺序只用于整理，不再决定完整集合的路由优先级。不要把生成的文件、
+真实订阅地址或 API Token 提交回仓库。
 
 如果只需要查看配置，可以使用网页地址：
 
@@ -124,11 +131,11 @@ GitHub 网页的 `/blob/` 链接返回 HTML，Contents API 默认返回 JSON，�
 
 ### 使用 main 中的覆写
 
-在安装了 Stash 的 iPhone/iPad 上点击以下链接即可打开覆写安装页面。请按编号依次
-安装，并最终按相同顺序启用：
+在安装了 Stash 的 iPhone/iPad 上点击以下链接即可打开覆写安装页面。建议按编号
+安装和整理：
 
 全部覆写会在覆写管理页面归入 `HJ Stash` 分类，并使用各自的 `desc` 说明功能。
-`category` 和 `desc` 只影响展示，不改变规则内容或启用顺序。
+`category` 和 `desc` 只影响展示，不改变规则内容或路由优先级。
 
 | 顺序 | 覆写 | 快速安装 |
 |---:|---|---|
@@ -143,7 +150,7 @@ GitHub 网页的 `/blob/` 链接返回 HTML，Contents API 默认返回 JSON，�
 | 9 | `99-Safety.stoverride` | [安装关键安全 / LAN / APNs / 国内服务](https://link.stash.ws/install-override/raw.githubusercontent.com/hengistchan/clash-proxy/main/Overrides/99-Safety.stoverride) |
 
 这些链接会跳转到 `stash://`；桌面浏览器或 `curl` 提示不支持此协议属于预期行为，
-应在安装了 Stash 的 iPhone/iPad 上打开。安装后仍须严格遵守下一节的启用顺序。
+应在安装了 Stash 的 iPhone/iPad 上打开。完整集合的启用顺序不改变路由结果。
 使用 `main` 时，每次手动更新覆写都会获得最新版本；该分支可移动，不适合作为
 不可复现的生产快照。
 
@@ -186,7 +193,7 @@ python3 Scripts/configure.py --profile Core.yaml
 
 `configure.py` 不回显 GLaDOS 私人订阅地址；默认写到 `~/.config/hj-stash/private/Core.private.yaml`，权限 0600。把这一文件 AirDrop / iCloud 导入 Stash；切勿公开。
 
-**覆写管理页面从上到下严格按此顺序启用全部 9 个：**
+**启用全部 9 个覆写。建议的整理顺序如下，但完整集合的路由结果与顺序无关：**
 
 1. `10-Ads.stoverride`
 2. `31-Media-Streaming.stoverride`
@@ -198,19 +205,32 @@ python3 Scripts/configure.py --profile Core.yaml
 8. `50-Social.stoverride`
 9. `99-Safety.stoverride`
 
-Stash 对数组默认使用**后启用覆写的规则前插**，上面的 UI 顺序使最终规则顺序与 v1.3 相同。不要叠加任何 RC2/RC3 覆写。首次打开后更新 4 个远程规则源，确认 13 个策略组正常有节点、X5 节点不在自动/备援组；Apple Watch 天气及 APNs 必须真机复查。
+Stash 仍会按 UI 位置实际拼接规则数组，但 Ads/General 的 `AND NOT` 已把语义固定为
+「具体服务 > 广告 > 通用」。离线校验会同时模拟 Ads/General 在数组顶部和底部的相反
+顺序。不要只启用 Ads 或 General：宽泛规则会排除具体服务集合，若具体服务覆写缺失，
+这些域名可能直接落到 `GEOSITE` / `MATCH` 兜底。也不要叠加任何 RC2/RC3 覆写。
+首次打开后更新远程规则源，确认 13 个策略组正常有节点、X5 节点不在自动/备援组；
+Apple Watch 天气及 APNs 必须真机复查。
 
 ## 验收和限度
 
-`python3 Tests/validate_parity.py` 必须报告 `STATIC_PARITY_PASS`；`Scripts/rebuild.py` 必须 `PASS`。这验证 **150 条显式规则和 4 个远程 provider 的配置完全覆盖**，但 Stash 引擎的实际 `inline` 匹配行为、远程源下载可靠性、节点可用性及设备性能必须进一步测量。
+`python3 Tests/validate_parity.py` 必须报告 `STATIC_SEMANTICS_PASS`；
+`Scripts/rebuild.py` 必须 `PASS`。离线检查验证源数据覆盖、模块自包含、4 种排列下
+的相同路由结果，以及 17 个索引集合和全部 provider 镜像；它不验证 Stash 引擎对
+嵌套逻辑规则的实际执行、远程源下载可靠性、节点可用性或设备性能。
 
-自动化的离线 `first_match` 测试无法填补本机无网络时对实时 Repcz 上游的下载。**由于原版与新版引用完全相同的 provider 定义，并且 provider 相对优先级一致，在源数据相同且 Stash 遵循文档的前提下，属于等价的配置转换；不是网络环境下绝对零故障保证。**
+远程 Repcz 内容会变化，所以离线测试只用代表规则模拟交集。线上可达性由
+`Tests/live_remote_check.py` 单独检查；最终仍须在实际 Stash 上验证逻辑规则是否按官方
+语法展开。`Production-Legacy-v1.3.yaml` 保留旧首匹配行为，便于回滚，但不能把新版本
+称为与 v1.3 逐条等价。
 
-`Production-NoAds` 是用户明确关闭广告时才使用的非等价替代。未来要优化 Repcz classical，可以由本地 Agent 拉取最新 4 个完整源、把所有规则按类型转换为索引集合并运行逐项等价验证后再发布，不允许仅抽取高频子集。
+`Production-NoAds` 是用户明确关闭广告时才使用的非等价替代。它会同时移除公开广告源、
+私有 Ads provider 镜像和 General 中的广告排除条件，但保留具体服务与 General 的顺序
+无关逻辑。
 
 参考：<https://stash.wiki/rules/rule-set>、<https://stash.wiki/configuration/override>、<https://stash.wiki/faq/effective-stash>。
 
-## 真机探针（RC5）
+## 真机探针
 
 在 Stash 已启用外部控制且 Mac 能访问 iPhone 后，从环境变量传入 API Key（不要写进脚本或命令行参数）：
 
@@ -220,4 +240,7 @@ python3 Tests/runtime_probe.py --host http://192.168.1.123:9090 --token-env STAS
 python3 Tests/runtime_probe.py --host http://192.168.1.123:9090 --token-env STASH_TOKEN --repetitions 20 --mode performance --out runtime-performance.json
 ```
 
-探针输出的 RTT 包含 Wi-Fi 和 HTTP 往返耗时，不是独立的规则匹配 CPU 延迟。`performance` 模式对缺失内存/规则数或无效 `/rules/match` 响应返回退出码 `2`；如果真实 Stash 返回的 JSON 结构与当前校验器不同，先在本机排查结构并更新校验器，**不能跳过字段以强行通过**。
+探针输出的 RTT 包含 Wi-Fi 和 HTTP 往返耗时，不是独立的规则匹配 CPU 延迟。
+`/rules/match` 的 `proxy` / `rulesEvaluated` 会规范化为 `outbound` /
+`evaluatedRules`；仍必须有有效规则和序号/评估数，否则不计成功。`performance`
+模式对缺失内存/规则数或无效响应返回退出码 `2`，**不能跳过字段以强行通过**。

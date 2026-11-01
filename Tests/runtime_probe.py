@@ -2,7 +2,7 @@
 """Read-only Stash HTTP API validation and network RTT sampling.
 
 Strict: a successful HTTP response is NOT a successful route match unless the
-response includes meaningful outbound, matched-rule, and match-index data.
+response includes meaningful outbound/proxy, matched-rule, and match-index data.
 RTT is an end-to-end HTTP request RTT, not pure Stash routing engine CPU time.
 """
 import argparse
@@ -62,6 +62,9 @@ def validate_match_response(value):
         raise ValueError('match payload must be an object')
 
     outbound = value.get('outbound')
+    if outbound is None:
+        # Stash 3.7 /rules/match has used `proxy` in controller responses.
+        outbound = value.get('proxy')
     if isinstance(outbound, dict):
         # Some controller serializers may return a structured outbound.
         if not _safe_str(outbound.get('name')):
@@ -90,8 +93,8 @@ def validate_match_response(value):
     else:
         raise ValueError('missing matched rule')
 
-    rule_index = value.get('ruleIndex')
-    evaluated = value.get('evaluatedRules')
+    rule_index = value.get('ruleIndex', value.get('index'))
+    evaluated = value.get('evaluatedRules', value.get('rulesEvaluated'))
     nested_index = rule.get('index', rule.get('ruleIndex')) if isinstance(rule, dict) else None
     if not (_safe_number(rule_index) and rule_index >= 0 or
             _safe_number(evaluated) and evaluated >= 1 or
@@ -101,9 +104,10 @@ def validate_match_response(value):
     for key in ('policy', 'ruleType', 'stage'):
         if _safe_str(value.get(key)):
             clean[key] = value[key]
-    for key in ('ruleIndex', 'evaluatedRules'):
-        if _safe_number(value.get(key)):
-            clean[key] = value[key]
+    if _safe_number(rule_index):
+        clean['ruleIndex'] = rule_index
+    if _safe_number(evaluated):
+        clean['evaluatedRules'] = evaluated
     return clean
 
 

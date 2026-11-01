@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic generation from original v1.3 rule order; check fails on any drift."""
+"""Deterministically generate order-independent Stash overrides and profiles."""
 import argparse, copy, json, re, sys
 from pathlib import Path
 import yaml
@@ -47,8 +47,69 @@ override_metadata={
         'desc':'使用 AWAvenue 原版广告规则，将命中流量转发至「🛡️ 廣告攔截」。',
     },
 }
+ADS_MODULE='10-Ads.stoverride'
+GENERAL_MODULE='20-General.stoverride'
+BROAD_MODULES=(ADS_MODULE,GENERAL_MODULE)
+SOCIAL_REMOTE_PROVIDERS=('Repcz-Telegram','Repcz-Twitter')
+ADS_EXCLUSION_PROVIDER='hj-10-ads-exclusions'
+GENERAL_EXCLUSION_PROVIDER='hj-20-general-exclusions'
+ADS_MIRROR_PROVIDER='hj-20-ads-filter'
+REMOTE_MIRRORS={
+    ADS_MODULE:{
+        'Repcz-Telegram':('hj-10-telegram-exclusion','./rules/hj-10-telegram-exclusion.list'),
+        'Repcz-Twitter':('hj-10-twitter-exclusion','./rules/hj-10-twitter-exclusion.list'),
+    },
+    GENERAL_MODULE:{
+        'Repcz-Ads-AWAvenue':(ADS_MIRROR_PROVIDER,'./rules/hj-20-ads-filter.list'),
+        'Repcz-Telegram':('hj-20-telegram-exclusion','./rules/hj-20-telegram-exclusion.list'),
+        'Repcz-Twitter':('hj-20-twitter-exclusion','./rules/hj-20-twitter-exclusion.list'),
+    },
+}
+
+def specific_domain_exclusions():
+    payload=[];seen=set()
+    for item in manifest['segments']:
+        if item['name'] in BROAD_MODULES:continue
+        start,end=item['range']
+        for rule in base['rules'][start:end]:
+            parts=rule.split(',')
+            if parts[0]=='DOMAIN': value=parts[1]
+            elif parts[0]=='DOMAIN-SUFFIX': value='+.'+parts[1]
+            elif parts[0]=='DOMAIN-KEYWORD': value='+.'+parts[1]
+            else: continue
+            if value not in seen:
+                seen.add(value);payload.append(value)
+    return payload
+specific_exclusions=specific_domain_exclusions()
+
+def specific_keyword_exclusions():
+    payload=[]
+    for item in manifest['segments']:
+        if item['name'] in BROAD_MODULES:continue
+        start,end=item['range']
+        for rule in base['rules'][start:end]:
+            parts=rule.split(',')
+            if parts[0]=='DOMAIN-KEYWORD' and parts[1] not in payload:
+                payload.append(parts[1])
+    return payload
+specific_keywords=specific_keyword_exclusions()
+
+def mirror_remote_provider(source_name,alias,path):
+    provider=copy.deepcopy(source_original_providers[source_name])
+    provider['path']=path
+    return alias,provider
+
+def and_not_rule(primary,exclusions,target):
+    conditions=f'(RULE-SET,{primary})'+''.join(
+        f',(NOT,((RULE-SET,{provider})))' for provider in exclusions
+    )
+    conditions+=''.join(
+        f',(NOT,((DOMAIN-KEYWORD,{keyword})))' for keyword in specific_keywords
+    )
+    return f'AND,({conditions}),{target}'
+
 def render(obj,comment=''):
-    return comment+yaml.safe_dump(obj,allow_unicode=True,sort_keys=False,width=150)
+    return comment+yaml.safe_dump(obj,allow_unicode=True,sort_keys=False,width=1000)
 def optimize_slice(name,rules):
     out=[]; indexed={}; origins={}; idx=0;i=0;snapshots={}
     while i<len(rules):
@@ -77,7 +138,7 @@ def optimize_slice(name,rules):
     return out,indexed,origins,snapshots
 expected={};core=copy.deepcopy(base)
 core['rules']=base['rules'][147:];core['rule-providers']={}
-expected['Core.yaml']=render(core,'# RC4 modular core; requires ALL default Overrides.\n')
+expected['Core.yaml']=render(core,'# Modular core; add the required Overrides for complete routing.\n')
 expected['Production-Legacy-v1.3.yaml']=render(base,'# Original v1.3 normalized semantic structure; reference/rollback.\n')
 compiled=copy.deepcopy(core); mods={}; origins={}
 for item in manifest['segments']:
@@ -87,6 +148,30 @@ for item in manifest['segments']:
     for k,v in snaps.items():expected[f'Rules/{k}.txt']=v
     other={k:copy.deepcopy(v) for k,v in source_original_providers.items() if owner[k]==name}
     metadata=override_metadata[name]
+    if name==ADS_MODULE:
+        inline[ADS_EXCLUSION_PROVIDER]={
+            'type':'inline','behavior':'domain','payload':copy.deepcopy(specific_exclusions),
+        }
+        exclusions=[ADS_EXCLUSION_PROVIDER]+[
+            REMOTE_MIRRORS[name][provider][0] for provider in SOCIAL_REMOTE_PROVIDERS
+        ]
+        data=[and_not_rule('Repcz-Ads-AWAvenue',exclusions,'🛡️ 廣告攔截')]
+    elif name==GENERAL_MODULE:
+        inline[GENERAL_EXCLUSION_PROVIDER]={
+            'type':'inline','behavior':'domain','payload':copy.deepcopy(specific_exclusions),
+        }
+        exclusions=[GENERAL_EXCLUSION_PROVIDER,ADS_MIRROR_PROVIDER]+[
+            REMOTE_MIRRORS[name][provider][0] for provider in SOCIAL_REMOTE_PROVIDERS
+        ]
+        data=[
+            and_not_rule(rule.split(',')[1],exclusions,rule.split(',')[2])
+            for rule in data
+        ]
+    for source_name,(alias,path) in REMOTE_MIRRORS.get(name,{}).items():
+        provider_name,provider=mirror_remote_provider(source_name,alias,path)
+        if provider_name in other:
+            raise AssertionError('remote mirror conflicts with source provider '+provider_name)
+        other[provider_name]=provider
     mod={'name':metadata['name'],'desc':metadata['desc'],'author':'HJ','category':'HJ Stash','rule-providers':{**inline,**other},'rules':data}
     mods[name]=mod
     expected[f'Overrides/{name}']=render(mod)
@@ -95,11 +180,22 @@ for name in manifest['override_order_top_to_bottom']:
     for k,v in mod['rule-providers'].items():
         if k in compiled['rule-providers']:raise AssertionError('provider conflict '+k)
         compiled['rule-providers'][k]=v
-expected['Production.yaml']=render(compiled,'# RC4 parity-first full standalone output; no Overrides with this profile.\n')
+expected['Production.yaml']=render(compiled,'# Order-independent standalone output; do not also enable the Overrides.\n')
 noads=copy.deepcopy(compiled)
-noads['rules']=[r for r in noads['rules'] if 'Repcz-Ads-AWAvenue' not in r]
-del noads['rule-providers']['Repcz-Ads-AWAvenue']
-expected['Production-NoAds.yaml']=render(noads,'# RC4 NO-ADS alternative: intentionally changes ad route behavior.\n')
+noads['rules']=[
+    r for r in noads['rules']
+    if not r.startswith('AND,((RULE-SET,Repcz-Ads-AWAvenue)')
+]
+noads['rules']=[
+    r.replace(f',(NOT,((RULE-SET,{ADS_MIRROR_PROVIDER})))','')
+    for r in noads['rules']
+]
+for provider in (
+    'Repcz-Ads-AWAvenue',ADS_EXCLUSION_PROVIDER,ADS_MIRROR_PROVIDER,
+    'hj-10-telegram-exclusion','hj-10-twitter-exclusion',
+):
+    del noads['rule-providers'][provider]
+expected['Production-NoAds.yaml']=render(noads,'# NO-ADS alternative; intentionally removes ad interception.\n')
 for name in ['Core','Production','Production-NoAds','Production-Legacy-v1.3']:
     expected[name+'.txt']=expected[name+'.yaml']
 manifest_origins=manifest['inline_origin']
@@ -117,4 +213,4 @@ for name,contents in expected.items():
         errors.append(name)
 if errors:
     print('DRIFT: '+', '.join(errors),file=sys.stderr);sys.exit(1)
-print(('WROTE' if a.write else 'PASS')+f': {len(expected)} deterministic artifacts; {len(compiled["rules"])} effective match entries; full v1.3 provider coverage retained')
+print(('WROTE' if a.write else 'PASS')+f': {len(expected)} deterministic artifacts; {len(compiled["rules"])} order-independent match entries; legacy v1.3 profile retained')

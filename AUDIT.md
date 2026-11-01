@@ -1,26 +1,34 @@
-# RC5 审计：RC4 匹配覆盖 + 验收工具修复
+# 顺序无关覆写审计：AND NOT
 
-- **结论**：`STATIC_PARITY_PASS`，真实设备及网络仍待测试。
-- **核心问题**：RC3 默认没有全部 Repcz Telegram/Twitter/Google 规则，还把原来 `Repcz-Ads-AWAvenue` 969 条的 `classical/text` 来源换成另一个约 661 条的源，造成实际转发与拦截范围改变。RC4 全部恢复默认加载。
-- **保留**：150 条原始显式规则的顺序；13 个策略组及过滤；GLaDOS 订阅 provider、DNS 和 4 个远程 Repcz provider 名称、路径、URL、间隔、behavior/format。
-- **索引优化**：17 个连续同策略的 domain / ipcidr inline 集合，保留 1 条 DOMAIN-KEYWORD、MTProto 与 Geo 规则；26 个显式规则匹配项。
-- **覆盖证明**：`Tests/validate_parity.py` 用用户上传的原始 v1.3 Markdown SHA-256 及规范化基线重建 150 条顺序；对所有索引集合逐项还原并验证策略、no-resolve 与完整顺序；四个远程规则的配置和匹配位置与原版一致。
-- **上游风险**：四个 URL 指向动态分支，用户必须在手机网络检查实际可访问且版本一致。未进行 Stash 引擎真实 `/rules/match` 大规模对比。
-- **仍存在但不属于此次性能优化**：原 v1.3 的 Apple 通配、广泛 DIRECT 及广告遮蔽规则可能令部分广告无法 REJECT；这次不静默修改。若优化广告匹配优先级，另做可量化的功能变更与真机测试。
-- **安全**：私人订阅从不写入公开配置；`Scripts/configure.py` 默认写入用户目录、权限 0600；不能单独启用只有兜底的 Core。
+- **结论**：离线静态语义模拟为 `STATIC_SEMANTICS_PASS`；iPhone 上的真实 Stash 引擎、
+  远程源下载和业务功能仍待最终验收。
+- **语义优先级**：`具体服务 > 广告拦截 > Google / Microsoft / Apple 通用规则`。
+  `10-Ads` 排除七类具体服务；`20-General` 同时排除具体服务、广告和 Social 远程交集。
+- **顺序无关**：Ads/General 都使用 Stash 官方逻辑规则
+  `AND,((RULE-SET,...),(NOT,((RULE-SET,...))))`。测试会组合 4 种物理顺序，并比较
+  18 个代表域名及全部本地具体域名的最终策略。
+- **模块自包含**：Ads/General 不引用另一个覆写才定义的 provider。每个宽泛覆写
+  自带 inline 排除集合，并分别定义 Telegram、Twitter、Ads 的必要远程镜像。
+  这增加 5 个 provider 及缓存路径，是有意用冗余换取独立加载能力。
+- **来源保留**：150 条 v1.3 显式规则、4 个原始 Repcz provider 定义、13 个策略组、
+  DNS、GLaDOS provider 和 `Production-Legacy-v1.3` 均保留。Legacy 仍是旧首匹配
+  基线，不能声称新方案与它逐条等价。
+- **本地索引**：17 个连续 domain/ipcidr 集合仍与 manifest 快照逐项一致；完整
+  `Production.yaml` 为 26 条显式逻辑/首匹配项和 28 个 provider。
+- **有意差异**：属于具体服务域名族的广告跟随具体服务。例如 `ad.qq.com` 直连，
+  `ads.youtube.com` 走 YouTube 的通用代理；普通广告域名仍被拦截。
+- **NoAds**：仅删除广告规则及其私有依赖，保留其余 25 条规则和 23 个 provider；
+  它不再展示任何 `Repcz-Ads-AWAvenue` / `hj-20-ads-filter` 引用。
+- **测试边界**：远程 Repcz 列表会变化，离线测试只用代表夹具模拟交集，不视为在线
+  下载或 Stash 引擎验证。本次本地在线检查中 4 个源均可下载；以当前上游快照构造
+  1,151 个目标、覆盖 1,079 条远程规则时，4 种顺序的模拟差异为 0。Stash 3.7.0 的
+  `proxy` / `rulesEvaluated` 返回结构已确认，但新逻辑规则尚未加载到设备。
 
-参考 Stash：<https://stash.wiki/rules/rule-set> / <https://stash.wiki/configuration/override> / <https://stash.wiki/faq/effective-stash>
+参考 Stash：<https://stash.wiki/rules/rule-types>、
+<https://stash.wiki/rules/rule-set>、<https://stash.wiki/configuration/override>。
 
-## RC5 工具复审（基于原 RC4 ZIP）
+## 历史说明
 
-| 问题 | 修复 | 独立测试 |
-|---|---|---|
-| `utf8-sig` 非法 codec | 改成 `utf-8-sig`；对原始 bytes 计算 SHA-256 | 模拟 4 个含 BOM 的规则源均 PASS |
-| 对现有目录无条件 chmod | 新目录仅创建为 `0700`，现有宽权限目录拒绝且不更改模式 | `0755` 模拟目录保持不变；`0700` 目录成功生成 `0600` 文件 |
-| p95 20 样本偏差 | 最近秩法、固定样本测试 | `1..20 => 19`、`1..100 => 95` |
-| API 错误/缺字段也算成功 | 强制 JSON 结构；失败不计样本；保存有限的嵌套规则字段 | 缺 outbound 结果返回 `FAIL`、零有效样本 |
-| 内存及规则指标失败不阻断 | 默认性能模式硬性检查关键指标 | 无内存指标时 performance 失败，functional 可继续 |
-
-**独立校验**：按 RC4 ZIP 比较 37 个配置/数据文件，改动数为 **0**；`rebuild.py` `PASS`；`validate_parity.py` `STATIC_PARITY_PASS`（450 项检查）。
-
-**尚未验收**：在你的网络重新执行四个远程规则真实下载及哈希记录；用真正 Stash API JSON 验证字段层级；Apple Watch、APNs 和业务功能验收。离线模拟 API 和本地单元测试不能替代线上测试。没有因为性能或修复脚本而减少原版任何规则。
+RC5 的验收工具修复（UTF-8-SIG、私有目录权限、nearest-rank p95、严格 `/rules/match`
+校验）仍保留；运行探针现在兼容 Stash 3.7 的 `proxy` / `rulesEvaluated` 字段，并在
+输出中规范化为 `outbound` / `evaluatedRules`。

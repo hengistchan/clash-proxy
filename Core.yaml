@@ -1,4 +1,4 @@
-# RC4 modular core; requires ALL default Overrides.
+# Modular core; add the required Overrides for complete routing.
 mode: rule
 log-level: info
 dns:

@@ -1,5 +1,5 @@
 {
-  "name": "HJ-Stash-v1.4-RC4-Parity-First",
+  "name": "HJ-Stash-v1.4-Order-Independent",
   "origin_sha256": "237d05d9911818e721e740c782f8885b1484f02843db3f97a0e13105b0148f2d",
   "source_explicit_rule_count": 150,
   "inline_origin": {
@@ -261,7 +261,8 @@
     "Repcz-Google",
     "Repcz-Ads-AWAvenue"
   ],
-  "parity_scope": "All 150 explicit rules and all 4 original Repcz remote provider definitions; indexed-domain equivalence not engine-verified",
+  "parity_scope": "All 150 source rules and all 4 original Repcz provider definitions are retained; Ads and General use AND NOT so the complete override set is independent of enable order",
   "core_requires_overrides": true,
-  "ad_note": "Ads positioned exactly as in v1.3, preserving shadowed ads; change only in separate opt-in variant if desired"
+  "ad_note": "Semantic priority is specific service > advertising > general. Broad overrides exclude higher-priority specific rules with AND NOT; Production-Legacy-v1.3.yaml remains the original first-match profile.",
+  "override_order_required": false
 }

@@ -1,13 +1,15 @@
 {
-  "status": "STATIC_PARITY_PASS",
-  "checks": 486,
+  "status": "STATIC_SEMANTICS_PASS",
+  "checks": 527,
   "failures": [],
   "source_rule_count": 150,
-  "expanded_rule_count": 150,
   "hot_path_entries": 26,
   "indexed_sets": 17,
-  "original_remote_provider_count": 4,
-  "prefix_test_cases": 153,
-  "remote_coverage": "ORIGINAL 4 PROVIDER DEFINITIONS RETAINED; live remote download not tested",
+  "provider_count": 28,
+  "order_variants": 4,
+  "order_independence_cases": 72,
+  "worst_case_exclusion_cases": 206,
+  "priority": "specific > advertising > general",
+  "remote_coverage": "Four Repcz definitions retained; mutable provider behavior simulated with representative offline fixtures",
   "device_runtime": "NOT TESTED"
 }

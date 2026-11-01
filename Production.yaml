@@ -1,4 +1,4 @@
-# RC4 parity-first full standalone output; no Overrides with this profile.
+# Order-independent standalone output; do not also enable the Overrides.
 mode: rule
 log-level: info
 dns:
@@ -130,11 +130,130 @@ proxy-groups:
   use:
   - GLaDOS
 rule-providers:
+  hj-10-ads-exclusions:
+    type: inline
+    behavior: domain
+    payload:
+    - +.lan
+    - +.local
+    - +.home.arpa
+    - +.push.apple.com
+    - +.akadns.net
+    - +.apple.com.edgekey.net
+    - guzzoni.apple.com
+    - +.smoot.apple.com
+    - apple-relay.apple.com
+    - apple-relay.cloudflare.com
+    - apple-relay.fastly-edge.com
+    - cp4.cloudflare.com
+    - +.servicewechat.com
+    - +.wxs.qq.com
+    - +.weixin.qq.com
+    - +.wx.qq.com
+    - +.wx.gtimg.com
+    - +.wxamedia.com
+    - +.weixin.com
+    - +.wechat.com
+    - +.wechatpay.com
+    - +.tenpay.com
+    - +.qpic.cn
+    - +.qlogo.cn
+    - +.qq.com
+    - +.gtimg.com
+    - +.tencent-cloud.net
+    - +.feishu.cn
+    - +.feishu.net
+    - +.feishucdn.com
+    - +.feishuimg.com
+    - +.feishuapp.cn
+    - +.feishupkg.com
+    - +.larkoffice.com
+    - +.bytedance.com
+    - +.bytedance.net
+    - +.byteimg.com
+    - +.bytescm.com
+    - +.bytetos.com
+    - +.snssdk.com
+    - +.pstatp.com
+    - +.zijieapi.com
+    - +.bdurl.net
+    - +.ctobsnssdk.com
+    - +.toutiaocloud.com
+    - +.meituan.com
+    - +.meituan.net
+    - +.meituanimg.com
+    - +.meituanstatic.com
+    - +.dianping.com
+    - +.dpfile.com
+    - +.sankuai.com
+    - +.sankuai.cn
+    - +.telegram.org
+    - +.telegram.me
+    - +.telegram-cdn.org
+    - +.t.me
+    - +.telegra.ph
+    - +.x.com
+    - +.twitter.com
+    - +.twimg.com
+    - +.t.co
+    - +.twttr.com
+    - +.openai.com
+    - +.chatgpt.com
+    - +.oaistatic.com
+    - +.oaiusercontent.com
+    - +.oaistatsig.com
+    - +.sora.com
+    - events.statsigapi.net
+    - +.anthropic.com
+    - +.claude.ai
+    - +.claude.com
+    - +.claudeusercontent.com
+    - +.claudemcpcontent.com
+    - +.github-releases.githubusercontent.com
+    - +.github.com
+    - +.githubusercontent.com
+    - +.githubassets.com
+    - +.github.io
+    - +.github.dev
+    - +.githubapp.com
+    - +.youtube.com
+    - +.ytimg.com
+    - +.googlevideo.com
+    - +.gemini.google.com
+    - +.gemini.google
+    - +.aistudio.google.com
+    - +.ai.google.dev
+    - +.generativelanguage.googleapis.com
+    - +.aiplatform.googleapis.com
+    - +.notebooklm.google.com
+    - +.notebooklm.google
+    - +.flow.google
+    - +.jules.google
+    - +.larksuite.com
+    - +.netflix.com
+    - +.nflxvideo.net
+    - +.disneyplus.com
+    - +.spotify.com
+    - +.huggingface.co
+    - +.hf.co
+    - +.steamcontent.com
   Repcz-Ads-AWAvenue:
     behavior: classical
     format: text
     url: https://raw.githubusercontent.com/Repcz/Tool/X/Stash/Rules/Ads_AWAvenue.list
     path: ./rules/hj-ads-awavenue.list
+    interval: 86400
+  hj-10-telegram-exclusion:
+    behavior: classical
+    format: text
+    url: https://raw.githubusercontent.com/Repcz/Tool/X/Stash/Rules/Telegram.list
+    path: ./rules/hj-10-telegram-exclusion.list
+    interval: 86400
+  hj-10-twitter-exclusion:
+    behavior: classical
+    format: text
+    url: https://raw.githubusercontent.com/Repcz/Tool/X/Stash/Rules/Twitter.list
+    path: ./rules/hj-10-twitter-exclusion.list
     interval: 86400
   hj-31-media-streaming-domain-1:
     type: inline
@@ -177,11 +296,136 @@ rule-providers:
     - +.itunes.com
     - +.appstore.com
     - +.mzstatic.com
+  hj-20-general-exclusions:
+    type: inline
+    behavior: domain
+    payload:
+    - +.lan
+    - +.local
+    - +.home.arpa
+    - +.push.apple.com
+    - +.akadns.net
+    - +.apple.com.edgekey.net
+    - guzzoni.apple.com
+    - +.smoot.apple.com
+    - apple-relay.apple.com
+    - apple-relay.cloudflare.com
+    - apple-relay.fastly-edge.com
+    - cp4.cloudflare.com
+    - +.servicewechat.com
+    - +.wxs.qq.com
+    - +.weixin.qq.com
+    - +.wx.qq.com
+    - +.wx.gtimg.com
+    - +.wxamedia.com
+    - +.weixin.com
+    - +.wechat.com
+    - +.wechatpay.com
+    - +.tenpay.com
+    - +.qpic.cn
+    - +.qlogo.cn
+    - +.qq.com
+    - +.gtimg.com
+    - +.tencent-cloud.net
+    - +.feishu.cn
+    - +.feishu.net
+    - +.feishucdn.com
+    - +.feishuimg.com
+    - +.feishuapp.cn
+    - +.feishupkg.com
+    - +.larkoffice.com
+    - +.bytedance.com
+    - +.bytedance.net
+    - +.byteimg.com
+    - +.bytescm.com
+    - +.bytetos.com
+    - +.snssdk.com
+    - +.pstatp.com
+    - +.zijieapi.com
+    - +.bdurl.net
+    - +.ctobsnssdk.com
+    - +.toutiaocloud.com
+    - +.meituan.com
+    - +.meituan.net
+    - +.meituanimg.com
+    - +.meituanstatic.com
+    - +.dianping.com
+    - +.dpfile.com
+    - +.sankuai.com
+    - +.sankuai.cn
+    - +.telegram.org
+    - +.telegram.me
+    - +.telegram-cdn.org
+    - +.t.me
+    - +.telegra.ph
+    - +.x.com
+    - +.twitter.com
+    - +.twimg.com
+    - +.t.co
+    - +.twttr.com
+    - +.openai.com
+    - +.chatgpt.com
+    - +.oaistatic.com
+    - +.oaiusercontent.com
+    - +.oaistatsig.com
+    - +.sora.com
+    - events.statsigapi.net
+    - +.anthropic.com
+    - +.claude.ai
+    - +.claude.com
+    - +.claudeusercontent.com
+    - +.claudemcpcontent.com
+    - +.github-releases.githubusercontent.com
+    - +.github.com
+    - +.githubusercontent.com
+    - +.githubassets.com
+    - +.github.io
+    - +.github.dev
+    - +.githubapp.com
+    - +.youtube.com
+    - +.ytimg.com
+    - +.googlevideo.com
+    - +.gemini.google.com
+    - +.gemini.google
+    - +.aistudio.google.com
+    - +.ai.google.dev
+    - +.generativelanguage.googleapis.com
+    - +.aiplatform.googleapis.com
+    - +.notebooklm.google.com
+    - +.notebooklm.google
+    - +.flow.google
+    - +.jules.google
+    - +.larksuite.com
+    - +.netflix.com
+    - +.nflxvideo.net
+    - +.disneyplus.com
+    - +.spotify.com
+    - +.huggingface.co
+    - +.hf.co
+    - +.steamcontent.com
   Repcz-Google:
     behavior: classical
     format: text
     url: https://raw.githubusercontent.com/Repcz/Tool/X/Stash/Rules/Google.list
     path: ./rules/hj-google.list
+    interval: 86400
+  hj-20-ads-filter:
+    behavior: classical
+    format: text
+    url: https://raw.githubusercontent.com/Repcz/Tool/X/Stash/Rules/Ads_AWAvenue.list
+    path: ./rules/hj-20-ads-filter.list
+    interval: 86400
+  hj-20-telegram-exclusion:
+    behavior: classical
+    format: text
+    url: https://raw.githubusercontent.com/Repcz/Tool/X/Stash/Rules/Telegram.list
+    path: ./rules/hj-20-telegram-exclusion.list
+    interval: 86400
+  hj-20-twitter-exclusion:
+    behavior: classical
+    format: text
+    url: https://raw.githubusercontent.com/Repcz/Tool/X/Stash/Rules/Twitter.list
+    path: ./rules/hj-20-twitter-exclusion.list
     interval: 86400
   hj-61-googleai-domain-1:
     type: inline
@@ -381,12 +625,12 @@ rules:
 - RULE-SET,hj-40-developer-domain-1,⚡ 自動選優
 - RULE-SET,hj-30-media-youtube-domain-1,🌐 通用代理
 - RULE-SET,hj-61-googleai-domain-1,🤖 AI 服務
-- RULE-SET,hj-20-general-domain-1,🌐 通用代理
-- RULE-SET,Repcz-Google,🌐 通用代理
-- RULE-SET,hj-20-general-domain-2,DIRECT
+- AND,((RULE-SET,hj-20-general-domain-1),(NOT,((RULE-SET,hj-20-general-exclusions))),(NOT,((RULE-SET,hj-20-ads-filter))),(NOT,((RULE-SET,hj-20-telegram-exclusion))),(NOT,((RULE-SET,hj-20-twitter-exclusion))),(NOT,((DOMAIN-KEYWORD,apple.com.edgekey.net)))),🌐 通用代理
+- AND,((RULE-SET,Repcz-Google),(NOT,((RULE-SET,hj-20-general-exclusions))),(NOT,((RULE-SET,hj-20-ads-filter))),(NOT,((RULE-SET,hj-20-telegram-exclusion))),(NOT,((RULE-SET,hj-20-twitter-exclusion))),(NOT,((DOMAIN-KEYWORD,apple.com.edgekey.net)))),🌐 通用代理
+- AND,((RULE-SET,hj-20-general-domain-2),(NOT,((RULE-SET,hj-20-general-exclusions))),(NOT,((RULE-SET,hj-20-ads-filter))),(NOT,((RULE-SET,hj-20-telegram-exclusion))),(NOT,((RULE-SET,hj-20-twitter-exclusion))),(NOT,((DOMAIN-KEYWORD,apple.com.edgekey.net)))),DIRECT
 - RULE-SET,hj-31-media-streaming-domain-1,🌐 通用代理
 - RULE-SET,hj-31-media-streaming-domain-2,⚡ 自動選優
-- RULE-SET,Repcz-Ads-AWAvenue,🛡️ 廣告攔截
+- AND,((RULE-SET,Repcz-Ads-AWAvenue),(NOT,((RULE-SET,hj-10-ads-exclusions))),(NOT,((RULE-SET,hj-10-telegram-exclusion))),(NOT,((RULE-SET,hj-10-twitter-exclusion))),(NOT,((DOMAIN-KEYWORD,apple.com.edgekey.net)))),🛡️ 廣告攔截
 - GEOSITE,CN,DIRECT
 - GEOIP,CN,DIRECT,no-resolve
 - MATCH,🌐 通用代理
