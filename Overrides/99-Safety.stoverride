@@ -51,6 +51,13 @@ rule-providers:
     - apple-relay.cloudflare.com
     - apple-relay.fastly-edge.com
     - cp4.cloudflare.com
+  hj-99-apple-ai-domain-1:
+    type: inline
+    behavior: domain
+    payload:
+    - apple-relay.mask.apple-dns.net
+    - api-siri-prod.apple.com
+    - apple-relay.akamaized.net
   hj-99-safety-domain-6:
     type: inline
     behavior: domain
@@ -103,4 +110,9 @@ rules:
 - DOMAIN-KEYWORD,apple.com.edgekey.net,🔔 Apple 推送
 - RULE-SET,hj-99-safety-ipcidr-4,🔔 Apple 推送,no-resolve
 - RULE-SET,hj-99-safety-domain-5,🍎 Apple 智慧
+- RULE-SET,hj-99-apple-ai-domain-1,🍎 Apple 智慧
+- PROCESS-NAME,Siri AI,🍎 Apple 智慧
+- PROCESS-NAME,Siri,🍎 Apple 智慧
+- PROCESS-NAME,assistantd,🍎 Apple 智慧
+- PROCESS-NAME,assistant_cdmd,🍎 Apple 智慧
 - RULE-SET,hj-99-safety-domain-6,DIRECT

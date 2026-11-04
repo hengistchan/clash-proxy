@@ -1,0 +1,3 @@
+apple-relay.mask.apple-dns.net
+api-siri-prod.apple.com
+apple-relay.akamaized.net

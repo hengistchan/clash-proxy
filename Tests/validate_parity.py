@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove RC4 expanded explicit rule sequence and remote provider definitions match v1.3.
+"""Prove the v1.3 baseline plus the explicit Apple AI extension remain ordered and complete.
 This is a STATIC SEMANTIC CONTRACT, not proof of on-device timing or HTTP reachability.
 """
 from pathlib import Path
@@ -47,21 +47,47 @@ for key,orig in manifest['inline_origin'].items():
             except ValueError:check(False,'Invalid CIDR '+cidr)
     check(len(q['payload'])==len(set(q['payload'])),'Indexed provider has duplicates '+key)
     check((ROOT/'Rules'/f'{key}.txt').read_text(encoding='utf8')=='\n'.join(expected)+'\n','Source snapshots diverged '+key)
+extension=manifest['apple_ai_extension']
+extension_provider=extension['provider']
+extension_policy=extension['policy']
+check(extension_provider in prod['rule-providers'],'Missing Apple AI extension provider')
+extension_data=prod['rule-providers'].get(extension_provider,{})
+extension_expected=[('+'+'.'+r.split(',')[1] if r.startswith('DOMAIN-SUFFIX,') else r.split(',')[1]) for r in extension['domains']]
+check(extension_data.get('type')=='inline' and extension_data.get('behavior')=='domain','Apple AI extension must be an inline domain set')
+check(extension_data.get('payload')==extension_expected,'Apple AI extension payload differs from manifest')
+check((ROOT/'Rules'/f'{extension_provider}.txt').read_text(encoding='utf8')=='\n'.join(extension_expected)+'\n','Apple AI source snapshot diverged')
+for rule in extension['domains']+extension['process_rules']:
+    fields=rule.split(',')
+    check(len(fields)==3 and fields[0] in ('DOMAIN','DOMAIN-SUFFIX','PROCESS-NAME') and fields[2]==extension_policy,'Invalid Apple AI extension rule: '+rule)
+indexed_origins={**manifest['inline_origin'],extension_provider:extension['domains']}
 expanded=[]
 for rule in prod['rules']:
     a=rule.split(',')
-    if a[0]=='RULE-SET' and a[1] in manifest['inline_origin']:
-        z=manifest['inline_origin'][a[1]]
+    if a[0]=='RULE-SET' and a[1] in indexed_origins:
+        z=indexed_origins[a[1]]
         for r in z:
             c=r.split(',')
             check(c[2]==a[2],'Rule set target differs from original rule '+r)
             if c[0].startswith('IP-'):check(len(a)>3 and a[-1]=='no-resolve','Lost no-resolve on IP set '+a[1])
         expanded+=z
     else:expanded.append(rule)
-check(expanded==base['rules'],'FAIL: full 150-rule sequential reconstruction does NOT equal v1.3')
-check(len(prod['rules'])==26,'Optimized explicit rule count expected 26')
-check(len(prod['rule-providers'])==21,'Expected 17 indexed + 4 original remote rule sets')
+expected_expanded=base['rules'][:]
+anchor=expected_expanded.index(extension['source_anchor_rule'])
+expected_expanded[anchor+1:anchor+1]=extension['domains']+extension['process_rules']
+check(expanded==expected_expanded,'FAIL: expanded sequence does not equal v1.3 plus Apple AI extension')
+check(len(expanded)==157,'Expanded rule count expected 157')
+check(len(prod['rules'])==31,'Optimized explicit rule count expected 31')
+check(len(prod['rule-providers'])==22,'Expected 18 indexed + 4 original remote rule sets')
 check(len(set(prod['rules']))==len(prod['rules']),'Duplicate optimized rule')
+extension_rule=f'RULE-SET,{extension_provider},{extension_policy}'
+check(extension_rule in prod['rules'],'Missing Apple AI extension rule')
+if extension_rule in prod['rules']:
+    extension_index=prod['rules'].index(extension_rule)
+    check(prod['rules'][extension_index-1]==f"RULE-SET,{extension['after_provider']},{extension_policy}",'Apple AI extension is not after the original Apple AI domains')
+    check(prod['rules'][extension_index+1:extension_index+5]==extension['process_rules'],'Apple AI process rules are missing or out of order')
+    check(prod['rules'][extension_index+5]=='RULE-SET,hj-99-safety-domain-6,DIRECT','Apple AI extension must precede domestic DIRECT rules')
+    check('RULE-SET,hj-99-safety-domain-3,🔔 Apple 推送' in prod['rules'][:extension_index],'APNs rules must precede Apple AI')
+    check('RULE-SET,hj-99-safety-ipcidr-4,🔔 Apple 推送,no-resolve' in prod['rules'][:extension_index],'APNs IP rules must precede Apple AI')
 check(prod['rules'][-3:]==['GEOSITE,CN,DIRECT','GEOIP,CN,DIRECT,no-resolve','MATCH,🌐 通用代理'],'Original fallback order retained')
 check(core['rules']==base['rules'][-3:],'Core must contain only v1.3 fallback; modules required')
 # Compose Stash-style override arrays in actual UI order, and compare with precompiled standalone.
@@ -107,6 +133,22 @@ def find_policy(obj,target):
             else:return 'REMOTE_UNKNOWN:'+a[1]
         if t=='MATCH':return a[1]
     return 'NO_MATCH'
+apple_ai_rules=manifest['inline_origin']['hj-99-safety-domain-5']+extension['domains']
+check(len(apple_ai_rules)==9,'Expected six baseline plus three extension Apple AI domains')
+for rule in apple_ai_rules:
+    target=rule.split(',')[1]
+    check(find_policy(prod,target)==extension_policy,'Apple AI domain did not match expected policy: '+target)
+excluded_apple_targets={
+    'gateway.icloud.com','probe.icloud.com','metrics.icloud.com','mask-api.icloud.com',
+    'mask-api.fe.apple-dns.net','mask-h2.icloud.com','mask.icloud.com',
+    'gspe1-ssl.ls.apple.com','ls.apple.com','apps.mzstatic.com',
+    'seed.siri.apple.com','apple-carry-relay.cloudflare.com','wps.apple.com'
+}
+extension_targets={rule.split(',')[1] for rule in extension['domains']}
+check(extension_targets=={
+    'apple-relay.mask.apple-dns.net','api-siri-prod.apple.com','apple-relay.akamaized.net'
+},'Unexpected Apple AI extension domain')
+check(not (extension_targets & excluded_apple_targets),'Apple AI extension includes a reviewed exclusion')
 # Compare local prefix where no remote rules can possibly shadow the target.
 tests=0
 for r in base['rules'][:82]:
@@ -121,7 +163,7 @@ for r in base['rules'][:82]:
         for sample in [str(n.network_address),str(n.broadcast_address)]:
             b=find_policy(base,sample);p=find_policy(prod,sample)
             check(b==p,'IP policy mismatch '+sample);tests+=1
-report={'status':'STATIC_PARITY_PASS' if not errors else 'STATIC_PARITY_FAIL','checks':checks,'failures':errors,'source_rule_count':len(base['rules']),'expanded_rule_count':len(expanded),'hot_path_entries':len(prod['rules']),'indexed_sets':len(manifest['inline_origin']),'original_remote_provider_count':4,'prefix_test_cases':tests,'remote_coverage':'ORIGINAL 4 PROVIDER DEFINITIONS RETAINED; live remote download not tested','device_runtime':'NOT TESTED'}
+report={'status':'STATIC_PARITY_PASS' if not errors else 'STATIC_PARITY_FAIL','checks':checks,'failures':errors,'source_rule_count':len(base['rules']),'apple_ai_extension_rule_count':len(extension['domains'])+len(extension['process_rules']),'expanded_rule_count':len(expanded),'hot_path_entries':len(prod['rules']),'indexed_sets':len(manifest['inline_origin'])+1,'original_remote_provider_count':4,'prefix_test_cases':tests,'remote_coverage':'ORIGINAL 4 PROVIDER DEFINITIONS RETAINED; live remote download not tested','device_runtime':'NOT TESTED'}
 (ROOT/'Tests/validation-report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n',encoding='utf8')
 print(json.dumps(report,ensure_ascii=False,indent=2))
 sys.exit(bool(errors))

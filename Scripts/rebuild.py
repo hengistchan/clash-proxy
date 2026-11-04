@@ -49,6 +49,8 @@ override_metadata={
 }
 def render(obj,comment=''):
     return comment+yaml.safe_dump(obj,allow_unicode=True,sort_keys=False,width=150)
+def domain_payload(rules):
+    return [('+'+'.'+r.split(',')[1] if r.startswith('DOMAIN-SUFFIX,') else r.split(',')[1]) for r in rules]
 def optimize_slice(name,rules):
     out=[]; indexed={}; origins={}; idx=0;i=0;snapshots={}
     while i<len(rules):
@@ -67,7 +69,7 @@ def optimize_slice(name,rules):
                 idx+=1
                 prefix=re.sub(r'[^a-z0-9]+','-',name.split('.')[0].lower()).strip('-')
                 key=f'hj-{prefix}-{kind}-{idx}'
-                payload=[('+'+'.'+z.split(',')[1] if z.startswith('DOMAIN-SUFFIX,') else z.split(',')[1]) for z in segment]
+                payload=domain_payload(segment)
                 indexed[key]={'type':'inline','behavior':kind,'payload':payload}
                 out.append('RULE-SET,'+key+','+a[2]+(',no-resolve' if kind=='ipcidr' else ''))
                 origins[key]=segment
@@ -77,7 +79,7 @@ def optimize_slice(name,rules):
     return out,indexed,origins,snapshots
 expected={};core=copy.deepcopy(base)
 core['rules']=base['rules'][147:];core['rule-providers']={}
-expected['Core.yaml']=render(core,'# RC4 modular core; requires ALL default Overrides.\n')
+expected['Core.yaml']=render(core,'# RC6 modular core; requires ALL default Overrides.\n')
 expected['Production-Legacy-v1.3.yaml']=render(base,'# Original v1.3 normalized semantic structure; reference/rollback.\n')
 compiled=copy.deepcopy(core); mods={}; origins={}
 for item in manifest['segments']:
@@ -89,17 +91,43 @@ for item in manifest['segments']:
     metadata=override_metadata[name]
     mod={'name':metadata['name'],'desc':metadata['desc'],'author':'HJ','category':'HJ Stash','rule-providers':{**inline,**other},'rules':data}
     mods[name]=mod
+extension=manifest['apple_ai_extension']
+safety=mods['99-Safety.stoverride']
+policy=extension['policy']
+provider=extension['provider']
+anchor=f"RULE-SET,{extension['after_provider']},{policy}"
+if anchor not in safety['rules']:raise AssertionError('Apple AI anchor rule missing')
+if provider in safety['rule-providers']:raise AssertionError('Apple AI provider conflict')
+for rule in extension['domains']:
+    fields=rule.split(',')
+    if len(fields)!=3 or fields[0] not in ('DOMAIN','DOMAIN-SUFFIX') or fields[2]!=policy:
+        raise AssertionError('Invalid Apple AI domain rule: '+rule)
+for rule in extension['process_rules']:
+    fields=rule.split(',')
+    if len(fields)!=3 or fields[0]!='PROCESS-NAME' or fields[2]!=policy:
+        raise AssertionError('Invalid Apple AI process rule: '+rule)
+inserted={}
+for key,value in safety['rule-providers'].items():
+    inserted[key]=value
+    if key==extension['after_provider']:
+        inserted[provider]={'type':'inline','behavior':'domain','payload':domain_payload(extension['domains'])}
+safety['rule-providers']=inserted
+anchor_index=safety['rules'].index(anchor)
+extension_rules=[f'RULE-SET,{provider},{policy}']+extension['process_rules']
+safety['rules'][anchor_index+1:anchor_index+1]=extension_rules
+expected[f'Rules/{provider}.txt']='\n'.join(domain_payload(extension['domains']))+'\n'
+for name,mod in mods.items():
     expected[f'Overrides/{name}']=render(mod)
 for name in manifest['override_order_top_to_bottom']:
     mod=mods[name];compiled['rules']=mod['rules']+compiled['rules']
     for k,v in mod['rule-providers'].items():
         if k in compiled['rule-providers']:raise AssertionError('provider conflict '+k)
         compiled['rule-providers'][k]=v
-expected['Production.yaml']=render(compiled,'# RC4 parity-first full standalone output; no Overrides with this profile.\n')
+expected['Production.yaml']=render(compiled,'# RC6 full standalone output with Apple AI extension; no Overrides with this profile.\n')
 noads=copy.deepcopy(compiled)
 noads['rules']=[r for r in noads['rules'] if 'Repcz-Ads-AWAvenue' not in r]
 del noads['rule-providers']['Repcz-Ads-AWAvenue']
-expected['Production-NoAds.yaml']=render(noads,'# RC4 NO-ADS alternative: intentionally changes ad route behavior.\n')
+expected['Production-NoAds.yaml']=render(noads,'# RC6 NO-ADS alternative: intentionally changes ad route behavior.\n')
 for name in ['Core','Production','Production-NoAds','Production-Legacy-v1.3']:
     expected[name+'.txt']=expected[name+'.yaml']
 manifest_origins=manifest['inline_origin']
@@ -117,4 +145,4 @@ for name,contents in expected.items():
         errors.append(name)
 if errors:
     print('DRIFT: '+', '.join(errors),file=sys.stderr);sys.exit(1)
-print(('WROTE' if a.write else 'PASS')+f': {len(expected)} deterministic artifacts; {len(compiled["rules"])} effective match entries; full v1.3 provider coverage retained')
+print(('WROTE' if a.write else 'PASS')+f': {len(expected)} deterministic artifacts; {len(compiled["rules"])} effective match entries; v1.3 baseline plus Apple AI extension retained')

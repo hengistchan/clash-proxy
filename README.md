@@ -1,11 +1,11 @@
-# HJ Stash v1.4-RC5 VerifiedTools（规则等价 + 验收工具修复）
+# HJ Stash v1.4-RC6 AppleAI（RC5 + Apple Intelligence 定向分流）
 
 [![Offline CI](https://github.com/hengistchan/clash-proxy/actions/workflows/offline-ci.yml/badge.svg?branch=main)](https://github.com/hengistchan/clash-proxy/actions/workflows/offline-ci.yml)
 [![Online Rule Check](https://github.com/hengistchan/clash-proxy/actions/workflows/online-rules.yml/badge.svg?branch=main)](https://github.com/hengistchan/clash-proxy/actions/workflows/online-rules.yml)
 
-**结论：静态规则还原一致，真机运行尚未验收。** RC3 优化时默认丢弃了部分 Repcz Telegram/Twitter/Google 成员、把 969 条 Repcz 广告源换为约 661 条 Only.Ads。RC4 **撤销这些有损优化**。
+**结论：v1.3 的 150 条基础规则静态还原一致；Apple Intelligence 扩展已通过离线顺序测试，真机运行尚未验收。** RC3 优化时默认丢弃了部分 Repcz Telegram/Twitter/Google 成员、把 969 条 Repcz 广告源换为约 661 条 Only.Ads。RC4 **撤销这些有损优化**。
 
-> **RC5 发布时变更范围：仅修复验收脚本与私人输出目录保护。** `Core.yaml`、`Production*.yaml`、9 个覆写、17 个规则快照、原始 v1.3 源文件及 manifest 与 RC4 **逐字节一致**；150 条分流规则、4 个 Repcz 远程 Provider、13 个代理组均未改变。
+> **RC6 变更范围：Apple Intelligence / Siri 定向补充。** 保留原版 150 条规则、Legacy 回滚基线和 4 个 Repcz 远程 Provider；在现有 6 条 Apple 智能域名之后新增 3 条 relay/Siri 域名和 4 条 macOS `PROCESS-NAME` 规则，完整展开序列为 157 条。APNs 仍在 Apple AI 之前，国内及普通 Apple/icloud DIRECT 规则仍在之后；没有加入通用 Apple `IP-CIDR`。
 >
 > **后续展示元数据更新：** 9 个覆写已补充中文 `desc`，并统一使用 `category: 'HJ Stash'`；路由规则和启用顺序未改变。
 >
@@ -24,9 +24,9 @@
 ## 修复原则
 
 - **覆盖完整性优先**：保留 v1.3 的 4 个原始 Repcz `classical/text` 远程提供者，提供者名称、URL、缓存路径、更新周期和首次匹配位置都保持不变。
-- **仅优化可证明等价的本地规则**：把原版中连续、相同策略的 DOMAIN/DOMAIN-SUFFIX 或 IP-CIDR 段转换为 17 个 `inline domain/ipcidr` 索引集合。原始 150 条规则能被逐条、原顺序地恢复；`DOMAIN-KEYWORD`、MTProto 及 GeoSite/GeoIP/MATCH 不改变。
-- **不做隐式策略调整**：Google、Twitter、Telegram、Apple、AI、国内服务的最终匹配优先级与 v1.3 相同。广告也保留原版位置；这意味着原版中已存在的广告提前放行问题仍在，属于独立待修复的功能缺陷，不能混进性能修复里。
-- **高性能不等于追求 0 classical**：17 个本地索引集合 + 4 个原始远程 `classical`，共 26 条热路径显式匹配项。不能将 150→26 理解为实际速度提升 5.7 倍。
+- **基线可逆**：原版中连续、相同策略的 DOMAIN/DOMAIN-SUFFIX 或 IP-CIDR 段被转换为 17 个 `inline domain/ipcidr` 索引集合；另为 Apple AI 扩展增加第 18 个索引集合。原始 150 条规则仍能逐条、原顺序地恢复，`DOMAIN-KEYWORD`、MTProto 及 GeoSite/GeoIP/MATCH 不变。
+- **变更范围明确**：除本版新增的 Apple Intelligence 域名和进程规则外，Google、Twitter、Telegram、AI、国内服务及原版广告位置不变。广告提前放行等原版功能问题仍单独处理，不能混入等价性修复。
+- **高性能不等于追求 0 classical**：18 个本地索引集合 + 4 个原始远程 `classical`，共 31 条热路径显式匹配项；完整语义序列为 157 条。
 
 ## 包内文件
 
@@ -37,9 +37,9 @@
 | `Production.yaml` | 与 Core+全部 9 个覆写结构一致的单文件参考，不能同时启用这些覆写 |
 | `Production-Legacy-v1.3.yaml` | 150 条原规则 + 4 个远程 provider 的原版语义复刻；用于 A/B 回退与审计 |
 | `Production-NoAds.yaml` | **显式功能差异**：去掉广告 provider；非完整等价版 |
-| `Rules/*.txt` | 17 个索引快照；当前完整配置使用 inline 定义，也可通过 `main` 的 Raw 地址作为远程规则集引用 |
+| `Rules/*.txt` | 18 个索引快照；当前完整配置使用 inline 定义，也可通过 `main` 的 Raw 地址作为远程规则集引用 |
 | `Sources/` | 用户原始 Markdown 和独立 YAML 解析基线 |
-| `Tests/validate_parity.py` | 检验 SHA、150 条还原、4 个 provider 定义、覆写合并、分流抽查 |
+| `Tests/validate_parity.py` | 检验 SHA、150 条基线还原、7 条 Apple AI 扩展、4 个远程 provider 定义、覆写合并与分流 |
 | `Tests/live_remote_check.py` | 在本地网络下载并检查所有 4 个远程规则的当前内容 |
 | `Tests/runtime_probe.py` | Stash 只读 API 监控，20 次以上成功采样输出 p95 |
 
@@ -126,8 +126,9 @@ rules:
 ```
 
 这里是**替换**同名 inline 定义，而不是在 `rule-providers` 中重复添加同名项。
-当前 `Production.yaml` 和 `Core.yaml` 默认使用 inline 规则；把 17 个本地集合改为
-远程 `main` 引用会引入网络下载和上游变更风险，必须重新执行静态验收及真机匹配测试。
+当前 `Production.yaml` 默认使用 18 个 inline 规则集合；模块化部署时这些集合定义在
+覆写中，`Core.yaml` 本身只保留兜底规则。把本地集合改为远程 `main` 引用会引入网络下载和
+上游变更风险，必须重新执行静态验收及真机匹配测试。
 4 个 `Repcz-*` Provider 仍直接引用其原始上游 URL，不受本仓库 `main` 控制。
 
 GitHub 网页的 `/blob/` 链接返回 HTML，Contents API 默认返回 JSON，都不能直接填入
@@ -152,7 +153,7 @@ GitHub 网页的 `/blob/` 链接返回 HTML，Contents API 默认返回 JSON，�
 | 6 | `40-Developer.stoverride` | [安装 GitHub 开发者服务](https://link.stash.ws/install-override/raw.githubusercontent.com/hengistchan/clash-proxy/main/Overrides/40-Developer.stoverride) |
 | 7 | `60-AI.stoverride` | [安装 OpenAI / Claude 精准分流](https://link.stash.ws/install-override/raw.githubusercontent.com/hengistchan/clash-proxy/main/Overrides/60-AI.stoverride) |
 | 8 | `50-Social.stoverride` | [安装 Telegram / X 完整规则](https://link.stash.ws/install-override/raw.githubusercontent.com/hengistchan/clash-proxy/main/Overrides/50-Social.stoverride) |
-| 9 | `99-Safety.stoverride` | [安装关键安全 / LAN / APNs / 国内服务](https://link.stash.ws/install-override/raw.githubusercontent.com/hengistchan/clash-proxy/main/Overrides/99-Safety.stoverride) |
+| 9 | `99-Safety.stoverride` | [安装关键安全 / LAN / APNs / AppleAI / 国内服务](https://link.stash.ws/install-override/raw.githubusercontent.com/hengistchan/clash-proxy/main/Overrides/99-Safety.stoverride) |
 
 这些链接会跳转到 `stash://`；桌面浏览器或 `curl` 提示不支持此协议属于预期行为，
 应在安装了 Stash 的 iPhone/iPad 上打开。安装后仍须严格遵守下一节的启用顺序。
@@ -210,11 +211,11 @@ python3 Scripts/configure.py --profile Core.yaml
 8. `50-Social.stoverride`
 9. `99-Safety.stoverride`
 
-Stash 对数组默认使用**后启用覆写的规则前插**，上面的 UI 顺序使最终规则顺序与 v1.3 相同。不要叠加任何 RC2/RC3 覆写。首次打开后更新 4 个远程规则源，确认 13 个策略组正常有节点、X5 节点不在自动/备援组；Apple Watch 天气及 APNs 必须真机复查。
+Stash 对数组默认使用**后启用覆写的规则前插**，上面的 UI 顺序保留 v1.3 基础顺序；Apple AI 扩展位于 `99-Safety.stoverride` 中现有 Apple 智能规则之后、国内 DIRECT 规则之前。不要叠加任何 RC2/RC3 覆写。首次打开后更新 4 个远程规则源，确认 13 个策略组正常有节点、X5 节点不在自动/备援组；Apple Watch 天气、APNs 与 Apple Intelligence 必须真机复查。
 
 ## 验收和限度
 
-`python3 Tests/validate_parity.py` 必须报告 `STATIC_PARITY_PASS`；`Scripts/rebuild.py` 必须 `PASS`。这验证 **150 条显式规则和 4 个远程 provider 的配置完全覆盖**，但 Stash 引擎的实际 `inline` 匹配行为、远程源下载可靠性、节点可用性及设备性能必须进一步测量。
+`python3 Tests/validate_parity.py` 必须报告 `STATIC_PARITY_PASS`；`Scripts/rebuild.py` 必须 `PASS`。这验证 **150 条 v1.3 基线、7 条 Apple AI 扩展和 4 个远程 provider 的配置顺序与内容**，但 Stash 引擎的实际 `inline` / `PROCESS-NAME` 匹配行为、远程源下载可靠性、节点可用性及设备性能必须进一步测量。
 
 自动化的离线 `first_match` 测试无法填补本机无网络时对实时 Repcz 上游的下载。**由于原版与新版引用完全相同的 provider 定义，并且 provider 相对优先级一致，在源数据相同且 Stash 遵循文档的前提下，属于等价的配置转换；不是网络环境下绝对零故障保证。**
 

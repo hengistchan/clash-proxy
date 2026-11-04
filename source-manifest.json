@@ -1,5 +1,5 @@
 {
-  "name": "HJ-Stash-v1.4-RC4-Parity-First",
+  "name": "HJ-Stash-v1.4-RC6-AppleAI",
   "origin_sha256": "237d05d9911818e721e740c782f8885b1484f02843db3f97a0e13105b0148f2d",
   "source_explicit_rule_count": 150,
   "inline_origin": {
@@ -179,6 +179,23 @@
       "DOMAIN-SUFFIX,steamcontent.com,⚡ 自動選優"
     ]
   },
+  "apple_ai_extension": {
+    "provider": "hj-99-apple-ai-domain-1",
+    "policy": "🍎 Apple 智慧",
+    "after_provider": "hj-99-safety-domain-5",
+    "source_anchor_rule": "DOMAIN,cp4.cloudflare.com,🍎 Apple 智慧",
+    "domains": [
+      "DOMAIN,apple-relay.mask.apple-dns.net,🍎 Apple 智慧",
+      "DOMAIN,api-siri-prod.apple.com,🍎 Apple 智慧",
+      "DOMAIN,apple-relay.akamaized.net,🍎 Apple 智慧"
+    ],
+    "process_rules": [
+      "PROCESS-NAME,Siri AI,🍎 Apple 智慧",
+      "PROCESS-NAME,Siri,🍎 Apple 智慧",
+      "PROCESS-NAME,assistantd,🍎 Apple 智慧",
+      "PROCESS-NAME,assistant_cdmd,🍎 Apple 智慧"
+    ]
+  },
   "override_order_top_to_bottom": [
     "10-Ads.stoverride",
     "31-Media-Streaming.stoverride",
@@ -261,7 +278,7 @@
     "Repcz-Google",
     "Repcz-Ads-AWAvenue"
   ],
-  "parity_scope": "All 150 explicit rules and all 4 original Repcz remote provider definitions; indexed-domain equivalence not engine-verified",
+  "parity_scope": "All 150 explicit v1.3 rules, the 7-rule Apple AI extension, and all 4 original Repcz remote provider definitions; indexed-domain equivalence not engine-verified",
   "core_requires_overrides": true,
   "ad_note": "Ads positioned exactly as in v1.3, preserving shadowed ads; change only in separate opt-in variant if desired"
 }

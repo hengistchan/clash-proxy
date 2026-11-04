@@ -1,6 +1,6 @@
 # 性能和匹配一致性
 
-Stash 官方推荐 `domain/ipcidr` 索引规则集减少 CPU 和内存开销，但不意味着可以省略规则。RC4 将 v1.3 的连续 150 条显式路由转换为 26 条匹配语句和 17 个索引集合；保留四个历史完整 `classical/text` 远程规则源，以免遗漏成员。
+Stash 官方推荐 `domain/ipcidr` 索引规则集减少 CPU 和内存开销，但不意味着可以省略规则。RC4 将 v1.3 的连续 150 条显式路由转换为 26 条匹配语句和 17 个索引集合；RC6 在 Apple AI 扩展后为 31 条匹配语句和 18 个索引集合。四个历史完整 `classical/text` 远程规则源继续保留，以免遗漏成员。
 
 **严格验收**：只有 `Tests/validate_parity.py` 与真实 Stash `/rules/match` 语义回归同时通过，才允许比较性能。真机使用 `Tests/runtime_probe.py`（每目标≥20成功采样）测量 HTTP API RTT、`/diagnosis/usedMemory` 与 `/rules/count`；这些指标不能单独代表内核 CPU 匹配耗时。单变量测试 DNS、网络和节点，不强制拦截 UDP/443，不启用全局 MitM 或广告 pre-matching。
 
