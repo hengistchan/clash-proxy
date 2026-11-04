@@ -5,7 +5,7 @@
 
 **结论：v1.3 的 150 条基础规则静态还原一致；Apple Intelligence 扩展已通过离线顺序测试，真机运行尚未验收。** RC3 优化时默认丢弃了部分 Repcz Telegram/Twitter/Google 成员、把 969 条 Repcz 广告源换为约 661 条 Only.Ads。RC4 **撤销这些有损优化**。
 
-> **RC6 变更范围：Apple Intelligence / Siri 定向补充。** 保留原版 150 条规则、Legacy 回滚基线和 4 个 Repcz 远程 Provider；在现有 6 条 Apple 智能域名之后新增 3 条 relay/Siri 域名和 4 条 macOS `PROCESS-NAME` 规则，完整展开序列为 157 条。APNs 仍在 Apple AI 之前，国内及普通 Apple/icloud DIRECT 规则仍在之后；没有加入通用 Apple `IP-CIDR`。
+> **RC6 变更范围：Apple Intelligence / Siri 定向补充。** 保留原版 150 条规则、Legacy 回滚基线和 4 个 Repcz 远程 Provider；把 3 条新增 relay/Siri 域名追加到 `hj-99-safety-domain-5`，随后加入 4 条 macOS `PROCESS-NAME` 规则，完整展开序列为 157 条。APNs 仍在 Apple AI 之前，国内及普通 Apple/icloud DIRECT 规则仍在之后；没有加入通用 Apple `IP-CIDR`。
 >
 > **后续展示元数据更新：** 9 个覆写已补充中文 `desc`，并统一使用 `category: 'HJ Stash'`；路由规则和启用顺序未改变。
 >
@@ -24,9 +24,9 @@
 ## 修复原则
 
 - **覆盖完整性优先**：保留 v1.3 的 4 个原始 Repcz `classical/text` 远程提供者，提供者名称、URL、缓存路径、更新周期和首次匹配位置都保持不变。
-- **基线可逆**：原版中连续、相同策略的 DOMAIN/DOMAIN-SUFFIX 或 IP-CIDR 段被转换为 17 个 `inline domain/ipcidr` 索引集合；另为 Apple AI 扩展增加第 18 个索引集合。原始 150 条规则仍能逐条、原顺序地恢复，`DOMAIN-KEYWORD`、MTProto 及 GeoSite/GeoIP/MATCH 不变。
+- **基线可逆**：原版中连续、相同策略的 DOMAIN/DOMAIN-SUFFIX 或 IP-CIDR 段被转换为 17 个 `inline domain/ipcidr` 索引集合；Apple AI 扩展复用现有 `hj-99-safety-domain-5`，不增加 Provider。原始 150 条规则仍能逐条、原顺序地恢复，`DOMAIN-KEYWORD`、MTProto 及 GeoSite/GeoIP/MATCH 不变。
 - **变更范围明确**：除本版新增的 Apple Intelligence 域名和进程规则外，Google、Twitter、Telegram、AI、国内服务及原版广告位置不变。广告提前放行等原版功能问题仍单独处理，不能混入等价性修复。
-- **高性能不等于追求 0 classical**：18 个本地索引集合 + 4 个原始远程 `classical`，共 31 条热路径显式匹配项；完整语义序列为 157 条。
+- **高性能不等于追求 0 classical**：17 个本地索引集合 + 4 个原始远程 `classical`，共 30 条热路径显式匹配项；完整语义序列为 157 条。
 
 ## 包内文件
 
@@ -37,7 +37,7 @@
 | `Production.yaml` | 与 Core+全部 9 个覆写结构一致的单文件参考，不能同时启用这些覆写 |
 | `Production-Legacy-v1.3.yaml` | 150 条原规则 + 4 个远程 provider 的原版语义复刻；用于 A/B 回退与审计 |
 | `Production-NoAds.yaml` | **显式功能差异**：去掉广告 provider；非完整等价版 |
-| `Rules/*.txt` | 18 个索引快照；当前完整配置使用 inline 定义，也可通过 `main` 的 Raw 地址作为远程规则集引用 |
+| `Rules/*.txt` | 17 个索引快照；当前完整配置使用 inline 定义，也可通过 `main` 的 Raw 地址作为远程规则集引用 |
 | `Sources/` | 用户原始 Markdown 和独立 YAML 解析基线 |
 | `Tests/validate_parity.py` | 检验 SHA、150 条基线还原、7 条 Apple AI 扩展、4 个远程 provider 定义、覆写合并与分流 |
 | `Tests/live_remote_check.py` | 在本地网络下载并检查所有 4 个远程规则的当前内容 |
@@ -126,7 +126,7 @@ rules:
 ```
 
 这里是**替换**同名 inline 定义，而不是在 `rule-providers` 中重复添加同名项。
-当前 `Production.yaml` 默认使用 18 个 inline 规则集合；模块化部署时这些集合定义在
+当前 `Production.yaml` 默认使用 17 个 inline 规则集合；模块化部署时这些集合定义在
 覆写中，`Core.yaml` 本身只保留兜底规则。把本地集合改为远程 `main` 引用会引入网络下载和
 上游变更风险，必须重新执行静态验收及真机匹配测试。
 4 个 `Repcz-*` Provider 仍直接引用其原始上游 URL，不受本仓库 `main` 控制。

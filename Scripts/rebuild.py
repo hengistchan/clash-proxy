@@ -95,9 +95,12 @@ extension=manifest['apple_ai_extension']
 safety=mods['99-Safety.stoverride']
 policy=extension['policy']
 provider=extension['provider']
-anchor=f"RULE-SET,{extension['after_provider']},{policy}"
+anchor=f"RULE-SET,{provider},{policy}"
 if anchor not in safety['rules']:raise AssertionError('Apple AI anchor rule missing')
-if provider in safety['rule-providers']:raise AssertionError('Apple AI provider conflict')
+if provider not in safety['rule-providers']:raise AssertionError('Apple AI provider missing')
+provider_data=safety['rule-providers'][provider]
+if provider_data.get('type')!='inline' or provider_data.get('behavior')!='domain':
+    raise AssertionError('Apple AI provider must be an inline domain set')
 for rule in extension['domains']:
     fields=rule.split(',')
     if len(fields)!=3 or fields[0] not in ('DOMAIN','DOMAIN-SUFFIX') or fields[2]!=policy:
@@ -106,16 +109,13 @@ for rule in extension['process_rules']:
     fields=rule.split(',')
     if len(fields)!=3 or fields[0]!='PROCESS-NAME' or fields[2]!=policy:
         raise AssertionError('Invalid Apple AI process rule: '+rule)
-inserted={}
-for key,value in safety['rule-providers'].items():
-    inserted[key]=value
-    if key==extension['after_provider']:
-        inserted[provider]={'type':'inline','behavior':'domain','payload':domain_payload(extension['domains'])}
-safety['rule-providers']=inserted
+extension_payload=domain_payload(extension['domains'])
+if set(provider_data['payload']) & set(extension_payload):
+    raise AssertionError('Apple AI extension duplicates an existing provider payload')
+provider_data['payload']+=extension_payload
 anchor_index=safety['rules'].index(anchor)
-extension_rules=[f'RULE-SET,{provider},{policy}']+extension['process_rules']
-safety['rules'][anchor_index+1:anchor_index+1]=extension_rules
-expected[f'Rules/{provider}.txt']='\n'.join(domain_payload(extension['domains']))+'\n'
+safety['rules'][anchor_index+1:anchor_index+1]=extension['process_rules']
+expected[f'Rules/{provider}.txt']='\n'.join(provider_data['payload'])+'\n'
 for name,mod in mods.items():
     expected[f'Overrides/{name}']=render(mod)
 for name in manifest['override_order_top_to_bottom']:

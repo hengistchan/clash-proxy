@@ -4,3 +4,6 @@ apple-relay.apple.com
 apple-relay.cloudflare.com
 apple-relay.fastly-edge.com
 cp4.cloudflare.com
+apple-relay.mask.apple-dns.net
+api-siri-prod.apple.com
+apple-relay.akamaized.net

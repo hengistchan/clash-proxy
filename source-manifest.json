@@ -180,9 +180,8 @@
     ]
   },
   "apple_ai_extension": {
-    "provider": "hj-99-apple-ai-domain-1",
+    "provider": "hj-99-safety-domain-5",
     "policy": "🍎 Apple 智慧",
-    "after_provider": "hj-99-safety-domain-5",
     "source_anchor_rule": "DOMAIN,cp4.cloudflare.com,🍎 Apple 智慧",
     "domains": [
       "DOMAIN,apple-relay.mask.apple-dns.net,🍎 Apple 智慧",
