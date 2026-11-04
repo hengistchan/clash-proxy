@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="从一个私人 GLaDOS 订阅地址生成完整 Stash 配置。">
+  <title>Stash Config Forge</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="atmosphere" aria-hidden="true"></div>
+  <main class="shell">
+    <header class="masthead reveal">
+      <a class="brand" href="/" aria-label="Stash Config Forge 首页">
+        <span class="brand-mark">SF</span>
+        <span>STASH<br>CONFIG FORGE</span>
+      </a>
+      <div class="status">
+        <span class="status-dot"></span>
+        STATELESS / READY
+      </div>
+    </header>
+
+    <section class="hero">
+      <div class="hero-copy reveal">
+        <p class="eyebrow">PRIVATE URL → COMPLETE YAML</p>
+        <h1>一份地址，<br><em>换来整份规则。</em></h1>
+        <p class="lede">
+          输入你的 GLaDOS YAML 订阅地址。服务只在这台设备的这一次请求中替换模板，
+          直接生成可导入 Stash 的完整配置，不建立账户，也不保存订阅地址。
+        </p>
+
+        <div class="contract">
+          <div class="contract-head">
+            <span>API CONTRACT</span>
+            <span>01</span>
+          </div>
+          <code>GET /api?url=https://your-subscription</code>
+          <p>浏览器界面默认使用等价的 POST 请求，避免私人 URL 进入地址栏和历史记录。</p>
+        </div>
+      </div>
+
+      <div class="forge reveal">
+        <div class="forge-heading">
+          <span class="forge-index">FORGE / 01</span>
+          <span id="template-label">PRODUCTION</span>
+        </div>
+        <form id="config-form" action="/api" method="get">
+          <label class="field-label" for="glados-url">GLaDOS YAML 地址</label>
+          <div class="secret-field">
+            <input
+              id="glados-url"
+              name="url"
+              type="password"
+              inputmode="url"
+              autocomplete="off"
+              autocapitalize="none"
+              spellcheck="false"
+              placeholder="https://example.com/subscribe?token=…"
+              required
+              pattern="https://.*"
+            >
+            <button id="reveal-url" class="reveal-url" type="button" aria-label="显示订阅地址" aria-pressed="false">
+              <span class="eye-open" aria-hidden="true"></span>
+              <span class="eye-slash" aria-hidden="true"></span>
+            </button>
+          </div>
+          <p class="field-note">只接受 HTTPS。地址不会被服务端写入磁盘或数据库。</p>
+
+          <fieldset class="template-picker">
+            <legend>配置模板</legend>
+            <label class="template-option">
+              <input type="radio" name="template" value="production" checked>
+              <span class="option-card">
+                <strong>Production</strong>
+                <small>完整规则 + 广告拦截</small>
+              </span>
+            </label>
+            <label class="template-option">
+              <input type="radio" name="template" value="no_ads">
+              <span class="option-card">
+                <strong>No Ads</strong>
+                <small>完整规则，不含广告拦截</small>
+              </span>
+            </label>
+          </fieldset>
+
+          <button id="generate-button" class="generate-button" type="submit">
+            <span>锻造完整配置</span>
+            <span class="button-arrow" aria-hidden="true">↗</span>
+          </button>
+        </form>
+
+        <div id="result" class="result" role="status" aria-live="polite" hidden>
+          <div class="result-mark" aria-hidden="true">✓</div>
+          <div>
+            <strong id="result-title">配置已生成</strong>
+            <p id="result-detail"></p>
+          </div>
+        </div>
+
+        <div id="error" class="error" role="alert" hidden></div>
+      </div>
+    </section>
+
+    <section class="workflow reveal" aria-label="使用流程">
+      <article>
+        <span>01</span>
+        <h2>Paste</h2>
+        <p>输入只属于你的 HTTPS 订阅地址。</p>
+      </article>
+      <article>
+        <span>02</span>
+        <h2>Forge</h2>
+        <p>选择完整版或无广告版，生成最终 YAML。</p>
+      </article>
+      <article>
+        <span>03</span>
+        <h2>Import</h2>
+        <p>把下载文件作为唯一配置导入 Stash。</p>
+      </article>
+    </section>
+
+    <footer class="footer reveal">
+      <p>NO ACCOUNTS · NO URL STORAGE · NO PLAINTEXT LOGS</p>
+      <p>Private subscription URLs must never be shared publicly.</p>
+    </footer>
+  </main>
+</body>
+</html>

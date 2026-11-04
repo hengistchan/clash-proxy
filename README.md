@@ -47,6 +47,18 @@
 
 公开仓库：<https://github.com/hengistchan/clash-proxy>
 
+### 网页生成完整配置
+
+仓库内置一个无状态的前端与 API 服务，可直接生成包含私人 GLaDOS 地址的完整配置：
+
+```text
+GET /api?url=https://your-subscription.example/path&template=production
+```
+
+本地启动和 Docker 持久化部署方法见 [SERVICE.md](SERVICE.md)。该服务不持久化订阅
+地址，Docker 默认启用自动重启，适合长期部署在 Mac mini、NAS 或服务器上。网页默认
+使用 POST，避免敏感 URL 进入浏览器地址栏；公网部署必须位于 HTTPS 反向代理之后。
+
 `main` 代表最新模板。当前 `Core.yaml` 和 `Production*.yaml` 中的 GLaDOS 地址仍是
 `example.invalid` 占位符，**不能直接作为可联网的完整配置导入**。完整配置应拉取
 `main` 后在本地生成私人版本；只有 `Rules/*.txt` 和 `Overrides/*.stoverride`

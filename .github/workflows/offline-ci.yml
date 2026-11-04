@@ -51,6 +51,9 @@ jobs:
       - name: Run offline tool tests
         run: python -m unittest discover -s Tests -p 'test_tool_fixes.py' -v
 
+      - name: Run configuration service tests
+        run: python -m unittest Tests/test_config_service.py -v
+
       - name: Check generated artifacts are committed
         run: |
           if [[ -n "$(git status --porcelain)" ]]; then

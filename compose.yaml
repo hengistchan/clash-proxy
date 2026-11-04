@@ -1,0 +1,17 @@
+name: stash-config-forge
+
+services:
+  api:
+    build:
+      context: .
+    ports:
+      - "${SERVICE_PORT:-8080}:8080"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

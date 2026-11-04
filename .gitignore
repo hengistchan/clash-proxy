@@ -4,6 +4,7 @@
 *.private.yaml
 .env
 .env.*
+.venv-service/
 providers/
 rules/hj-*.list
 runtime-*.json
