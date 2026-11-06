@@ -626,6 +626,10 @@ export function ConfigStudio() {
                 snapshot={snapshot}
                 validation={validation}
                 onNavigate={(value) => setSection(value as SectionId)}
+                onInspect={(node) => {
+                  setGraphFocus(node.key);
+                  setSection('relationships');
+                }}
               />
             ) : null}
 

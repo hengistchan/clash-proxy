@@ -16,17 +16,21 @@ import type { Snapshot, ValidationResult } from '@/lib/types';
 
 import { StatusBadge } from './ui';
 import { ExportView } from './export-view';
+import { ResourceTree } from './resource-tree';
+import type { ResourceNode } from '@/lib/resource-graph';
 
 export function OverviewView({
   snapshot,
   token,
   validation,
-  onNavigate
+  onNavigate,
+  onInspect
 }: {
   snapshot: Snapshot;
   token: string;
   validation: ValidationResult;
   onNavigate: (section: string) => void;
+  onInspect: (node: ResourceNode) => void;
 }) {
   const errors = validation.issues.filter((item) => item.severity === 'error');
   const warnings = validation.issues.filter(
@@ -113,45 +117,22 @@ export function OverviewView({
       </div>
 
       <section className="dependency-map">
-        <div className="dependency-copy">
-          <p className="kicker">ROUTING PIPELINE</p>
-          <h2>查看资源之间的实际关联</h2>
+        <div className="dependency-tree-heading">
+          <div className="dependency-copy">
+            <p className="kicker">配置关系树</p>
+            <h2>从规则一路看到流量出口</h2>
+            <p>
+              展开分支查看策略、成员与来源；点击资源查看使用者并继续编辑。树展示当前配置的引用，实际匹配取决于运行模式。
+            </p>
+          </div>
           <button
             className="button secondary small"
             onClick={() => onNavigate('relationships')}
           >
             打开关联关系
           </button>
-          <p>
-            远程代理源先由策略组筛选；规则层只引用策略组或直接节点； 规则集和
-            DNS 共享命名空间。删除与重命名会检查引用关系。
-          </p>
         </div>
-        <div className="pipeline">
-          <div>
-            <Database size={17} />
-            <strong>{snapshot.proxyProviders.length}</strong>
-            <span>Proxy Providers</span>
-          </div>
-          <ArrowRight size={18} />
-          <div>
-            <Layers3 size={17} />
-            <strong>{snapshot.proxyGroups.length}</strong>
-            <span>Strategy Groups</span>
-          </div>
-          <ArrowRight size={18} />
-          <div>
-            <Boxes size={17} />
-            <strong>{snapshot.ruleProviders.length}</strong>
-            <span>Rule Providers</span>
-          </div>
-          <ArrowRight size={18} />
-          <div>
-            <Activity size={17} />
-            <strong>{snapshot.rules.length}</strong>
-            <span>Ordered Rules</span>
-          </div>
-        </div>
+        <ResourceTree snapshot={snapshot} compact onSelect={onInspect} />
       </section>
 
       <section className="validation-panel">
