@@ -61,6 +61,7 @@ export const proxyGroupSchema = z.object({
 
 export const ruleProviderSchema = z.object({
   name,
+  displayName: z.string().trim().max(160).optional(),
   behavior: z.string().trim().min(1).max(64),
   providerType: z.enum(['inline', 'remote', 'local']),
   config: jsonObject.default({}),

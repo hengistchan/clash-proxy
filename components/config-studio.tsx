@@ -116,7 +116,7 @@ const SECTION_COPY: Partial<
   'rule-providers': {
     title: '规则集',
     subtitle:
-      '按用途显示易读名称，配置标识仍保留在名称下方。支持远程订阅、本地文件与内嵌规则；编辑和导出继续使用原始标识。',
+      '为每个规则集设置管理界面名称；Stash 标识仍用于 RULE-SET 引用和 YAML 导出。名称不会从规则内容自动推断。',
     kind: 'rule-providers'
   },
   hosts: {

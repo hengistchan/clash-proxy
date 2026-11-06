@@ -32,6 +32,7 @@ import {
   restoreRevision,
   updateProxy,
   updateProxyGroup,
+  updateRuleProvider,
   updateRuleProviderEntry
 } from '../lib/repository';
 import { validateSnapshot } from '../lib/validation';
@@ -134,7 +135,12 @@ describe('seed and export', () => {
 describe('database and encrypted storage', () => {
   test('records the schema version and refuses to open a newer database', () => {
     const db = getDb();
-    assert.equal(Number(db.pragma('user_version', { simple: true })), 1);
+    assert.equal(Number(db.pragma('user_version', { simple: true })), 2);
+    assert.ok(
+      db.prepare('PRAGMA table_info(rule_providers)')
+        .all()
+        .some((column) => (column as { name: string }).name === 'display_name')
+    );
     closeDbForTests();
 
     const newerDb = new Database(currentDbPath());
@@ -143,6 +149,38 @@ describe('database and encrypted storage', () => {
 
     assert.throws(() => getDb(), /newer than this service supports/);
     closeDbForTests();
+  });
+
+  test('migrates an existing version 1 database with an empty display name', () => {
+    closeDbForTests();
+    const legacyPath = path.join(tempRoot, `legacy-${sequence}.sqlite3`);
+    const legacyDb = new Database(legacyPath);
+    legacyDb.exec(`
+      CREATE TABLE rule_providers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        behavior TEXT NOT NULL,
+        provider_type TEXT NOT NULL,
+        config_ciphertext TEXT NOT NULL,
+        sort_order INTEGER NOT NULL
+      );
+      PRAGMA user_version = 1;
+    `);
+    legacyDb.close();
+
+    const previousPath = process.env.STASH_DB_PATH;
+    process.env.STASH_DB_PATH = legacyPath;
+    const migrated = getDb();
+    assert.equal(Number(migrated.pragma('user_version', { simple: true })), 2);
+    assert.equal(
+      (migrated.prepare('PRAGMA table_info(rule_providers)').all() as Array<{ name: string }>).some(
+        (column) => column.name === 'display_name'
+      ),
+      true
+    );
+    closeDbForTests();
+    process.env.STASH_DB_PATH = previousPath;
   });
 
   test('compresses new encrypted JSON and still reads legacy v1 ciphertext', () => {
@@ -297,6 +335,39 @@ describe('configuration CRUD', () => {
     assert.equal(updated.value, '+.updated.example.test');
     assert.equal(updated.sortOrder, 2);
     deleteRuleProviderEntry(profile.id, provider.id, created.id);
+  });
+
+  test('rule-provider display names persist in SQLite but never change Stash identifiers', () => {
+    const profile = getActiveProfile();
+    const provider = getSnapshot(profile.id).ruleProviders.find(
+      (item) => item.name === 'hj-99-safety-domain-5'
+    );
+    assert.ok(provider);
+    const updated = updateRuleProvider(profile.id, provider.id, {
+      name: provider.name,
+      displayName: 'Apple Intelligence · Siri',
+      behavior: provider.behavior,
+      providerType: provider.providerType,
+      config: provider.config,
+      entries: provider.entries.map((entry) => entry.value)
+    });
+    assert.equal(updated.displayName, 'Apple Intelligence · Siri');
+
+    const reimported = importYaml(profile.id, readFileSync(path.join(root, 'Production.yaml'), 'utf8'));
+    assert.equal(
+      reimported.ruleProviders.find((item) => item.name === provider.name)?.displayName,
+      'Apple Intelligence · Siri'
+    );
+
+    const exported = exportProfile(getSnapshot(profile.id), {
+      subscriptionUrl: SECRET_URL,
+      template: 'production'
+    });
+    const parsed = parseYaml(exported.yaml) as Record<string, unknown>;
+    const exportedProviders = parsed['rule-providers'] as Record<string, Record<string, unknown>>;
+    assert.ok(exportedProviders[provider.name]);
+    assert.equal('Apple Intelligence · Siri' in exportedProviders, false);
+    assert.equal('displayName' in exportedProviders[provider.name], false);
   });
 
   test('referenced rule providers cannot be deleted', () => {

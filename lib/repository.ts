@@ -116,6 +116,7 @@ function mapRuleProvider(row: DbRow, entries: RuleProviderEntry[]): RuleProvider
   return {
     id: Number(row.id),
     name: String(row.name),
+    displayName: String(row.display_name || ''),
     behavior: String(row.behavior),
     providerType: String(row.provider_type) as RuleProviderType,
     config: decryptObject(row.config_ciphertext),
@@ -559,6 +560,7 @@ function replaceProfileResources(
     proxyGroups: Array<{ name: string; type: ProxyGroupType; config: JsonObject }>;
     ruleProviders: Array<{
       name: string;
+      displayName?: string;
       behavior: string;
       providerType: RuleProviderType;
       config: JsonObject;
@@ -578,6 +580,11 @@ function replaceProfileResources(
 ): void {
   getProfileRow(db, profileId);
   const touched = now();
+  const existingRuleSetNames = new Map(
+    (db.prepare('SELECT name, display_name FROM rule_providers WHERE profile_id = ?')
+      .all(profileId) as DbRow[])
+      .map((row) => [String(row.name), String(row.display_name || '')])
+  );
   db.prepare('DELETE FROM proxies WHERE profile_id = ?').run(profileId);
   db.prepare('DELETE FROM proxy_providers WHERE profile_id = ?').run(profileId);
   db.prepare('DELETE FROM proxy_groups WHERE profile_id = ?').run(profileId);
@@ -642,8 +649,8 @@ function replaceProfileResources(
 
   const ruleProviderInsert = db.prepare(
     `INSERT INTO rule_providers
-       (profile_id, name, behavior, provider_type, config_ciphertext, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?)`
+       (profile_id, name, display_name, behavior, provider_type, config_ciphertext, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
   );
   const entryInsert = db.prepare(
     'INSERT INTO rule_provider_entries (provider_id, value, sort_order) VALUES (?, ?, ?)'
@@ -652,6 +659,7 @@ function replaceProfileResources(
     const result = ruleProviderInsert.run(
       profileId,
       item.name,
+      item.displayName ?? existingRuleSetNames.get(item.name) ?? '',
       item.behavior,
       item.providerType,
       encryptJson(item.config),
@@ -1224,6 +1232,7 @@ export function createRuleProvider(
   profileId: number,
   input: {
     name: string;
+    displayName?: string;
     behavior: string;
     providerType: RuleProviderType;
     config: JsonObject;
@@ -1237,11 +1246,12 @@ export function createRuleProvider(
     const order = nextSortOrder(db, 'rule_providers', profileId);
     const result = db.prepare(
       `INSERT INTO rule_providers
-         (profile_id, name, behavior, provider_type, config_ciphertext, sort_order)
-       VALUES (?, ?, ?, ?, ?, ?)`
+         (profile_id, name, display_name, behavior, provider_type, config_ciphertext, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).run(
       profileId,
       input.name,
+      input.displayName?.trim() || '',
       input.behavior,
       input.providerType,
       encryptJson(input.config),
@@ -1266,6 +1276,7 @@ export function updateRuleProvider(
   itemId: number,
   input: {
     name: string;
+    displayName?: string;
     behavior: string;
     providerType: RuleProviderType;
     config: JsonObject;
@@ -1282,9 +1293,10 @@ export function updateRuleProvider(
     const oldName = String(current.name);
     db.prepare(
       `UPDATE rule_providers
-       SET name = ?, behavior = ?, provider_type = ?, config_ciphertext = ? WHERE id = ?`
+       SET name = ?, display_name = COALESCE(?, display_name), behavior = ?, provider_type = ?, config_ciphertext = ? WHERE id = ?`
     ).run(
       input.name,
+      input.displayName === undefined ? null : input.displayName.trim(),
       input.behavior,
       input.providerType,
       encryptJson(input.config),
@@ -1790,6 +1802,7 @@ export function restoreRevision(profileId: number, revision: number): Snapshot {
       })),
       ruleProviders: snapshot.ruleProviders.map((item) => ({
         name: item.name,
+        displayName: item.displayName,
         behavior: item.behavior,
         providerType: item.providerType,
         config: item.config,

@@ -37,63 +37,11 @@ function rawItemName(item: ResourceItem): string {
   return item.pattern;
 }
 
-const RULESET_CATEGORY_LABELS: Record<string, string> = {
-  'media-streaming': '流媒体',
-  general: '通用服务',
-  googleai: 'Google AI',
-  'media-youtube': 'YouTube',
-  developer: '开发者服务',
-  ai: 'AI 服务',
-  social: '社交平台',
-  safety: '安全防护',
-  ads: '广告拦截',
-  google: 'Google 服务',
-  telegram: 'Telegram',
-  twitter: 'X / Twitter'
-};
-
-function humanizeRuleSetName(item: RuleProvider): string {
-  const entryValues = item.entries.map((entry) => entry.value.toLowerCase());
-  const containsAny = (...needles: string[]) =>
-    needles.some((needle) => entryValues.some((value) => value.includes(needle)));
-
-  if (containsAny('apple-relay', 'guzzoni.apple.com', 'smoot.apple.com', 'api-siri')) {
-    return 'Apple Intelligence · Siri 与 Relay';
-  }
-  if (containsAny('push.apple.com')) return 'Apple 推送服务';
-  if (containsAny('servicewechat.com', 'weixin.qq.com', 'wechat.com')) {
-    return '微信服务';
-  }
-  if (containsAny('home.arpa', '.lan', '.local')) return '家庭与局域网域名';
-  if (item.behavior === 'ipcidr' && entryValues.some((value) => /^(10\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|fc|fe80)/.test(value))) {
-    return '局域网与保留 IP 网段';
-  }
-  if (item.behavior === 'ipcidr' && entryValues.some((value) => value.startsWith('17.'))) {
-    return 'Apple 服务 IP 网段';
-  }
-
-  const numbered = item.name.match(/^hj-\d+-(.+)-(domain|ipcidr)-(\d+)$/i);
-  if (numbered) {
-    const [, category, ruleType, index] = numbered;
-    const categoryLabel = RULESET_CATEGORY_LABELS[category] ||
-      category.split('-').map((word) => word[0]?.toUpperCase() + word.slice(1)).join(' ');
-    const typeLabel = ruleType.toLowerCase() === 'ipcidr' ? 'IP 网段规则' : '域名规则';
-    return `${categoryLabel} · ${typeLabel} ${index.padStart(2, '0')}`;
-  }
-
-  const remoteName = item.name.match(/^Repcz-(.+)$/i);
-  if (remoteName) {
-    const slug = remoteName[1];
-    const ads = slug.match(/^Ads-(.+)$/i);
-    if (ads) return `广告拦截 · ${ads[1]}`;
-    return RULESET_CATEGORY_LABELS[slug.toLowerCase()] || slug;
-  }
-
-  return item.name;
-}
-
 function itemName(item: ResourceItem, kind: ResourceKind): string {
-  if (kind === 'rule-providers') return humanizeRuleSetName(item as RuleProvider);
+  if (kind === 'rule-providers') {
+    const provider = item as RuleProvider;
+    return provider.displayName.trim() || provider.name;
+  }
   return rawItemName(item);
 }
 
@@ -236,7 +184,9 @@ export function ResourceList({
               <div className="resource-title">
                 <strong>{itemName(item, kind)}</strong>
                 <StatusBadge tone="muted">{itemType(item, kind)}</StatusBadge>
-                {kind === 'rule-providers' ? (
+                {kind === 'rule-providers' &&
+                (item as RuleProvider).displayName.trim() &&
+                (item as RuleProvider).displayName !== (item as RuleProvider).name ? (
                   <code className="resource-identifier" title="规则集配置标识">
                     {rawItemName(item)}
                   </code>

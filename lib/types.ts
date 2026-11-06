@@ -58,6 +58,7 @@ export interface RuleProviderEntry {
 export interface RuleProvider {
   id: number;
   name: string;
+  displayName: string;
   behavior: string;
   providerType: RuleProviderType;
   config: JsonObject;

@@ -123,6 +123,15 @@ const MIGRATIONS = [
     apply(db: Database.Database) {
       db.exec(SCHEMA_V1);
     }
+  },
+  {
+    version: 2,
+    apply(db: Database.Database) {
+      db.exec(`
+        ALTER TABLE rule_providers
+        ADD COLUMN display_name TEXT NOT NULL DEFAULT '';
+      `);
+    }
   }
 ] as const;
 

@@ -73,6 +73,7 @@ export function EditorDialog({
   onSaved: (message: string) => Promise<void>;
 }) {
   const [name, setName] = useState('');
+  const [displayName, setDisplayName] = useState('');
   const [type, setType] = useState('');
   const [configText, setConfigText] = useState('{}');
   const [requiresUrl, setRequiresUrl] = useState(false);
@@ -107,6 +108,7 @@ export function EditorDialog({
     setError('');
     const item = existing as Record<string, unknown> | null;
     setName(String(item?.name || item?.pattern || ''));
+    setDisplayName(String(item?.displayName || ''));
     setType(
       String(
         item?.type ||
@@ -151,7 +153,13 @@ export function EditorDialog({
   const editingRuleType = existing && 'type' in existing ? existing.type : undefined;
   const ruleSetOptions = snapshot.ruleProviders.map((provider) => ({
     value: provider.name,
-    label: `${provider.name} · ${provider.behavior} / ${provider.providerType}`
+    label: [
+      provider.displayName.trim(),
+      provider.name,
+      `${provider.behavior} / ${provider.providerType}`
+    ]
+      .filter(Boolean)
+      .join(' · ')
   }));
   if (
     type === 'RULE-SET' &&
@@ -223,6 +231,7 @@ export function EditorDialog({
       } else if (resource === 'rule-providers') {
         body = {
           name: name.trim(),
+          displayName: displayName.trim(),
           behavior: providerBehavior.trim(),
           providerType,
           config: parseObject(configText, '规则集配置'),
@@ -451,12 +460,23 @@ export function EditorDialog({
         {resource === 'rule-providers' ? (
           <>
             <label className="field">
-              <span>规则集名称</span>
+              <span>Stash 规则集标识</span>
               <input
                 className="input"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
               />
+              <small>写入 YAML 并供 RULE-SET 引用；修改时会同步更新引用。</small>
+            </label>
+            <label className="field">
+              <span>界面显示名称</span>
+              <input
+                className="input"
+                value={displayName}
+                onChange={(event) => setDisplayName(event.target.value)}
+                placeholder="例如：Apple Intelligence · Siri"
+              />
+              <small>只保存在管理数据库中，不会导出到 Stash YAML；留空时显示 Stash 标识。</small>
             </label>
             <SelectField
               label="来源类型"
