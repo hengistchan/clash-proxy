@@ -1,4 +1,6 @@
 .git
+.next
+node_modules
 .github
 .DS_Store
 .env
@@ -11,7 +13,9 @@ providers
 rules
 runtime-*.json
 Tests
+tests
 Sources
 Overrides
 Core.*
 Production-Legacy-v1.3.*
+data

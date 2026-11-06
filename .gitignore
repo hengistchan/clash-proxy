@@ -5,6 +5,11 @@
 .env
 .env.*
 .venv-service/
+data/
+node_modules/
+.next/
+coverage/
+*.tsbuildinfo
 providers/
 rules/hj-*.list
 runtime-*.json

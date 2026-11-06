@@ -42,6 +42,7 @@
 | `Tests/validate_parity.py` | 检验 SHA、150 条基线还原、7 条 Apple AI 扩展、4 个远程 provider 定义、覆写合并与分流 |
 | `Tests/live_remote_check.py` | 在本地网络下载并检查所有 4 个远程规则的当前内容 |
 | `Tests/runtime_probe.py` | Stash 只读 API 监控，20 次以上成功采样输出 p95 |
+| `app/`、`lib/`、`components/` + `Dockerfile` | Next.js / Node.js + SQLite 的完整 Stash Profile 管理器；部署见 `SERVICE.md` |
 
 ## 从 GitHub main 分支获取
 
@@ -49,15 +50,18 @@
 
 ### 网页生成完整配置
 
-仓库内置一个无状态的前端与 API 服务，可直接生成包含私人 GLaDOS 地址的完整配置：
+仓库内置 SQLite 规则账本、前端和 API 服务。规则可以逐条增删改查并按
+`priority` 从小到大参与匹配；生成配置时会自动把相邻同类规则压缩为 inline rule-set：
 
 ```text
 GET /api?url=https://your-subscription.example/path&template=production
 ```
 
-本地启动和 Docker 持久化部署方法见 [SERVICE.md](SERVICE.md)。该服务不持久化订阅
-地址，Docker 默认启用自动重启，适合长期部署在 Mac mini、NAS 或服务器上。网页默认
-使用 POST，避免敏感 URL 进入浏览器地址栏；公网部署必须位于 HTTPS 反向代理之后。
+本地启动和 Docker 持久化部署方法见 [SERVICE.md](SERVICE.md)。服务可管理 Profile、DNS、
+代理节点与代理源、策略组、规则集、按优先级排列的路由规则、Hosts 和其他 Stash 顶层区块。
+SQLite 数据保存在 Docker named volume `stash-data`，容器重建不会丢失配置；订阅 URL 只
+参与当前请求，不会写入数据库。网页使用 POST，避免敏感 URL 进入浏览器地址栏；公网部署
+必须位于 HTTPS 反向代理之后，并配置 `STASH_ADMIN_TOKEN`。
 
 `main` 代表最新模板。当前 `Core.yaml` 和 `Production*.yaml` 中的 GLaDOS 地址仍是
 `example.invalid` 占位符，**不能直接作为可联网的完整配置导入**。完整配置应拉取
@@ -174,15 +178,16 @@ GitHub 网页的 `/blob/` 链接返回 HTML，Contents API 默认返回 JSON，�
 
 仓库使用两个相互独立的 GitHub Actions 工作流：
 
-- `Offline CI`：在 Pull Request、`main` push 或手动触发时运行。它在 Python 3.9
-  和 3.12 上执行 `Scripts/rebuild.py`、`Tests/validate_parity.py` 和
-  `test_tool_fixes.py`，并检查生成文件是否已经提交。该工作流不访问实时规则源。
+- `Offline CI`：在 Pull Request、`main` push 或手动触发时运行。Node.js 22 job 执行类型
+  检查、服务测试和生产构建；Python 3.9 和 3.12 jobs 执行 `Scripts/rebuild.py`、
+  `Tests/validate_parity.py` 和 `test_tool_fixes.py`，并检查生成文件是否已经提交。该工作流
+  不访问实时规则源。
 - `Online Rule Check`：每天北京时间 09:17 检查 4 个 Repcz 上游源，保存 30 天内的
   sanitized 报告；也可在 Actions 页面手动触发。它不会阻塞离线 CI。
 
 更新仓库时，从最新 `main` 创建独立分支，通过 Pull Request 提交修改。PR 合并前至少
-要求 `Offline CI` 的 Python 3.9 和 3.12 两个检查通过；`Online Rule Check` 的偶发
-网络失败只用于判断上游可达性，不应被解释为规则配置不一致。
+要求 `Offline CI` 的 Node.js 22、Python 3.9 和 Python 3.12 检查通过；
+`Online Rule Check` 的偶发网络失败只用于判断上游可达性，不应被解释为规则配置不一致。
 
 ## 模块化部署（Mac + iPhone Stash）
 
