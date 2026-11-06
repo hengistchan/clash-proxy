@@ -64,11 +64,13 @@ export function SelectField({
 }: {
   label?: string;
   value: string;
-  options: Array<{ value: string; label: string }>;
+  options: Array<{ value: string; label: string; description?: string }>;
   onValueChange: (value: string) => void;
   disabled?: boolean;
   wide?: boolean;
 }) {
+  const hasDescriptions = options.some((option) => option.description);
+
   return (
     <label className={clsx('field', wide && 'wide')}>
       {label ? <span>{label}</span> : null}
@@ -80,16 +82,36 @@ export function SelectField({
           </Select.Icon>
         </Select.Trigger>
         <Select.Portal>
-          <Select.Content className="select-content" position="popper" sideOffset={6}>
+          <Select.Content
+            className={clsx(
+              'select-content',
+              hasDescriptions && 'select-content-detailed'
+            )}
+            position="popper"
+            sideOffset={6}
+          >
             <Select.Viewport>
               {options.map((option) => (
                 <Select.Item
-                  className="select-item"
+                  className={clsx(
+                    'select-item',
+                    option.description && 'select-item-detailed'
+                  )}
                   key={option.value}
+                  textValue={option.label}
                   value={option.value}
                 >
-                  <Select.ItemText>{option.label}</Select.ItemText>
-                  <Select.ItemIndicator>
+                  <span className="select-item-copy">
+                    <Select.ItemText className="select-item-label">
+                      {option.label}
+                    </Select.ItemText>
+                    {option.description ? (
+                      <span className="select-item-description">
+                        {option.description}
+                      </span>
+                    ) : null}
+                  </span>
+                  <Select.ItemIndicator className="select-item-indicator">
                     <Check size={14} />
                   </Select.ItemIndicator>
                 </Select.Item>

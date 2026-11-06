@@ -19,6 +19,11 @@ import { ApiError, apiRequest } from './api-client';
 import { Modal, SelectField, SwitchField } from './ui';
 import type { EditorPreset } from './relationships-view';
 import { ConfigFields } from './config-fields';
+import {
+  PROXY_GROUP_TYPE_DESCRIPTIONS,
+  RULE_TYPE_DESCRIPTIONS,
+  builtinPolicyDescription
+} from '@/lib/rule-metadata';
 
 type EditableResource =
   | ProxyNode
@@ -100,11 +105,25 @@ export function EditorDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const policyNames = useMemo(
+  const policyOptions = useMemo(
     () => [
-      ...BUILTIN_POLICIES,
-      ...snapshot.proxies.map((item) => item.name),
-      ...snapshot.proxyGroups.map((item) => item.name)
+      ...BUILTIN_POLICIES.map((item) => ({
+        value: item,
+        label: item,
+        description: builtinPolicyDescription(item)
+      })),
+      ...snapshot.proxies.map((item) => ({
+        value: item.name,
+        label: item.name,
+        description: `直接节点 · ${item.type}：固定使用这个节点`
+      })),
+      ...snapshot.proxyGroups.map((item) => ({
+        value: item.name,
+        label: item.name,
+        description: `策略组 · ${item.type}：${
+          PROXY_GROUP_TYPE_DESCRIPTIONS[item.type]
+        }`
+      }))
     ],
     [snapshot]
   );
@@ -770,17 +789,18 @@ export function EditorDialog({
               label="规则类型"
               value={type || 'DOMAIN'}
               onValueChange={changeRuleType}
-              options={RULE_TYPES.map((item) => ({ value: item, label: item }))}
+              options={RULE_TYPES.map((item) => ({
+                value: item,
+                label: item,
+                description: RULE_TYPE_DESCRIPTIONS[item]
+              }))}
               disabled={editingRuleType === 'MATCH'}
             />
             <SelectField
               label="策略 / 目标组"
               value={rulePolicy}
               onValueChange={setRulePolicy}
-              options={policyNames.map((item) => ({
-                value: item,
-                label: item
-              }))}
+              options={policyOptions}
             />
             {type === 'RULE-SET' ? (
               snapshot.ruleProviders.length ? (
