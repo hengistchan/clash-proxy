@@ -6,7 +6,7 @@ import { databasePath } from './crypto';
 
 let connection: Database.Database | null = null;
 
-const SCHEMA = `
+const SCHEMA_V1 = `
 CREATE TABLE IF NOT EXISTS profiles (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE,
@@ -115,8 +115,36 @@ CREATE TABLE IF NOT EXISTS revisions (
   UNIQUE(profile_id, revision)
 );
 
-PRAGMA user_version = 1;
 `;
+
+const MIGRATIONS = [
+  {
+    version: 1,
+    apply(db: Database.Database) {
+      db.exec(SCHEMA_V1);
+    }
+  }
+] as const;
+
+function migrate(db: Database.Database): void {
+  let version = Number(db.pragma('user_version', { simple: true }));
+  const latestVersion = MIGRATIONS.at(-1)?.version || 0;
+  if (version > latestVersion) {
+    throw new Error(
+      `Database schema version ${version} is newer than this service supports (${latestVersion})`
+    );
+  }
+
+  for (const migration of MIGRATIONS) {
+    if (migration.version <= version) continue;
+    const apply = db.transaction(() => {
+      migration.apply(db);
+      db.pragma(`user_version = ${migration.version}`);
+    });
+    apply.immediate();
+    version = migration.version;
+  }
+}
 
 export function getDb(): Database.Database {
   if (connection) {
@@ -126,14 +154,20 @@ export function getDb(): Database.Database {
   process.umask(0o077);
   const file = databasePath();
   mkdirSync(/*turbopackIgnore: true*/ path.dirname(file), { recursive: true, mode: 0o700 });
-  connection = new Database(/*turbopackIgnore: true*/ file);
-  connection.pragma('journal_mode = WAL');
-  connection.pragma('foreign_keys = ON');
-  connection.pragma('busy_timeout = 5000');
-  connection.pragma('synchronous = NORMAL');
-  connection.exec(SCHEMA);
-  chmodSync(/*turbopackIgnore: true*/ file, 0o600);
-  return connection;
+  const db = new Database(/*turbopackIgnore: true*/ file);
+  try {
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    db.pragma('busy_timeout = 5000');
+    db.pragma('synchronous = NORMAL');
+    migrate(db);
+    chmodSync(/*turbopackIgnore: true*/ file, 0o600);
+    connection = db;
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 }
 
 export function transaction<T>(operation: (db: Database.Database) => T): T {

@@ -5,12 +5,14 @@ import {
 } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { deflateRawSync, inflateRawSync } from 'node:zlib';
 
 import type { JsonValue } from './types';
 
 const KEY_BYTES = 32;
 const NONCE_BYTES = 12;
 const CIPHER = 'aes-256-gcm';
+const MAX_DECOMPRESSED_BYTES = 64 * 1024 * 1024;
 
 let cachedKey: Buffer | null = null;
 
@@ -70,11 +72,11 @@ export function getEncryptionKey(): Buffer {
 export function encryptJson(value: JsonValue): string {
   const nonce = randomBytes(NONCE_BYTES);
   const cipher = createCipheriv(CIPHER, getEncryptionKey(), nonce);
-  const plaintext = Buffer.from(JSON.stringify(value), 'utf8');
+  const plaintext = deflateRawSync(Buffer.from(JSON.stringify(value), 'utf8'));
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   const tag = cipher.getAuthTag();
   return [
-    'v1',
+    'v2',
     nonce.toString('base64url'),
     tag.toString('base64url'),
     ciphertext.toString('base64url')
@@ -83,7 +85,7 @@ export function encryptJson(value: JsonValue): string {
 
 export function decryptJson<T = JsonValue>(token: string): T {
   const [version, nonceText, tagText, ciphertextText] = token.split('.');
-  if (version !== 'v1' || !nonceText || !tagText || !ciphertextText) {
+  if ((version !== 'v1' && version !== 'v2') || !nonceText || !tagText || !ciphertextText) {
     throw new Error('Unsupported encrypted value');
   }
   const decipher = createDecipheriv(
@@ -92,10 +94,13 @@ export function decryptJson<T = JsonValue>(token: string): T {
     Buffer.from(nonceText, 'base64url')
   );
   decipher.setAuthTag(Buffer.from(tagText, 'base64url'));
-  const plaintext = Buffer.concat([
+  const decrypted = Buffer.concat([
     decipher.update(Buffer.from(ciphertextText, 'base64url')),
     decipher.final()
   ]);
+  const plaintext = version === 'v2'
+    ? inflateRawSync(decrypted, { maxOutputLength: MAX_DECOMPRESSED_BYTES })
+    : decrypted;
   return JSON.parse(plaintext.toString('utf8')) as T;
 }
 

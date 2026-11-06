@@ -21,6 +21,18 @@
 接口。高级区块和 DNS 支持整块读取与替换；规则集的 inline 条目另有独立 CRUD。未知顶层字段
 可以通过 YAML 导入和高级区块编辑保存并重新导出，不会因为 UI 尚未有专用表单就被丢弃。
 
+## 数据模型与加密边界
+
+SQLite 将配置分成两类字段：资源 ID、名称、类型、排序位置、规则优先级和启用状态保存在
+关系列中，用于唯一性、引用检查和排序；协议专属参数、DNS、高级顶层值和完整历史快照保存在
+加密 JSON 中。规则集条目单独按 `provider_id + sort_order` 存储，避免把整份规则集作为一个
+不可编辑的大字段。新密文在 AES-256-GCM 加密前使用 DEFLATE 压缩，旧 v1 密文仍可读取。
+
+为支持 SQL 排序与引用检查，规则 payload、策略目标、Hosts 映射值、资源名称和类型等规范化
+字段目前仍是 SQLite 明文；它们不包含 GLaDOS 私人订阅 URL，但可能暴露用户自己的路由习惯。
+数据库文件依赖 0600 文件权限和受保护的 Docker named volume。若需要让整卷备份也无法直接
+取得加密密钥，应通过 `STASH_SECRET_KEY` 从容器外注入密钥，并将它保存在独立的密钥管理位置。
+
 规则按 `priority` 从小到大匹配。新增规则默认插在 `MATCH` 之前；修改、拖动或整体排序后
 会连续重排。唯一的 `MATCH` 必须是最后一条，禁止禁用、移动或删除。引用保护会阻止删除
 仍被策略组、规则、DNS 或高级区块使用的资源，并阻止策略组循环引用。
@@ -80,7 +92,7 @@ revision 或应用日志。
 | GET | `/api/profiles/:id/validate` | 校验策略引用、循环、规则格式和终位 MATCH |
 | POST | `/api/profiles/:id/import` | 导入并替换当前 Profile 的完整 Stash YAML |
 | GET / POST | `/api/profiles/:id/export` | 生成指定 Profile 的 YAML；网页使用 POST |
-| GET | `/api/profiles/:id/revisions` | 查看加密保存的历史版本 |
+| GET | `/api/profiles/:id/revisions?limit=50&before=120` | 分页查看加密保存的历史版本；默认 50 条、最多 100 条，`before` 为不包含的 revision 游标 |
 | POST | `/api/profiles/:id/revisions/:revision/restore` | 恢复某个历史版本 |
 | GET / POST | `/api/profiles/:id/:resource` | 列表 / 新建资源 |
 | GET / PUT / DELETE | `/api/profiles/:id/:resource/:itemId` | 读取、修改或删除资源 |
@@ -91,6 +103,8 @@ revision 或应用日志。
 `:resource` 支持 `proxies`、`proxy-providers`、`proxy-groups`、`rule-providers`、
 `rules`、`hosts`。新增 / 修改请求体接受 JSON；协议专属、组专属、Provider 专属字段放在
 `config` 对象中。`GET /api/meta` 提供规则类型和策略组类型；`GET /api/health` 是容器健康检查。
+历史分页返回 `{ "items": [...], "nextCursor": 123 }`；将 `nextCursor` 作为下一页的
+`before` 值传回，结果按 revision 从新到旧排列，末页的 `nextCursor` 为 `null`。
 
 ### 排序示例
 
@@ -163,6 +177,10 @@ docker compose start api
 若通过 `STASH_SECRET_KEY` 提供密钥，备份时需将该部署密钥存入独立的安全密码库，不会生成
 上述 key 文件。恢复时必须使用同一密钥；丢失密钥后加密区块和历史 revision 无法解密。
 SQLite 主文件和密钥都属于私人配置，勿提交到 Git。
+
+数据库使用 SQLite `user_version` 管理结构迁移；服务检测到比当前版本更新的数据库时会拒绝
+启动，避免旧镜像启动后误降级版本标记。新写入的加密 JSON 使用压缩后再加密的 v2 格式，
+读取时仍兼容已有的 v1 数据；历史 revision 页面按需分页加载。
 
 ## 环境变量
 

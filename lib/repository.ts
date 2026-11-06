@@ -203,13 +203,32 @@ function snapshotFromDb(db: Database.Database, profileId: number): Snapshot {
     .prepare('SELECT * FROM proxy_groups WHERE profile_id = ? ORDER BY sort_order, id')
     .all(profileId)
     .map((row) => mapProxyGroup(row as DbRow));
-  const ruleProviders = db
+  const ruleProviderRows = db
     .prepare('SELECT * FROM rule_providers WHERE profile_id = ? ORDER BY sort_order, id')
-    .all(profileId)
-    .map((row) => {
-      const item = row as DbRow;
-      return mapRuleProvider(item, listRuleEntries(db, Number(item.id)));
+    .all(profileId) as DbRow[];
+  const entriesByProvider = new Map<number, RuleProviderEntry[]>();
+  const entryRows = db
+    .prepare(
+      `SELECT entry.provider_id, entry.id, entry.value, entry.sort_order
+       FROM rule_provider_entries AS entry
+       INNER JOIN rule_providers AS provider ON provider.id = entry.provider_id
+       WHERE provider.profile_id = ?
+       ORDER BY entry.provider_id, entry.sort_order, entry.id`
+    )
+    .all(profileId) as DbRow[];
+  for (const row of entryRows) {
+    const providerId = Number(row.provider_id);
+    const entries = entriesByProvider.get(providerId) || [];
+    entries.push({
+      id: Number(row.id),
+      value: String(row.value),
+      sortOrder: Number(row.sort_order)
     });
+    entriesByProvider.set(providerId, entries);
+  }
+  const ruleProviders = ruleProviderRows.map((row) =>
+    mapRuleProvider(row, entriesByProvider.get(Number(row.id)) || [])
+  );
   const rules = db
     .prepare('SELECT * FROM rules WHERE profile_id = ? ORDER BY priority, id')
     .all(profileId)
@@ -1698,26 +1717,45 @@ export function importYaml(profileId: number, yamlText: string): Snapshot {
   });
 }
 
-export function listRevisions(profileId: number): Array<{
-  id: number;
-  revision: number;
-  createdAt: string;
-}> {
+export function listRevisions(
+  profileId: number,
+  options: { limit?: number; before?: number } = {}
+): {
+  items: Array<{ id: number; revision: number; createdAt: string }>;
+  nextCursor: number | null;
+} {
   ensureInitialized();
   getProfileRow(getDb(), profileId);
-  return getDb()
-    .prepare(
-      'SELECT id, revision, created_at FROM revisions WHERE profile_id = ? ORDER BY revision DESC'
-    )
-    .all(profileId)
-    .map((row) => {
-      const item = row as DbRow;
-      return {
-        id: Number(item.id),
-        revision: Number(item.revision),
-        createdAt: String(item.created_at)
-      };
-    });
+  const limit = Math.min(100, Math.max(1, Math.floor(options.limit ?? 50)));
+  const before = options.before ?? null;
+  const rows = before === null
+    ? getDb()
+        .prepare(
+          `SELECT id, revision, created_at
+           FROM revisions WHERE profile_id = ?
+           ORDER BY revision DESC LIMIT ?`
+        )
+        .all(profileId, limit + 1) as DbRow[]
+    : (getDb()
+        .prepare(
+          `SELECT id, revision, created_at
+           FROM revisions WHERE profile_id = ? AND revision < ?
+           ORDER BY revision DESC LIMIT ?`
+        )
+        .all(profileId, before, limit + 1) as DbRow[]);
+  const hasMore = rows.length > limit;
+  const items = rows.slice(0, limit).map((row) => {
+    const item = row as DbRow;
+    return {
+      id: Number(item.id),
+      revision: Number(item.revision),
+      createdAt: String(item.created_at)
+    };
+  });
+  return {
+    items,
+    nextCursor: hasMore ? items.at(-1)?.revision ?? null : null
+  };
 }
 
 export function restoreRevision(profileId: number, revision: number): Snapshot {

@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
+import { createCipheriv, randomBytes } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { beforeEach, after, describe, test } from 'node:test';
+import Database from 'better-sqlite3';
 
 import { parse as parseYaml } from 'yaml';
 
-import { closeDbForTests } from '../lib/db';
-import { resetEncryptionCacheForTests } from '../lib/crypto';
+import { closeDbForTests, getDb } from '../lib/db';
+import { decryptJson, encryptJson, resetEncryptionCacheForTests } from '../lib/crypto';
 import { exportProfile } from '../lib/exporter';
 import {
   createHost,
@@ -126,6 +128,50 @@ describe('seed and export', () => {
       ),
       false
     );
+  });
+});
+
+describe('database and encrypted storage', () => {
+  test('records the schema version and refuses to open a newer database', () => {
+    const db = getDb();
+    assert.equal(Number(db.pragma('user_version', { simple: true })), 1);
+    closeDbForTests();
+
+    const newerDb = new Database(currentDbPath());
+    newerDb.pragma('user_version = 99');
+    newerDb.close();
+
+    assert.throws(() => getDb(), /newer than this service supports/);
+    closeDbForTests();
+  });
+
+  test('compresses new encrypted JSON and still reads legacy v1 ciphertext', () => {
+    const value = { rules: Array.from({ length: 500 }, () => 'DOMAIN-SUFFIX,example.test,Proxy') };
+    const token = encryptJson(value);
+    assert.equal(token.startsWith('v2.'), true);
+    assert.ok(
+      Buffer.from(token.split('.')[3], 'base64url').length <
+        Buffer.byteLength(JSON.stringify(value))
+    );
+    assert.deepEqual(decryptJson(token), value);
+
+    const key = randomBytes(32);
+    process.env.STASH_SECRET_KEY = key.toString('hex');
+    resetEncryptionCacheForTests();
+    const nonce = randomBytes(12);
+    const legacyCipher = createCipheriv('aes-256-gcm', key, nonce);
+    const legacyPlaintext = Buffer.from(JSON.stringify(value), 'utf8');
+    const ciphertext = Buffer.concat([
+      legacyCipher.update(legacyPlaintext),
+      legacyCipher.final()
+    ]);
+    const legacyToken = [
+      'v1',
+      nonce.toString('base64url'),
+      legacyCipher.getAuthTag().toString('base64url'),
+      ciphertext.toString('base64url')
+    ].join('.');
+    assert.deepEqual(decryptJson(legacyToken), value);
   });
 });
 
@@ -309,9 +355,40 @@ describe('validation, history and import', () => {
       policy: 'DIRECT'
     });
     assert.equal(getSnapshot(profile.id).rules.length, 31);
-    assert.equal(listRevisions(profile.id).length > 0, true);
+    assert.equal(listRevisions(profile.id).items.length > 0, true);
     restoreRevision(profile.id, before);
     assert.equal(getSnapshot(profile.id).rules.length, 30);
+  });
+
+  test('revision history pages newest-first without gaps or duplicates', () => {
+    const profile = getActiveProfile();
+    for (let index = 0; index < 4; index += 1) {
+      createRule(profile.id, {
+        type: 'DOMAIN',
+        payload: `history-${index}.example.test`,
+        policy: 'DIRECT'
+      });
+    }
+
+    const first = listRevisions(profile.id, { limit: 2 });
+    assert.equal(first.items.length, 2);
+    assert.notEqual(first.nextCursor, null);
+    assert.ok(first.items[0].revision > first.items[1].revision);
+
+    const second = listRevisions(profile.id, {
+      limit: 2,
+      before: first.nextCursor!
+    });
+    assert.equal(second.items.length, 2);
+    assert.notEqual(second.nextCursor, null);
+    assert.ok(first.items.at(-1)!.revision > second.items[0].revision);
+
+    const final = listRevisions(profile.id, {
+      limit: 2,
+      before: second.nextCursor!
+    });
+    assert.equal(final.items.length, 1);
+    assert.equal(final.nextCursor, null);
   });
 
   test('full YAML import replaces the normalized profile', () => {
