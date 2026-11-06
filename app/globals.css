@@ -256,11 +256,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .resource-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .resource-card { min-width: 0; padding: 14px; border: 1px solid #e0e4dc; border-radius: 12px; background: #fff; transition: border .16s ease, transform .16s ease; }
 .resource-card:hover { transform: translateY(-2px); border-color: #9baa8b; }
-.resource-card > header { display: flex; align-items: center; gap: 10px; }
+.resource-card > header { display: flex; align-items: flex-start; gap: 10px; }
 .resource-icon { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; color: #597744; border-radius: 9px; background: #edf3df; }
 .resource-title { display: grid; min-width: 0; flex: 1; gap: 4px; }
-.resource-title strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.resource-title strong { display: -webkit-box; overflow: hidden; font-size: 12px; line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .resource-title .status-badge { width: fit-content; padding: 3px 6px; font-size: 8px; }
+.resource-title .resource-identifier { max-width: 100%; overflow: hidden; color: #8a958c; font: 9px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .card-actions, .icon-strip { display: flex; align-items: center; gap: 3px; }
 .icon-button { display: inline-grid; width: 31px; height: 31px; flex: 0 0 auto; place-items: center; color: #637168; border: 1px solid transparent; border-radius: 7px; background: transparent; cursor: pointer; transition: .14s ease; }
 .icon-button:hover { color: var(--forest); border-color: #d6ded2; background: #f3f6ed; }

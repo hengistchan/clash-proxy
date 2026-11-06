@@ -116,7 +116,7 @@ const SECTION_COPY: Partial<
   'rule-providers': {
     title: '规则集',
     subtitle:
-      '管理 remote、local、inline 规则集。Inline 条目拥有独立 CRUD，删除会被 RULE-SET 引用保护。',
+      '按用途显示易读名称，配置标识仍保留在名称下方。支持远程订阅、本地文件与内嵌规则；编辑和导出继续使用原始标识。',
     kind: 'rule-providers'
   },
   hosts: {
