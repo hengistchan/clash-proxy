@@ -12,10 +12,11 @@ import {
   ShieldCheck
 } from 'lucide-react';
 
-import type { Snapshot, ValidationResult } from '@/lib/types';
+import type { Snapshot, ValidationResult, ValidationIssue } from '@/lib/types';
 
 import { StatusBadge } from './ui';
 import { ExportView } from './export-view';
+import { ValidationIssues } from './validation-issues';
 import { ResourceTree } from './resource-tree';
 import type { ResourceNode } from '@/lib/resource-graph';
 
@@ -24,13 +25,17 @@ export function OverviewView({
   token,
   validation,
   onNavigate,
-  onInspect
+  onInspect,
+  onFixIssue,
+  onImport
 }: {
   snapshot: Snapshot;
   token: string;
   validation: ValidationResult;
   onNavigate: (section: string) => void;
   onInspect: (node: ResourceNode) => void;
+  onFixIssue: (issue: ValidationIssue) => void;
+  onImport: () => void;
 }) {
   const errors = validation.issues.filter((item) => item.severity === 'error');
   const warnings = validation.issues.filter(
@@ -91,13 +96,52 @@ export function OverviewView({
         </StatusBadge>
       </section>
 
+      <section className="workflow-guide" aria-label="配置与交付流程">
+        <article>
+          <span className="workflow-number">1</span><div><h3>准备配置资源</h3><p>导入已有 YAML，或按需添加来源、策略和路由。</p>
+          <div className="delivery-actions"><button className="button secondary small" onClick={onImport}>导入已有配置</button><button className="text-action" onClick={() => onNavigate('relationships')}>管理资源关系</button></div></div>
+        </article>
+        <article>
+          <span className="workflow-number">2</span><div><h3>{errors.length ? `修复 ${errors.length} 个问题` : '检查配置'}</h3><p>{errors.length ? '草稿已保留；定位具体资源，修复后自动生成新版本。' : '结构检查已通过，可以继续模拟路由或交付设备。'}</p>
+          <button className="text-action" onClick={() => errors.length ? onFixIssue(errors[0]) : onNavigate('rules')}>{errors.length ? '处理首个错误' : '模拟路由匹配'}</button></div>
+        </article>
+        <article>
+          <span className="workflow-number">3</span><div><h3>交付到设备</h3><p>下载成功版本，或生成随配置更新的固定订阅链接。</p><button className="text-action" onClick={() => onNavigate('export')}>打开下载与设备订阅</button></div>
+        </article>
+      </section>
+
       <ExportView
         snapshot={snapshot}
         validation={validation}
         profileId={snapshot.profile.id}
         token={token}
         compact
+        onFixIssue={onFixIssue}
       />
+      <section className="validation-panel">
+        <div className="validation-head">
+          {errors.length ? (
+            <ShieldAlert size={22} />
+          ) : (
+            <ShieldCheck size={22} />
+          )}
+          <div>
+            <h3>配置检查</h3>
+            <p>
+              {validation.issues.length
+                ? `${errors.length} 个错误，${warnings.length} 个警告`
+                : '未发现结构性问题'}
+            </p>
+          </div>
+          <button
+            className="button secondary small"
+            onClick={() => onNavigate('export')}
+          >
+            下载配置
+          </button>
+        </div>
+        <ValidationIssues issues={validation.issues} onFix={onFixIssue} />
+      </section>
       <div className="stat-grid">
         {stats.map((stat) => {
           const Icon = stat.icon;
@@ -135,83 +179,7 @@ export function OverviewView({
         <ResourceTree snapshot={snapshot} compact onSelect={onInspect} />
       </section>
 
-      <section className="validation-panel">
-        <div className="validation-head">
-          {errors.length ? (
-            <ShieldAlert size={22} />
-          ) : (
-            <ShieldCheck size={22} />
-          )}
-          <div>
-            <h3>配置检查</h3>
-            <p>
-              {validation.issues.length
-                ? `${errors.length} 个错误，${warnings.length} 个警告`
-                : '未发现结构性问题'}
-            </p>
-          </div>
-          <button
-            className="button secondary small"
-            onClick={() => onNavigate('export')}
-          >
-            下载配置
-          </button>
-        </div>
-        <div className="issues-list">
-          {validation.issues.slice(0, 8).map((issue, index) => (
-            <article
-              className={`issue-row severity-${issue.severity}`}
-              key={`${issue.code}-${index}`}
-            >
-              <StatusBadge
-                tone={
-                  issue.severity === 'error'
-                    ? 'bad'
-                    : issue.severity === 'warning'
-                      ? 'warn'
-                      : 'muted'
-                }
-              >
-                {
-                  { error: '错误', warning: '警告', info: '提示' }[
-                    issue.severity
-                  ]
-                }
-              </StatusBadge>
-              <span>{issue.message}</span>
-              <code>{issue.code}</code>
-              {issue.resource ? (
-                <button
-                  className="button secondary small"
-                  onClick={() =>
-                    onNavigate(
-                      (
-                        {
-                          'proxy-provider': 'proxy-providers',
-                          'proxy-group': 'proxy-groups',
-                          'rule-provider': 'rule-providers',
-                          rule: 'rules',
-                          proxy: 'proxies'
-                        } as Record<string, string>
-                      )[issue.resource!] || 'settings'
-                    )
-                  }
-                >
-                  处理
-                </button>
-              ) : null}
-            </article>
-          ))}
-          {validation.issues.length === 0 ? (
-            <div className="empty-state compact">
-              <strong>结构、引用和 MATCH 终位检查均通过。</strong>
-              <span>
-                远程订阅是否可下载属于运行时检查，不在离线校验中伪装为通过。
-              </span>
-            </div>
-          ) : null}
-        </div>
-      </section>
+
     </div>
   );
 }

@@ -19,6 +19,7 @@ import { ApiError, apiRequest } from './api-client';
 import { Modal, SelectField, SwitchField } from './ui';
 import type { EditorPreset } from './relationships-view';
 import { ConfigFields } from './config-fields';
+import { useUnsavedChanges } from './unsaved-changes';
 import {
   PROXY_GROUP_TYPE_DESCRIPTIONS,
   RULE_TYPE_DESCRIPTIONS,
@@ -104,6 +105,22 @@ export function EditorDialog({
   const [hostValue, setHostValue] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [baseline, setBaseline] = useState<string | null>(null);
+  const fingerprint = JSON.stringify({
+    name, displayName, type, configText, sourceType, sourceUrl, sourceHeaders,
+    clearSource, clearHeaders, providerBehavior, providerType, entriesText,
+    groupProxies, groupUse, groupFilter, rulePayload, rulePolicy, ruleOptions,
+    ruleEnabled, ruleNote, rulePriority, hostPattern, hostValue
+  });
+  const dirty = baseline !== null && fingerprint !== baseline;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const loadedIdentity = useRef('');
+  const { confirmDiscard } = useUnsavedChanges(open && dirty, open && saving, resetDraft);
+
+  function changeOpen(next: boolean) {
+    if (next || confirmDiscard()) onOpenChange(next);
+  }
 
   const policyOptions = useMemo(
     () => [
@@ -128,14 +145,24 @@ export function EditorDialog({
     [snapshot]
   );
 
-  useEffect(() => {
-    if (!open || !resource) return;
+  function resetDraft() {
+    if (!resource) return;
+    dirtyRef.current = false;
+    const identity = `${profileId}:${resource}:${existing?.id ?? 'new'}`;
+    loadedIdentity.current = identity;
     setError('');
     const item = existing as Record<string, unknown> | null;
-    setName(String(item?.name || item?.pattern || ''));
-    setDisplayName(String(item?.displayName || ''));
-    setType(
-      String(
+    const config = (item?.config || {}) as JsonObject;
+    const itemType = String(item?.type || '');
+    const itemPayload = String(item?.payload || initialValues?.payload || '');
+    const terminal = snapshot.rules.at(-1);
+    const defaultPriority = terminal?.type === 'MATCH'
+      ? terminal.priority
+      : snapshot.rules.length + 1;
+    const draft = {
+      name: String(item?.name || item?.pattern || ''),
+      displayName: String(item?.displayName || ''),
+      type: String(
         item?.type ||
           initialValues?.type ||
           (resource === 'rules'
@@ -143,10 +170,8 @@ export function EditorDialog({
             : resource === 'proxy-groups'
               ? 'select'
               : '')
-      )
-    );
-    setConfigText(
-      JSON.stringify(
+      ),
+      configText: JSON.stringify(
         resource === 'proxy-groups'
           ? configWithout((item?.config || {}) as JsonObject, [
               'proxies',
@@ -156,50 +181,70 @@ export function EditorDialog({
           : item?.config || {},
         null,
         2
-      )
-    );
-    setSourceType(String(item?.sourceType || 'remote'));
-    setSourceUrl('');
-    setSourceHeaders('');
-    setClearSource(false);
-    setClearHeaders(false);
-    setProviderBehavior(String(item?.behavior || 'domain'));
-    setProviderType(String(item?.providerType || 'inline'));
-    setEntriesText(
-      Array.isArray(item?.entries)
+      ),
+      sourceType: String(item?.sourceType || 'remote'),
+      sourceUrl: '',
+      sourceHeaders: '',
+      clearSource: false,
+      clearHeaders: false,
+      providerBehavior: String(item?.behavior || 'domain'),
+      providerType: String(item?.providerType || 'inline'),
+      entriesText: Array.isArray(item?.entries)
         ? (item.entries as Array<{ value: string }>)
             .map((entry) => entry.value)
             .join('\n')
-        : ''
-    );
-    const config = (item?.config || {}) as JsonObject;
-    setGroupProxies(
-      (initialValues?.groupProxies || textArray(config.proxies)).join('\n')
-    );
-    setGroupUse((initialValues?.groupUse || textArray(config.use)).join('\n'));
-    setGroupFilter(String(config.filter || ''));
-    const itemType = String(item?.type || '');
-    const itemPayload = String(item?.payload || initialValues?.payload || '');
-    setRulePayload(
-      itemType === 'RULE-SET' && !itemPayload
+        : '',
+      groupProxies: (initialValues?.groupProxies || textArray(config.proxies)).join('\n'),
+      groupUse: (initialValues?.groupUse || textArray(config.use)).join('\n'),
+      groupFilter: String(config.filter || ''),
+      rulePayload: itemType === 'RULE-SET' && !itemPayload
         ? snapshot.ruleProviders[0]?.name || ''
-        : itemPayload
-    );
-    setRulePolicy(String(item?.policy || initialValues?.policy || 'DIRECT'));
-    setRuleOptions(
-      Array.isArray(item?.options) ? (item.options as string[]) : []
-    );
-    setRuleEnabled(item?.enabled === undefined ? true : Boolean(item.enabled));
-    setRuleNote(String(item?.note || ''));
-    const terminal = snapshot.rules.at(-1);
-    setRulePriority(String(item?.priority || terminal?.priority || 1));
-    setHostPattern(String(item?.pattern || ''));
-    setHostValue(String(item?.value || ''));
+        : itemPayload,
+      rulePolicy: String(item?.policy || initialValues?.policy || 'DIRECT'),
+      ruleOptions: Array.isArray(item?.options) ? (item.options as string[]) : [],
+      ruleEnabled: item?.enabled === undefined ? true : Boolean(item.enabled),
+      ruleNote: String(item?.note || ''),
+      rulePriority: String(item?.priority || defaultPriority),
+      hostPattern: String(item?.pattern || ''),
+      hostValue: String(item?.value || '')
+    };
+    setName(draft.name);
+    setDisplayName(draft.displayName);
+    setType(draft.type);
+    setConfigText(draft.configText);
+    setSourceType(draft.sourceType);
+    setSourceUrl(draft.sourceUrl);
+    setSourceHeaders(draft.sourceHeaders);
+    setClearSource(draft.clearSource);
+    setClearHeaders(draft.clearHeaders);
+    setProviderBehavior(draft.providerBehavior);
+    setProviderType(draft.providerType);
+    setEntriesText(draft.entriesText);
+    setGroupProxies(draft.groupProxies);
+    setGroupUse(draft.groupUse);
+    setGroupFilter(draft.groupFilter);
+    setRulePayload(draft.rulePayload);
+    setRulePolicy(draft.rulePolicy);
+    setRuleOptions(draft.ruleOptions);
+    setRuleEnabled(draft.ruleEnabled);
+    setRuleNote(draft.ruleNote);
+    setRulePriority(draft.rulePriority);
+    setHostPattern(draft.hostPattern);
+    setHostValue(draft.hostValue);
+    setBaseline(JSON.stringify(draft));
+  }
+
+  useEffect(() => {
+    if (!open || !resource) return;
+    const identity = `${profileId}:${resource}:${existing?.id ?? 'new'}`;
+    if (identity === loadedIdentity.current && dirtyRef.current) return;
+    resetDraft();
   }, [
     open,
     resource,
     existing,
     initialValues,
+    profileId,
     snapshot.rules,
     snapshot.ruleProviders
   ]);
@@ -244,6 +289,7 @@ export function EditorDialog({
   }
 
   async function save() {
+    if (saving) return;
     const invalid =
       formRoot.current?.querySelector<HTMLInputElement>('input:invalid');
     if (invalid) {
@@ -343,6 +389,8 @@ export function EditorDialog({
           token
         }
       );
+      dirtyRef.current = false;
+      setBaseline(fingerprint);
       await onSaved(existing ? '资源已更新。' : '资源已创建。');
       onOpenChange(false);
     } catch (caught) {
@@ -368,7 +416,7 @@ export function EditorDialog({
   return (
     <Modal
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={changeOpen}
       title={`${existing ? '编辑' : '新增'}${titles[resource]}`}
       description="选择当前配置中的关联资源，按字段调整参数；保留原文件中未修改的字段。"
       wide
@@ -376,7 +424,7 @@ export function EditorDialog({
         <>
           <button
             className="button secondary"
-            onClick={() => onOpenChange(false)}
+            onClick={() => changeOpen(false)}
           >
             取消
           </button>
@@ -386,7 +434,7 @@ export function EditorDialog({
         </>
       }
     >
-      <div className="form-grid" ref={formRoot}>
+      <div className="form-grid" ref={formRoot} inert={saving} aria-busy={saving}>
         {resource === 'hosts' ? (
           <>
             <label className="field wide">
@@ -877,7 +925,10 @@ export function EditorDialog({
                 label="启用此规则"
                 checked={ruleEnabled}
                 onCheckedChange={setRuleEnabled}
-                description="停用状态只影响数据库导出，不写入 Stash YAML。"
+                disabled={type === 'MATCH' && ruleEnabled}
+                description={type === 'MATCH'
+                  ? 'MATCH 必须启用并位于末尾；保存时会自动修复位置。'
+                  : '停用状态只影响数据库导出，不写入 Stash YAML。'}
               />
             </div>
           </>

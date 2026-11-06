@@ -182,14 +182,14 @@ GitHub 网页的 `/blob/` 链接返回 HTML，Contents API 默认返回 JSON，�
 仓库使用两个相互独立的 GitHub Actions 工作流：
 
 - `Offline CI`：在 Pull Request、`main` push 或手动触发时运行。Node.js 22 job 执行类型
-  检查、服务测试和生产构建；Python 3.9 和 3.12 jobs 执行 `Scripts/rebuild.py`、
+  检查、服务测试和生产构建；独立浏览器 job 使用隔离数据库验证真实生产服务的登录、编辑、修复、下载与历史流程。Python 3.9 和 3.12 jobs 执行 `Scripts/rebuild.py`、
   `Tests/validate_parity.py` 和 `test_tool_fixes.py`，并检查生成文件是否已经提交。该工作流
   不访问实时规则源。
 - `Online Rule Check`：每天北京时间 09:17 检查 4 个 Repcz 上游源，保存 30 天内的
   sanitized 报告；也可在 Actions 页面手动触发。它不会阻塞离线 CI。
 
 更新仓库时，从最新 `main` 创建独立分支，通过 Pull Request 提交修改。PR 合并前至少
-要求 `Offline CI` 的 Node.js 22、Python 3.9 和 Python 3.12 检查通过；
+要求 `Offline CI` 的 Node.js 22、生产浏览器流程、Python 3.9 和 Python 3.12 检查通过；
 `Online Rule Check` 的偶发网络失败只用于判断上游可达性，不应被解释为规则配置不一致。
 
 ## 模块化部署（Mac + iPhone Stash）

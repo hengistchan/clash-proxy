@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { requireAdmin } from '@/lib/auth';
 import { jsonError, parseId, readJson } from '@/lib/http';
-import { getSnapshot, replaceAdvancedSections } from '@/lib/repository';
+import { getCompilationSnapshot, getSnapshot, replaceAdvancedSections } from '@/lib/repository';
 import { advancedSchema } from '@/lib/schemas';
 import type { JsonValue } from '@/lib/types';
 import { validateSnapshot } from '@/lib/validation';
@@ -36,7 +36,7 @@ export async function PUT(request: Request, context: Context) {
     );
     return NextResponse.json({
       items,
-      validation: validateSnapshot(getSnapshot(id))
+      validation: validateSnapshot(getCompilationSnapshot(id))
     });
   } catch (error) {
     return jsonError(error);

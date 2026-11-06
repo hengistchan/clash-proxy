@@ -34,7 +34,8 @@ import type {
   RuleProvider,
   Snapshot,
   StashRule,
-  ValidationResult
+  ValidationResult,
+  ValidationIssue
 } from '@/lib/types';
 
 import { AdvancedView } from './advanced-view';
@@ -49,6 +50,7 @@ import { SettingsView } from './settings-view';
 import { Modal, SelectField, StatusBadge } from './ui';
 import { RelationshipsView, type EditorPreset } from './relationships-view';
 import { resourceKey, type ResourceNode } from '@/lib/resource-graph';
+import { UnsavedChangesProvider, useNavigationGuard, useUnsavedChanges } from './unsaved-changes';
 
 type SectionId =
   | 'relationships'
@@ -109,7 +111,7 @@ const SECTION_COPY: Partial<
   proxies: {
     title: '直接节点',
     subtitle:
-      '声明 Shadowsocks、VMess、Trojan、Hysteria、WireGuard 等协议节点。协议字段以加密 JSON 保存。',
+      '管理 Shadowsocks、VMess、Trojan、Hysteria、WireGuard 等节点，按协议填写连接参数。',
     kind: 'proxies'
   },
   'proxy-groups': {
@@ -155,6 +157,13 @@ function readSessionToken(): string {
   }
 }
 
+function readSessionProfile(): number | undefined {
+  try {
+    const value = Number(window.sessionStorage.getItem('stash-profile-id'));
+    return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+  } catch { return undefined; }
+}
+
 function writeSessionToken(value: string): void {
   try {
     if (value) window.sessionStorage.setItem('stash-admin-token', value);
@@ -165,6 +174,11 @@ function writeSessionToken(value: string): void {
 }
 
 export function ConfigStudio() {
+  return <UnsavedChangesProvider><Workspace /></UnsavedChangesProvider>;
+}
+
+function Workspace() {
+  const { confirmNavigation } = useNavigationGuard();
   const [meta, setMeta] = useState<Meta | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [profileId, setProfileId] = useState<number | null>(null);
@@ -179,6 +193,10 @@ export function ConfigStudio() {
   const [authRequired, setAuthRequired] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [connectionError, setConnectionError] = useState('');
+  const snapshotRequest = useRef(0);
+  const initialiseRequest = useRef(0);
+  const mutationLock = useRef(false);
   const [graphFocus, setGraphFocus] = useState<string | null>(null);
   const [editorPreset, setEditorPreset] = useState<EditorPreset | undefined>();
   const [editorOpen, setEditorOpen] = useState(false);
@@ -196,6 +214,26 @@ export function ConfigStudio() {
     tone: 'good' | 'bad' | 'warn';
   } | null>(null);
   const toastTimer = useRef<number | null>(null);
+  const { confirmDiscard: discardProfileDialog } = useUnsavedChanges(
+    profileDialog && Boolean(newProfileName || newProfileYaml || newProfileSource !== 'empty'),
+    profileBusy,
+    () => { setNewProfileName(''); setNewProfileYaml(''); setNewProfileSource('empty'); }
+  );
+  const { confirmDiscard: discardImportDialog } = useUnsavedChanges(
+    importDialog && Boolean(importYamlText), false, () => setImportYamlText('')
+  );
+  function closeProfileDialog(open: boolean) {
+    if (open || discardProfileDialog()) setProfileDialog(open);
+  }
+  function closeImportDialog(open: boolean) {
+    if (profileBusy) return;
+    if (open || discardImportDialog()) setImportDialog(open);
+  }
+
+  function navigate(next: SectionId) {
+    if (next === section || !confirmNavigation()) return;
+    setSection(next);
+  }
 
   const notify = useCallback(
     (message: string, tone: 'good' | 'bad' | 'warn' = 'good') => {
@@ -223,25 +261,20 @@ export function ConfigStudio() {
       const data = await apiRequest<{ items: Profile[] }>('/api/profiles', {
         token: usingToken
       });
-      setProfiles(data.items);
       const next =
         data.items.find((item) => item.id === preferredId) ||
         data.items.find((item) => item.active) ||
         data.items[0];
       if (!next) throw new Error('没有可用的配置 Profile');
-      setProfileId(next.id);
-      try {
-        window.sessionStorage.setItem('stash-profile-id', String(next.id));
-      } catch {
-        /* Session storage may be unavailable. */
-      }
-      return next;
+      return { profile: next, items: data.items };
     },
     []
   );
 
   const loadSnapshot = useCallback(
     async (id: number, usingToken: string, quiet = false) => {
+      const requestId = ++snapshotRequest.current;
+      setConnectionError('');
       if (!quiet) setLoading(true);
       else setRefreshing(true);
       try {
@@ -249,6 +282,11 @@ export function ConfigStudio() {
           `/api/profiles/${id}/snapshot`,
           { token: usingToken }
         );
+        if (requestId !== snapshotRequest.current) return false;
+        setProfileId(data.profile.id);
+        try {
+          window.sessionStorage.setItem('stash-profile-id', String(data.profile.id));
+        } catch { /* Session storage may be unavailable. */ }
         setSnapshot({
           profile: data.profile,
           proxies: data.proxies,
@@ -260,9 +298,16 @@ export function ConfigStudio() {
           advancedSections: data.advancedSections
         });
         setValidation(data.validation);
+        return true;
+      } catch (caught) {
+        if (requestId !== snapshotRequest.current) return false;
+        setConnectionError(caught instanceof Error ? caught.message : '读取配置失败');
+        throw caught;
       } finally {
-        setLoading(false);
-        setRefreshing(false);
+        if (requestId === snapshotRequest.current) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
     []
@@ -270,51 +315,52 @@ export function ConfigStudio() {
 
   const initialise = useCallback(
     async (usingToken: string, preferred?: number | null) => {
+      const requestId = ++initialiseRequest.current;
       setLoading(true);
+      setConnectionError('');
       try {
         const metaData = await apiRequest<Meta>('/api/meta');
+        if (requestId !== initialiseRequest.current) return;
+        const data = await loadProfiles(usingToken, preferred);
+        if (requestId !== initialiseRequest.current) return;
         setMeta(metaData);
-        const profile = await loadProfiles(usingToken, preferred);
-        await loadSnapshot(profile.id, usingToken);
-        setAuthRequired(false);
+        setProfiles(data.items);
+        if (await loadSnapshot(data.profile.id, usingToken)) setAuthRequired(false);
       } catch (caught) {
+        if (requestId !== initialiseRequest.current) return;
         if (caught instanceof ApiError && caught.status === 401) {
           setAuthRequired(true);
+          if (usingToken) notify('管理员令牌无效或已失效。', 'bad');
         } else {
+          setConnectionError(caught instanceof Error ? caught.message : '连接服务失败');
           handleError(caught);
         }
       } finally {
-        setLoading(false);
+        if (requestId === initialiseRequest.current) setLoading(false);
       }
     },
-    [handleError, loadProfiles, loadSnapshot]
+    [handleError, loadProfiles, loadSnapshot, notify]
   );
 
   useEffect(() => {
     const saved = readSessionToken();
     setToken(saved);
     setTokenDraft(saved);
-    let savedProfile: number | undefined;
-    try {
-      const value = Number(window.sessionStorage.getItem('stash-profile-id'));
-      if (Number.isSafeInteger(value) && value > 0) savedProfile = value;
-    } catch {
-      /* Use active profile. */
-    }
-    void initialise(saved, savedProfile);
+    void initialise(saved, readSessionProfile());
+    return () => { initialiseRequest.current++; snapshotRequest.current++; if (toastTimer.current) window.clearTimeout(toastTimer.current); };
   }, [initialise]);
 
   async function unlock() {
     const value = tokenDraft.trim();
     setToken(value);
     writeSessionToken(value);
-    await initialise(value, profileId);
+    await initialise(value, profileId ?? readSessionProfile());
   }
 
   async function reload(message?: string) {
     if (!profileId) return;
     try {
-      await loadSnapshot(profileId, token, true);
+      if (!(await loadSnapshot(profileId, token, true))) return;
       const nextProfiles = await apiRequest<{ items: Profile[] }>(
         '/api/profiles',
         {
@@ -329,23 +375,30 @@ export function ConfigStudio() {
   }
 
   async function switchProfile(id: number) {
-    setProfileId(id);
+    if (id === profileId || !confirmNavigation()) return;
+    initialiseRequest.current++;
     try {
-      window.sessionStorage.setItem('stash-profile-id', String(id));
-    } catch {
-      /* Session storage may be unavailable. */
-    }
-    setSection('overview');
-    setGraphFocus(null);
-    try {
-      await loadSnapshot(id, token);
+      if (await loadSnapshot(id, token)) {
+        setSection('overview');
+        setGraphFocus(null);
+        setEditorOpen(false);
+        setEditorKind(null);
+      }
     } catch (caught) {
       handleError(caught);
     }
   }
 
+  function refreshWorkspace() {
+    if (!confirmNavigation()) return;
+    if (snapshot && meta) void reload();
+    else void initialise(token, profileId);
+  }
+
   async function activateCurrent() {
-    if (!profileId) return;
+    if (!profileId || mutationLock.current) return;
+    mutationLock.current = true;
+    setProfileBusy(true);
     try {
       await apiRequest(`/api/profiles/${profileId}`, {
         method: 'PUT',
@@ -355,7 +408,7 @@ export function ConfigStudio() {
       await reload('当前 Profile 已设为活动配置。');
     } catch (caught) {
       handleError(caught);
-    }
+    } finally { mutationLock.current = false; setProfileBusy(false); }
   }
 
   function openEditor(kind: ResourceKind, item: EditableResource = null) {
@@ -366,7 +419,7 @@ export function ConfigStudio() {
   }
 
   async function deleteResource(kind: ResourceKind, item: EditableResource) {
-    if (!item || !profileId) return;
+    if (!item || !profileId || mutationLock.current) return;
     if (
       !window.confirm(
         `删除 ${resourceLabel(kind, item)}？引用保护会拒绝删除仍被使用的资源。`
@@ -374,6 +427,8 @@ export function ConfigStudio() {
     ) {
       return;
     }
+    mutationLock.current = true;
+    setProfileBusy(true);
     try {
       await apiRequest(`/api/profiles/${profileId}/${kind}/${item.id}`, {
         method: 'DELETE',
@@ -382,21 +437,22 @@ export function ConfigStudio() {
       await reload('资源已删除。');
     } catch (caught) {
       handleError(caught);
-    }
+    } finally { mutationLock.current = false; setProfileBusy(false); }
   }
 
   function inspectResource(kind: ResourceKind, item: { id: number }) {
+    if (!confirmNavigation()) return;
     setGraphFocus(resourceKey(kind, item.id));
     setSection('relationships');
   }
   function editGraphResource(node: ResourceNode) {
     if (!snapshot) return;
     if (node.kind === 'settings') {
-      setSection('settings');
+      navigate('settings');
       return;
     }
     if (node.kind === 'advanced') {
-      setSection('advanced');
+      navigate('advanced');
       return;
     }
     if (node.kind === 'builtin' || node.kind === 'missing') return;
@@ -413,7 +469,22 @@ export function ConfigStudio() {
     setEditorOpen(true);
   }
 
+  function fixIssue(issue: ValidationIssue) {
+    if (!snapshot || !confirmNavigation()) return;
+    const kind = ({
+      'proxy-provider': 'proxy-providers', 'proxy-group': 'proxy-groups',
+      'rule-provider': 'rule-providers', rule: 'rules', proxy: 'proxies', host: 'hosts'
+    } as Record<string, ResourceKind>)[issue.resource || ''];
+    if (kind && issue.resourceId) {
+      const item = resourcesFor(snapshot, kind).find((entry) => entry.id === issue.resourceId);
+      if (item) { openEditor(kind, item); return; }
+    }
+    setSection(kind || (issue.resource === 'advanced' ? 'advanced' : 'settings'));
+  }
+
   async function createProfile() {
+    if (mutationLock.current) return;
+    mutationLock.current = true;
     setProfileBusy(true);
     try {
       const data = await apiRequest<SnapshotResponse>('/api/profiles', {
@@ -438,12 +509,14 @@ export function ConfigStudio() {
     } catch (caught) {
       handleError(caught);
     } finally {
+      mutationLock.current = false;
       setProfileBusy(false);
     }
   }
 
   async function importCurrent() {
-    if (!profileId) return;
+    if (!profileId || mutationLock.current) return;
+    mutationLock.current = true;
     setProfileBusy(true);
     try {
       await apiRequest(`/api/profiles/${profileId}/import`, {
@@ -459,11 +532,12 @@ export function ConfigStudio() {
     } catch (caught) {
       handleError(caught);
     } finally {
+      mutationLock.current = false;
       setProfileBusy(false);
     }
   }
 
-  const currentProfile = profiles.find((item) => item.id === profileId);
+  const currentProfile = snapshot?.profile.id === profileId ? snapshot.profile : profiles.find((item) => item.id === profileId);
   const profileOptions = profiles.map((profile) => ({
     value: String(profile.id),
     label: `${profile.active ? '● ' : ''}${profile.name}`
@@ -486,7 +560,7 @@ export function ConfigStudio() {
           </div>
           <p className="kicker">ADMIN / AUTHENTICATION</p>
           <h1>进入配置控制台</h1>
-          <p>服务端已启用 `STASH_ADMIN_TOKEN`。令牌只保存在当前浏览器会话。</p>
+          <p>输入管理员令牌以连接服务。令牌只保存在当前浏览器会话。</p>
           <label className="field wide">
             <span>管理员令牌</span>
             <input
@@ -500,7 +574,7 @@ export function ConfigStudio() {
               }}
             />
           </label>
-          <button className="button primary" onClick={unlock}>
+          <button className="button primary" onClick={unlock} disabled={loading}>
             验证并连接
             <ChevronRight size={16} />
           </button>
@@ -524,7 +598,7 @@ export function ConfigStudio() {
         <div className="sidebar-status">
           <span className="live-dot" />
           <div>
-            <strong>配置已保存</strong>
+            <strong>{loading ? '正在连接' : connectionError ? '连接待恢复' : errorCount ? '草稿待修复' : '配置已保存'}</strong>
             <small>
               {currentProfile ? `REV ${currentProfile.revision}` : 'CONNECTING'}
             </small>
@@ -537,7 +611,7 @@ export function ConfigStudio() {
               <button
                 key={item.id}
                 className={section === item.id ? 'active' : ''}
-                onClick={() => setSection(item.id)}
+                onClick={() => navigate(item.id)}
               >
                 <Icon size={17} />
                 <span>{item.label}</span>
@@ -547,7 +621,7 @@ export function ConfigStudio() {
           })}
         </nav>
         <div className="sidebar-foot">
-          <button onClick={() => void reload()}>
+          <button onClick={refreshWorkspace} disabled={loading || refreshing}>
             <RefreshCw size={15} className={refreshing ? 'spin' : ''} />
             刷新快照
           </button>
@@ -561,11 +635,12 @@ export function ConfigStudio() {
             <span>PROFILE</span>
             <SelectField
               value={profileId ? String(profileId) : ''}
+              disabled={loading || refreshing || profileBusy}
               onValueChange={(value) => void switchProfile(Number(value))}
               options={profileOptions}
             />
             {currentProfile && !currentProfile.active ? (
-              <button className="text-action" onClick={activateCurrent}>
+              <button className="text-action" onClick={activateCurrent} disabled={profileBusy || loading}>
                 设为活动
               </button>
             ) : (
@@ -575,21 +650,22 @@ export function ConfigStudio() {
           <div className="topbar-actions">
             <button
               className="button secondary small"
-              onClick={() => setImportDialog(true)}
+              disabled={loading || !snapshot}
+              onClick={() => { if (confirmNavigation()) setImportDialog(true); }}
             >
               <FileInput size={15} />
               导入配置文件
             </button>
             <button
               className="button secondary small"
-              onClick={() => setProfileDialog(true)}
+              onClick={() => { if (confirmNavigation()) setProfileDialog(true); }}
             >
               <Plus size={15} />
               新建配置
             </button>
             <button
               className="button primary small"
-              onClick={() => setSection('export')}
+              onClick={() => navigate('export')}
             >
               <Download size={15} />
               下载配置
@@ -604,7 +680,7 @@ export function ConfigStudio() {
               <button
                 key={item.id}
                 className={section === item.id ? 'active' : ''}
-                onClick={() => setSection(item.id)}
+                onClick={() => navigate(item.id)}
               >
                 <Icon size={15} />
                 {item.label}
@@ -613,20 +689,29 @@ export function ConfigStudio() {
           })}
         </div>
 
-        {loading || !snapshot || !meta ? (
+        {connectionError ? (
+          <div className="connection-banner" role="alert">
+            <div><strong>无法更新配置</strong><p>{connectionError}</p></div>
+            <button className="button secondary small" onClick={refreshWorkspace} disabled={loading || refreshing}>重新连接</button>
+          </div>
+        ) : null}
+        {loading || (!connectionError && (!snapshot || !meta)) ? (
           <div className="loading-screen">
             <div className="loading-mark">SF</div>
             <p>正在读取加密配置快照…</p>
           </div>
-        ) : (
-          <div className="content-stage">
+        ) : snapshot && meta ? (
+          <div className="content-stage" key={snapshot.profile.id}>
             {section === 'overview' ? (
               <OverviewView
                 token={token}
                 snapshot={snapshot}
                 validation={validation}
-                onNavigate={(value) => setSection(value as SectionId)}
+                onNavigate={(value) => navigate(value as SectionId)}
+                onFixIssue={fixIssue}
+                onImport={() => { if (confirmNavigation()) setImportDialog(true); }}
                 onInspect={(node) => {
+                  if (!confirmNavigation()) return;
                   setGraphFocus(node.key);
                   setSection('relationships');
                 }}
@@ -716,6 +801,7 @@ export function ConfigStudio() {
                 validation={validation}
                 profileId={snapshot.profile.id}
                 token={token}
+                onFixIssue={fixIssue}
               />
             ) : null}
 
@@ -728,7 +814,7 @@ export function ConfigStudio() {
               />
             ) : null}
           </div>
-        )}
+        ) : null}
 
         <footer className="studio-footer">
           <span>
@@ -740,7 +826,7 @@ export function ConfigStudio() {
         </footer>
       </main>
 
-      {editorKind ? (
+      {editorKind && snapshot ? (
         <EditorDialog
           open={editorOpen}
           onOpenChange={setEditorOpen}
@@ -756,7 +842,7 @@ export function ConfigStudio() {
 
       <Modal
         open={profileDialog}
-        onOpenChange={setProfileDialog}
+        onOpenChange={closeProfileDialog}
         title="新建配置"
         description="可以从空配置开始，或直接导入完整 Stash YAML。"
         wide
@@ -764,13 +850,13 @@ export function ConfigStudio() {
           <>
             <button
               className="button secondary"
-              onClick={() => setProfileDialog(false)}
+              onClick={() => closeProfileDialog(false)}
             >
               取消
             </button>
             <button
               className="button primary"
-              disabled={profileBusy || !newProfileName.trim()}
+              disabled={profileBusy || !newProfileName.trim() || (newProfileSource === 'import' && !newProfileYaml.trim())}
               onClick={createProfile}
             >
               {profileBusy ? '创建中…' : '创建配置'}
@@ -808,7 +894,7 @@ export function ConfigStudio() {
                   rows={13}
                   value={newProfileYaml}
                   onChange={(event) => setNewProfileYaml(event.target.value)}
-                  placeholder="留空则创建最小 Profile"
+                  placeholder="粘贴完整 Stash YAML"
                 />
               </label>
               <label className="file-drop wide">
@@ -830,15 +916,15 @@ export function ConfigStudio() {
 
       <Modal
         open={importDialog}
-        onOpenChange={setImportDialog}
+        onOpenChange={closeImportDialog}
         title="导入并替换当前 Profile"
-        description="导入内容会转换为结构化资源，并自动生成恢复前版本快照。"
+        description={`将替换「${snapshot?.profile.name || '当前配置'}」的全部资源。当前状态保留在版本历史，导入错误不会覆盖现有内容。`}
         wide
         footer={
           <>
             <button
               className="button secondary"
-              onClick={() => setImportDialog(false)}
+              onClick={() => closeImportDialog(false)}
             >
               取消
             </button>
@@ -874,7 +960,7 @@ export function ConfigStudio() {
       </Modal>
 
       {toast ? (
-        <div className={`toast toast-${toast.tone}`}>
+        <div className={`toast toast-${toast.tone}`} role={toast.tone === 'bad' ? 'alert' : 'status'}>
           {toast.tone === 'bad' ? (
             <ShieldAlert size={17} />
           ) : (

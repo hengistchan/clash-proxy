@@ -348,7 +348,9 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
         issues,
         'error',
         'group.cycle',
-        `Strategy groups contain a cycle: ${[...chain, name].join(' -> ')}`
+        `Strategy groups contain a cycle: ${[...chain, name].join(' -> ')}`,
+        'proxy-group',
+        groupMap.get(name)?.id
       );
       return;
     }
@@ -439,7 +441,8 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
       issues,
       'error',
       'rule.match-count',
-      'Configuration must contain exactly one MATCH rule'
+      'Configuration must contain exactly one MATCH rule',
+      'rule'
     );
   }
   const finalEnabled = enabledRules.at(-1);
@@ -451,7 +454,8 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
       issues,
       'error',
       'rule.match-terminal',
-      'The final enabled rule must be MATCH'
+      'The final enabled rule must be MATCH',
+      'rule'
     );
   }
 
@@ -645,7 +649,8 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
         issues,
         'error',
         'dns.ruleset-missing',
-        `DNS settings reference missing rule provider “${reference}”`
+        `DNS settings reference missing rule provider “${reference}”`,
+        'settings'
       );
     }
   }
@@ -659,7 +664,9 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
           issues,
           'error',
           'advanced.ruleset-missing',
-          `Advanced section “${section.key}” references missing rule provider “${reference}”`
+          `Advanced section “${section.key}” references missing rule provider “${reference}”`,
+          'advanced',
+          section.id
         );
       }
     }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -18,6 +18,7 @@ import type { Snapshot, StashRule, ValidationResult } from '@/lib/types';
 import { ApiError, apiRequest } from './api-client';
 import { StatusBadge, SwitchField } from './ui';
 import { RoutingSimulator } from './routing-simulator';
+import { useUnsavedChanges } from './unsaved-changes';
 
 function ruleBody(rule: StashRule, patch: Partial<StashRule> = {}) {
   const next = { ...rule, ...patch };
@@ -54,6 +55,25 @@ export function RulesView({
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState<number | null>(null);
   const [error, setError] = useState('');
+  const mutationLock = useRef(false);
+  useUnsavedChanges(false, busy !== null);
+  const matchCount = snapshot.rules.filter((rule) => rule.type === 'MATCH').length;
+  const lastMovableIndex = snapshot.rules.length - (
+    snapshot.rules.at(-1)?.type === 'MATCH' ? 2 : 1
+  );
+
+  function beginMutation(id: number): boolean {
+    if (mutationLock.current) return false;
+    mutationLock.current = true;
+    setBusy(id);
+    setError('');
+    return true;
+  }
+
+  function finishMutation() {
+    mutationLock.current = false;
+    setBusy(null);
+  }
 
   const issuesByRule = useMemo(() => {
     const map = new Map<number, ValidationResult['issues']>();
@@ -79,9 +99,8 @@ export function RulesView({
   }, [query, snapshot.rules]);
 
   async function toggle(rule: StashRule, enabled: boolean) {
-    if (rule.type === 'MATCH') return;
-    setBusy(rule.id);
-    setError('');
+    if (rule.type === 'MATCH' && (!enabled || rule.enabled)) return;
+    if (!beginMutation(rule.id)) return;
     try {
       await apiRequest(`/api/profiles/${profileId}/rules/${rule.id}`, {
         method: 'PUT',
@@ -92,18 +111,17 @@ export function RulesView({
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '更新失败');
     } finally {
-      setBusy(null);
+      finishMutation();
     }
   }
 
   async function move(rule: StashRule, offset: number) {
+    if (rule.type === 'MATCH') return;
     const ids = snapshot.rules.map((item) => item.id);
     const index = ids.indexOf(rule.id);
     const target = index + offset;
-    if (index < 0 || target < 0 || target >= ids.length - 1) return;
+    if (index < 0 || target < 0 || target > lastMovableIndex || !beginMutation(rule.id)) return;
     [ids[index], ids[target]] = [ids[target], ids[index]];
-    setBusy(rule.id);
-    setError('');
     try {
       await apiRequest(`/api/profiles/${profileId}/rules/order`, {
         method: 'PUT',
@@ -114,16 +132,15 @@ export function RulesView({
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '排序失败');
     } finally {
-      setBusy(null);
+      finishMutation();
     }
   }
 
   async function remove(rule: StashRule) {
-    if (rule.type === 'MATCH') return;
+    if ((rule.type === 'MATCH' && matchCount <= 1) || mutationLock.current) return;
     if (!window.confirm(`删除优先级 ${rule.priority} 的 ${rule.type} 规则？`))
       return;
-    setBusy(rule.id);
-    setError('');
+    if (!beginMutation(rule.id)) return;
     try {
       await apiRequest(`/api/profiles/${profileId}/rules/${rule.id}`, {
         method: 'DELETE',
@@ -133,7 +150,7 @@ export function RulesView({
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '删除失败');
     } finally {
-      setBusy(null);
+      finishMutation();
     }
   }
 
@@ -143,9 +160,9 @@ export function RulesView({
         <div>
           <p className="kicker">ROUTING / EVALUATION ORDER</p>
           <h2>路由规则</h2>
-          <p>自上而下匹配；数字越小优先级越高，MATCH 永远锁定在末位。</p>
+          <p>自上而下匹配；数字越小优先级越高，MATCH 存在时锁定在末位。</p>
         </div>
-        <button className="button primary" onClick={onAdd}>
+        <button className="button primary" onClick={onAdd} disabled={busy !== null}>
           <Plus size={16} />
           新增规则
         </button>
@@ -215,6 +232,7 @@ export function RulesView({
                   checked={rule.enabled}
                   onCheckedChange={(checked) => toggle(rule, checked)}
                   description=""
+                  disabled={(locked && rule.enabled) || busy !== null}
                 />
                 <div className="icon-strip">
                   <button
@@ -228,7 +246,7 @@ export function RulesView({
                   <button
                     className="icon-button"
                     aria-label="上移"
-                    disabled={locked || index <= 0 || busy === rule.id}
+                    disabled={locked || index <= 0 || busy !== null}
                     onClick={() => move(rule, -1)}
                   >
                     <ArrowUp size={15} />
@@ -238,8 +256,8 @@ export function RulesView({
                     aria-label="下移"
                     disabled={
                       locked ||
-                      index >= snapshot.rules.length - 2 ||
-                      busy === rule.id
+                      index >= lastMovableIndex ||
+                      busy !== null
                     }
                     onClick={() => move(rule, 1)}
                   >
@@ -248,11 +266,12 @@ export function RulesView({
                   <button
                     className="icon-button"
                     aria-label="编辑"
+                    disabled={busy !== null}
                     onClick={() => onEdit(rule)}
                   >
                     <Edit3 size={15} />
                   </button>
-                  {locked ? (
+                  {locked && matchCount <= 1 ? (
                     <span className="lock-note">
                       <LockKeyhole size={14} />
                       LOCKED
@@ -261,7 +280,7 @@ export function RulesView({
                     <button
                       className="icon-button danger"
                       aria-label="删除"
-                      disabled={busy === rule.id}
+                      disabled={busy !== null}
                       onClick={() => remove(rule)}
                     >
                       <Trash2 size={15} />

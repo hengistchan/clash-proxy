@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import { requireAdmin } from '@/lib/auth';
 import { jsonError, parseId, readJson } from '@/lib/http';
-import { importYaml } from '@/lib/repository';
+import { getCompilationSnapshot, importYaml } from '@/lib/repository';
 import { validateSnapshot } from '@/lib/validation';
 
 export const runtime = 'nodejs';
@@ -24,7 +24,7 @@ export async function POST(
     const snapshot = importYaml(parseId(profileId), input.yaml);
     return NextResponse.json({
       ...snapshot,
-      validation: validateSnapshot(snapshot)
+      validation: validateSnapshot(getCompilationSnapshot(snapshot.profile.id))
     });
   } catch (error) {
     return jsonError(error);

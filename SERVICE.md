@@ -88,6 +88,20 @@ YAML 响应包含 `X-Config-Revision`、`X-Config-SHA256`、`X-Rule-Count`，并
 
 ## 部署与备份
 
+本机生产运行可执行 `npm run build` 后再执行 `npm start`。启动器会在切换到 standalone
+目录前，将数据库、密钥与示例目录解析为绝对路径；默认仍使用仓库根目录的
+`data/stash-config.sqlite3` 和同路径加 `.key`，与开发模式共用持久化位置。相对的
+`STASH_DB_PATH`、`STASH_KEY_PATH`、`STASH_TEMPLATE_DIR` 也均相对仓库根目录解析。
+数据库与密钥必须放在 `.next` 之外，重新构建不会删除它们。
+
+旧版 `npm start` 可能已将数据写入 `.next/standalone/data`。升级前先停止服务，
+将该目录中的数据库、`-wal`/`-shm` 文件及匹配的密钥一起备份到 `.next` 之外，
+核实备份完整后将旧文件移出 `.next`，再构建新版本。恢复到持久化目录后，显式设置
+绝对 `STASH_DB_PATH` 和 `STASH_KEY_PATH` 启动；若使用外部 `STASH_SECRET_KEY`，
+必须保留同一密钥。启动器发现旧路径数据时会中止，避免静默创建新库；`npm run build`
+的预检查也会拒绝删除已知旧数据库及密钥。直接执行 `next build` 会绕过这个预检查，
+请使用 `npm run build`。整个过程不会自动覆盖、迁移或删除旧数据。
+
 ```bash
 docker compose up -d --build --wait
 ```
@@ -122,6 +136,13 @@ docker compose start api
 ```bash
 npm run check
 npm run build
+npx playwright install chromium
+npm run test:e2e
 ```
 
-测试涵盖通用配置、多来源凭据隔离、脱敏与重启持久化、无效草稿保留成功产物、设备链接轮换撤销、顺序导出与有限匹配分析。CI 还保留示例 YAML parity 和 Python 工具回归。
+测试涵盖通用配置、多来源凭据隔离、脱敏与重启持久化、无效草稿保留成功产物、设备链接轮换撤销、顺序导出与有限匹配分析。
+浏览器回归运行真实生产包，使用独立临时数据库、密钥和测试管理员令牌，退出后清理，不读取本机配置；
+验证连接恢复、登录、导入、未保存修改保护、保存中导航、错误草稿修复、交付与历史恢复及配置切换。
+CI 会独立构建并执行 Chromium 回归，同时保留示例 YAML parity 和 Python 工具回归。
+
+架构与交互改进的边界、设计依据和验收路径见 [架构与体验审查](docs/architecture-review.md)。
