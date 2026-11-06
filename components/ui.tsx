@@ -128,12 +128,14 @@ export function SwitchField({
   label,
   checked,
   onCheckedChange,
-  description
+  description,
+  disabled = false
 }: {
   label: string;
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
   description?: string;
+  disabled?: boolean;
 }) {
   return (
     <label className="switch-field">
@@ -145,6 +147,7 @@ export function SwitchField({
         className="switch-root"
         checked={checked}
         onCheckedChange={onCheckedChange}
+        disabled={disabled}
       >
         <Switch.Thumb className="switch-thumb" />
       </Switch.Root>

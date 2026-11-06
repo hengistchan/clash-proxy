@@ -1,13 +1,15 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Download, Link2, RefreshCw } from 'lucide-react';
-import type { Snapshot, ValidationResult } from '@/lib/types';
+import type { Snapshot, ValidationResult, ValidationIssue } from '@/lib/types';
 import {
   apiRequest,
   downloadBlob,
   filenameFromDisposition
 } from './api-client';
+import { useUnsavedChanges } from './unsaved-changes';
+import { ValidationIssues } from './validation-issues';
 import { StatusBadge } from './ui';
 
 interface DeliveryStatus {
@@ -23,19 +25,25 @@ export function ExportView({
   validation,
   profileId,
   token,
-  compact = false
+  compact = false,
+  onFixIssue
 }: {
   snapshot: Snapshot;
   validation: ValidationResult;
   profileId: number;
   token: string;
   compact?: boolean;
+  onFixIssue?: (issue: ValidationIssue) => void;
 }) {
   const [status, setStatus] = useState<DeliveryStatus | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [origin, setOrigin] = useState('');
+  const [statusAttempt, setStatusAttempt] = useState(0);
+  const [changingLink, setChangingLink] = useState(false);
+  const actionLock = useRef(false);
+  useUnsavedChanges(false, changingLink);
   useEffect(() => {
     let active = true;
     setStatus(null);
@@ -55,8 +63,10 @@ export function ExportView({
     return () => {
       active = false;
     };
-  }, [profileId, snapshot.profile.revision, token]);
+  }, [profileId, snapshot.profile.revision, token, statusAttempt]);
   async function download(bundle = false) {
+    if (actionLock.current) return;
+    actionLock.current = true;
     setBusy(true);
     setError('');
     try {
@@ -76,32 +86,38 @@ export function ExportView({
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '下载失败');
     } finally {
+      actionLock.current = false;
       setBusy(false);
     }
   }
   async function changeLink(revoke = false) {
+    if (actionLock.current) return;
+    if (status?.subscriptionPath && !window.confirm(revoke ? '撤销后，设备将无法通过此链接更新配置。确认撤销？' : '更换后，原链接立即失效，所有设备都需要重新填写新链接。确认更换？')) return;
+    actionLock.current = true;
     setBusy(true);
+    setChangingLink(true);
     setError('');
+    setNotice('');
+    const previous = status;
+    setStatus(null);
     try {
-      await apiRequest(`/api/profiles/${profileId}/download-link`, {
-        method: revoke ? 'DELETE' : 'POST',
-        token
-      });
-      setStatus(
-        await apiRequest<DeliveryStatus>(
-          `/api/profiles/${profileId}/delivery`,
-          { token }
-        )
-      );
-      setNotice(
-        revoke ? '订阅链接已撤销。' : '新订阅链接已生成，之前的链接已失效。'
-      );
+      if (revoke) {
+        await apiRequest(`/api/profiles/${profileId}/download-link`, { method: 'DELETE', token });
+        if (previous) setStatus({ ...previous, subscriptionPath: null, subscriptionUrl: null });
+      } else {
+        const next = await apiRequest<DeliveryStatus>(`/api/profiles/${profileId}/download-link`, { method: 'POST', token });
+        setStatus(next);
+      }
+      setNotice(revoke ? '订阅链接已撤销。' : '新订阅链接已生成，之前的链接已失效。');
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '链接操作失败');
+      setError((caught instanceof Error ? caught.message : '链接操作失败') + ' 请重新读取下载状态以确认链接。');
     } finally {
+      actionLock.current = false;
       setBusy(false);
+      setChangingLink(false);
     }
   }
+
   const errors = validation.issues.filter((i) => i.severity === 'error');
   const missing = snapshot.proxyProviders.filter((p) => !p.sourceConfigured);
   return (
@@ -184,6 +200,7 @@ export function ExportView({
               <div className="delivery-actions">
                 <button
                   className="button secondary"
+                  disabled={busy}
                   onClick={() =>
                     void navigator.clipboard
                       .writeText(
@@ -225,29 +242,27 @@ export function ExportView({
               </button>
             </div>
           )}
-          <div className="export-contract">
+          <details className="export-contract">
+            <summary>开发者 API</summary>
             <code>GET /api/profiles/{profileId}/config_download</code>
             <p>
               管理 API
               使用管理员认证；设备使用上面的独立订阅链接。无需传入任何订阅地址参数。
             </p>
-          </div>
+          </details>
         </>
       ) : null}
       {!compact && errors.length ? (
         <div className="validation-block error-block">
           <strong>最新修改需要修复 {errors.length} 个问题</strong>
-          {errors.slice(0, 8).map((i, n) => (
-            <p key={n}>{i.message}</p>
-          ))}
+          <ValidationIssues issues={errors} onFix={onFixIssue} />
         </div>
       ) : null}
       {notice ? <p role="status">{notice}</p> : null}
-      {error ? (
-        <pre className="inline-error" role="alert">
-          {error}
-        </pre>
-      ) : null}
+      {error ? <div role="alert">
+        <pre className="inline-error">{error}</pre>
+        <button className="button secondary small" disabled={busy} onClick={() => setStatusAttempt((attempt) => attempt + 1)}>重试读取下载状态</button>
+      </div> : null}
     </section>
   );
 }

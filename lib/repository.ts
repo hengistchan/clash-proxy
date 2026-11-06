@@ -1,16 +1,15 @@
 import type Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { parse as parseYaml } from 'yaml';
 
 import { decryptJson, encryptJson } from './crypto';
 import { refreshCompiledConfig } from './compilation';
 import { validateSubscriptionUrl } from './provider-source';
 import { getDb, transaction } from './db';
 import { HttpError } from './http';
+import { parseYamlDocument, type ImportedDocument } from './yaml-import';
 import {
   normalizeRuleInput,
-  parseRuleLine,
   serializeRule,
   ruleSetNames
 } from './rules';
@@ -34,7 +33,6 @@ import type {
 } from './types';
 import {
   BUILTIN_POLICIES,
-  PROXY_GROUP_TYPES,
   RESERVED_TOP_LEVEL_KEYS,
   isJsonObject
 } from './types';
@@ -56,17 +54,6 @@ const REMOVED_TOP_LEVEL = new Set([
 
 function now(): string {
   return new Date().toISOString();
-}
-
-function asJsonObject(value: unknown): JsonObject {
-  if (!isJsonObject(value)) {
-    return {};
-  }
-  return JSON.parse(JSON.stringify(value)) as JsonObject;
-}
-
-function asJsonValue(value: unknown): JsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as JsonValue;
 }
 
 function decryptObject(value: unknown): JsonObject {
@@ -583,21 +570,17 @@ function assertPolicyNameAvailable(
   db: Database.Database,
   profileId: number,
   name: string,
-  kind: 'proxies' | 'proxy-groups',
-  exceptId?: number
+  kind: 'proxies' | 'proxy-groups'
 ): void {
-  const except = exceptId || null;
-  const proxy = db
+  // IDs are scoped to their table. Excluding the edited ID from the other
+  // table can hide an unrelated resource that happens to have the same ID.
+  const otherTable = kind === 'proxies' ? 'proxy_groups' : 'proxies';
+  const collision = db
     .prepare(
-      'SELECT id FROM proxies WHERE profile_id = ? AND name = ? AND (? IS NULL OR id <> ?)'
+      `SELECT id FROM ${otherTable} WHERE profile_id = ? AND name = ?`
     )
-    .get(profileId, name, except, except);
-  const group = db
-    .prepare(
-      'SELECT id FROM proxy_groups WHERE profile_id = ? AND name = ? AND (? IS NULL OR id <> ?)'
-    )
-    .get(profileId, name, except, except);
-  if ((kind === 'proxies' && group) || (kind === 'proxy-groups' && proxy)) {
+    .get(profileId, name);
+  if (collision) {
     throw new HttpError(
       409,
       'Direct proxies and strategy groups must use unique policy names'
@@ -605,71 +588,24 @@ function assertPolicyNameAvailable(
   }
 }
 
-function normalizeImportedRules(rawRules: unknown[]): Array<{
-  type: string;
-  payload: string;
-  policy: string;
-  options: string[];
-  enabled: boolean;
-  note: string;
-}> {
-  return rawRules.map((item, index) => {
-    if (typeof item !== 'string') {
-      throw new HttpError(400, `rules[${index}] must be a rule string`);
-    }
-    const parsed = parseRuleLine(item);
-    return { ...parsed, enabled: true, note: '' };
-  });
-}
-
 function replaceProfileResources(
   db: Database.Database,
   profileId: number,
-  document: {
-    mode?: ProfileMode;
-    targetPlatform?: Profile['targetPlatform'];
-    logLevel?: LogLevel;
-    ipv6?: boolean | null;
-    settings: JsonObject;
-    proxies: Array<{ name: string; type: string; config: JsonObject }>;
-    proxyProviders: Array<{
-      name: string;
-      config: JsonObject;
-      requiresUrl: boolean;
-    }>;
-    proxyGroups: Array<{
-      name: string;
-      type: ProxyGroupType;
-      config: JsonObject;
-    }>;
-    ruleProviders: Array<{
-      name: string;
-      displayName?: string;
-      behavior: string;
-      providerType: RuleProviderType;
-      config: JsonObject;
-      entries: string[];
-    }>;
-    rules: Array<{
-      type: string;
-      payload: string;
-      policy: string;
-      options: string[];
-      enabled: boolean;
-      note: string;
-    }>;
-    hosts: Array<{ pattern: string; value: string }>;
-    advancedSections: Array<{ key: string; value: JsonValue }>;
-  }
+  document: ImportedDocument,
+  options: { preserveExistingSources?: boolean } = {}
 ): void {
   getProfileRow(db, profileId);
   const touched = now();
-  const existingSources = new Map(
-    (
-      db
-        .prepare('SELECT * FROM proxy_providers WHERE profile_id = ?')
-        .all(profileId) as DbRow[]
-    ).map((row) => [String(row.name), decryptObject(row.config_ciphertext)])
+  // Template imports may reuse existing source bindings. History restoration
+  // must reproduce the snapshot, including intentionally missing credentials.
+  const existingSources = new Map<string, JsonObject>(
+    options.preserveExistingSources
+      ? (
+          db
+            .prepare('SELECT * FROM proxy_providers WHERE profile_id = ?')
+            .all(profileId) as DbRow[]
+        ).map((row) => [String(row.name), decryptObject(row.config_ciphertext)])
+      : []
   );
   const existingRuleSetNames = new Map(
     (
@@ -813,212 +749,6 @@ function replaceProfileResources(
   document.advancedSections.forEach((item, index) => {
     advancedInsert.run(profileId, item.key, encryptJson(item.value), index + 1);
   });
-}
-
-function documentFromYaml(value: unknown): {
-  mode: ProfileMode;
-  logLevel: LogLevel;
-  ipv6: boolean | null;
-  settings: JsonObject;
-  proxies: Array<{ name: string; type: string; config: JsonObject }>;
-  proxyProviders: Array<{
-    name: string;
-    config: JsonObject;
-    requiresUrl: boolean;
-  }>;
-  proxyGroups: Array<{
-    name: string;
-    type: ProxyGroupType;
-    config: JsonObject;
-  }>;
-  ruleProviders: Array<{
-    name: string;
-    behavior: string;
-    providerType: RuleProviderType;
-    config: JsonObject;
-    entries: string[];
-  }>;
-  rules: ReturnType<typeof normalizeImportedRules>;
-  hosts: Array<{ pattern: string; value: string }>;
-  advancedSections: Array<{ key: string; value: JsonValue }>;
-} {
-  if (!isJsonObject(value)) {
-    throw new HttpError(400, 'Configuration must be a YAML mapping');
-  }
-  const source = asJsonObject(value);
-  const mode = ['rule', 'global', 'direct'].includes(String(source.mode))
-    ? (String(source.mode) as ProfileMode)
-    : 'rule';
-  const logLevel = ['silent', 'info', 'warning', 'error', 'debug'].includes(
-    String(source['log-level'])
-  )
-    ? (String(source['log-level']) as LogLevel)
-    : 'silent';
-  const ipv6 = typeof source.ipv6 === 'boolean' ? source.ipv6 : null;
-  const dns = isJsonObject(source.dns) ? source.dns : {};
-  const settings: JsonObject = { dns };
-
-  const proxies: Array<{ name: string; type: string; config: JsonObject }> = [];
-  if (Array.isArray(source.proxies)) {
-    source.proxies.forEach((item, index) => {
-      if (
-        !isJsonObject(item) ||
-        typeof item.name !== 'string' ||
-        typeof item.type !== 'string'
-      ) {
-        throw new HttpError(400, `proxies[${index}] requires name and type`);
-      }
-      const config = { ...item };
-      delete config.name;
-      delete config.type;
-      proxies.push({
-        name: item.name,
-        type: item.type,
-        config: asJsonObject(config)
-      });
-    });
-  }
-
-  const proxyProviders: Array<{
-    name: string;
-    config: JsonObject;
-    requiresUrl: boolean;
-  }> = [];
-  if (isJsonObject(source['proxy-providers'])) {
-    for (const [name, raw] of Object.entries(source['proxy-providers'])) {
-      if (!isJsonObject(raw)) continue;
-      const config = asJsonObject(raw);
-      const url = typeof config.url === 'string' ? config.url : '';
-      const placeholder = !url || url.startsWith('https://example.invalid/');
-      if (placeholder) {
-        delete config.url;
-      }
-      proxyProviders.push({
-        name,
-        config,
-        requiresUrl:
-          placeholder && (typeof raw.url === 'string' || !config.path)
-      });
-    }
-  }
-
-  const proxyGroups: Array<{
-    name: string;
-    type: ProxyGroupType;
-    config: JsonObject;
-  }> = [];
-  if (Array.isArray(source['proxy-groups'])) {
-    source['proxy-groups'].forEach((item, index) => {
-      if (
-        !isJsonObject(item) ||
-        typeof item.name !== 'string' ||
-        typeof item.type !== 'string'
-      ) {
-        throw new HttpError(
-          400,
-          `proxy-groups[${index}] requires name and type`
-        );
-      }
-      if (!PROXY_GROUP_TYPES.includes(item.type as ProxyGroupType)) {
-        throw new HttpError(
-          400,
-          `Unsupported strategy group type: ${item.type}`
-        );
-      }
-      const config = { ...item };
-      delete config.name;
-      delete config.type;
-      proxyGroups.push({
-        name: item.name,
-        type: item.type as ProxyGroupType,
-        config: asJsonObject(config)
-      });
-    });
-  }
-
-  const ruleProviders: Array<{
-    name: string;
-    behavior: string;
-    providerType: RuleProviderType;
-    config: JsonObject;
-    entries: string[];
-  }> = [];
-  if (isJsonObject(source['rule-providers'])) {
-    for (const [name, raw] of Object.entries(source['rule-providers'])) {
-      if (!isJsonObject(raw)) continue;
-      const config = asJsonObject(raw);
-      const behavior =
-        typeof raw.behavior === 'string' ? raw.behavior : 'classical';
-      const inline = raw.type === 'inline';
-      const providerType: RuleProviderType = inline
-        ? 'inline'
-        : typeof raw.url === 'string'
-          ? 'remote'
-          : 'local';
-      let entries: string[] = [];
-      if (inline) {
-        entries = Array.isArray(raw.payload) ? raw.payload.map(String) : [];
-        delete config.type;
-        delete config.payload;
-      }
-      ruleProviders.push({ name, behavior, providerType, config, entries });
-    }
-  }
-
-  const rules = Array.isArray(source.rules)
-    ? normalizeImportedRules(source.rules)
-    : [
-        {
-          type: 'MATCH',
-          payload: '',
-          policy: 'DIRECT',
-          options: [],
-          enabled: true,
-          note: ''
-        }
-      ];
-
-  const hosts: Array<{ pattern: string; value: string }> = [];
-  if (isJsonObject(source.hosts)) {
-    for (const [pattern, hostValue] of Object.entries(source.hosts)) {
-      hosts.push({ pattern, value: String(hostValue) });
-    }
-  }
-
-  const advancedSections: Array<{ key: string; value: JsonValue }> = [];
-  for (const [key, raw] of Object.entries(source)) {
-    if (!REMOVED_TOP_LEVEL.has(key)) {
-      advancedSections.push({ key, value: asJsonValue(raw) });
-    }
-  }
-
-  return {
-    mode,
-    logLevel,
-    ipv6,
-    settings,
-    proxies,
-    proxyProviders,
-    proxyGroups,
-    ruleProviders,
-    rules,
-    hosts,
-    advancedSections
-  };
-}
-
-function parseYamlDocument(
-  yamlText: string
-): ReturnType<typeof documentFromYaml> {
-  try {
-    return documentFromYaml(parseYaml(yamlText));
-  } catch (error) {
-    if (error instanceof HttpError) throw error;
-    throw new HttpError(
-      400,
-      `Configuration YAML is invalid: ${error instanceof Error ? error.message : 'unknown error'}`
-    );
-  }
 }
 
 function seedTemplate(): string {
@@ -1285,7 +1015,7 @@ export function updateProxy(
       .get(itemId, profileId) as DbRow | undefined;
     if (!current) throw new HttpError(404, 'Direct proxy not found');
     assertUniqueName(db, 'proxies', profileId, input.name, itemId);
-    assertPolicyNameAvailable(db, profileId, input.name, 'proxies', itemId);
+    assertPolicyNameAvailable(db, profileId, input.name, 'proxies');
     const oldName = String(current.name);
     db.prepare(
       'UPDATE proxies SET name = ?, type = ?, config_ciphertext = ? WHERE id = ?'
@@ -1482,8 +1212,7 @@ export function updateProxyGroup(
       db,
       profileId,
       input.name,
-      'proxy-groups',
-      itemId
+      'proxy-groups'
     );
     const oldName = String(current.name);
     db.prepare(
@@ -1768,10 +1497,11 @@ export function deleteRuleProviderEntry(
   });
 }
 
-function terminalRule(rules: StashRule[]): StashRule {
+function terminalRule(rules: StashRule[], required = true): StashRule | null {
   const enabled = rules.filter((rule) => rule.enabled);
   const terminal = enabled.at(-1);
   const matches = rules.filter((rule) => rule.type === 'MATCH');
+  if (!required && matches.length === 0) return null;
   if (matches.length !== 1 || !terminal || terminal.type !== 'MATCH') {
     throw new HttpError(409, 'Exactly one enabled MATCH rule must remain last');
   }
@@ -1809,14 +1539,22 @@ export function createRule(
   return transaction((db) => {
     getProfileRow(db, profileId);
     const current = snapshotFromDb(db, profileId);
-    const terminal = terminalRule(current.rules);
     const rule = normalizeRuleInput(input);
-    if (rule.type === 'MATCH') {
+    const matches = current.rules.filter((item) => item.type === 'MATCH');
+    if (rule.type === 'MATCH' && matches.length) {
       throw new HttpError(409, 'A terminal MATCH rule already exists');
     }
+    if (rule.type === 'MATCH' && !rule.enabled) {
+      throw new HttpError(409, 'The terminal MATCH rule must remain enabled');
+    }
+    // A structurally valid import can be an invalid draft. Let users add its
+    // missing terminal rule without first requiring that rule to already exist.
+    const terminal = rule.type === 'MATCH'
+      ? null
+      : terminalRule(current.rules, current.profile.mode === 'rule');
     const ids = current.rules
       .map((item) => item.id)
-      .filter((id) => id !== terminal.id);
+      .filter((id) => id !== terminal?.id);
     const order = db
       .prepare(
         `INSERT INTO rules
@@ -1836,10 +1574,11 @@ export function createRule(
     const id = Number(order.lastInsertRowid);
     const insertAt = Math.max(
       0,
-      Math.min((input.priority || terminal.priority) - 1, ids.length)
+      Math.min((input.priority || terminal?.priority || ids.length + 1) - 1, ids.length)
     );
-    ids.splice(insertAt, 0, id);
-    ids.push(terminal.id);
+    if (rule.type === 'MATCH') ids.push(id);
+    else ids.splice(insertAt, 0, id);
+    if (terminal) ids.push(terminal.id);
     renumberRules(db, profileId, ids);
     recordRevision(db, profileId);
     return mapRule(
@@ -1868,10 +1607,12 @@ export function updateRule(
       .get(itemId, profileId) as DbRow | undefined;
     if (!currentRow) throw new HttpError(404, 'Rule not found');
     const currentSnapshot = snapshotFromDb(db, profileId);
-    const terminal = terminalRule(currentSnapshot.rules);
     const rule = normalizeRuleInput(input);
     const existing = currentSnapshot.rules.find((item) => item.id === itemId);
     if (!existing) throw new HttpError(404, 'Rule not found');
+    const matches = currentSnapshot.rules.filter((item) => item.type === 'MATCH');
+    const protectedTerminal = matches.length === 1 && existing.type === 'MATCH' &&
+      existing.enabled && currentSnapshot.rules.filter((item) => item.enabled).at(-1)?.id === existing.id;
     if (existing.type === 'MATCH') {
       if (rule.type !== 'MATCH' || !rule.enabled) {
         throw new HttpError(
@@ -1879,12 +1620,20 @@ export function updateRule(
           'The terminal MATCH rule cannot be converted or disabled'
         );
       }
-      if (input.priority && input.priority !== existing.priority) {
+      if (protectedTerminal && input.priority && input.priority !== existing.priority) {
         throw new HttpError(409, 'The terminal MATCH rule must remain last');
       }
-    } else if (rule.type === 'MATCH') {
+    } else if (rule.type === 'MATCH' && matches.length) {
       throw new HttpError(409, 'A terminal MATCH rule already exists');
     }
+    if (rule.type === 'MATCH' && !rule.enabled) {
+      throw new HttpError(409, 'The terminal MATCH rule must remain enabled');
+    }
+    // Saving an existing misplaced/disabled MATCH repairs it by placing the
+    // enabled rule last. Converting the first MATCH follows the same path.
+    const terminal = rule.type === 'MATCH'
+      ? null
+      : terminalRule(currentSnapshot.rules, currentSnapshot.profile.mode === 'rule');
     db.prepare(
       `UPDATE rules
        SET type = ?, payload = ?, policy = ?, options_json = ?, enabled = ?, note = ?
@@ -1898,13 +1647,14 @@ export function updateRule(
       rule.note,
       itemId
     );
-    if (input.priority && existing.type !== 'MATCH') {
+    if ((input.priority && existing.type !== 'MATCH') || (rule.type === 'MATCH' && !protectedTerminal)) {
       const ids = currentSnapshot.rules
         .map((item) => item.id)
-        .filter((id) => id !== itemId && id !== terminal.id);
-      const insertAt = Math.max(0, Math.min(input.priority - 1, ids.length));
-      ids.splice(insertAt, 0, itemId);
-      ids.push(terminal.id);
+        .filter((id) => id !== itemId && id !== terminal?.id);
+      const insertAt = Math.max(0, Math.min((input.priority || ids.length + 1) - 1, ids.length));
+      if (rule.type === 'MATCH') ids.push(itemId);
+      else ids.splice(insertAt, 0, itemId);
+      if (terminal) ids.push(terminal.id);
       renumberRules(db, profileId, ids);
     }
     recordRevision(db, profileId);
@@ -1922,7 +1672,12 @@ export function deleteRule(profileId: number, itemId: number): void {
       .get(itemId, profileId) as DbRow | undefined;
     if (!row) throw new HttpError(404, 'Rule not found');
     if (String(row.type) === 'MATCH') {
-      throw new HttpError(409, 'The terminal MATCH rule cannot be deleted');
+      const rules = snapshotFromDb(db, profileId).rules;
+      const matches = rules.filter((rule) => rule.type === 'MATCH');
+      const lastEnabled = rules.filter((rule) => rule.enabled).at(-1);
+      if (matches.length <= 1 || lastEnabled?.id === itemId) {
+        throw new HttpError(409, 'The terminal MATCH rule cannot be deleted');
+      }
     }
     db.prepare('DELETE FROM rules WHERE id = ?').run(itemId);
     const ids = (
@@ -1941,13 +1696,13 @@ export function reorderRules(profileId: number, ids: number[]): StashRule[] {
   ensureInitialized();
   return transaction((db) => {
     const snapshot = snapshotFromDb(db, profileId);
-    const terminal = terminalRule(snapshot.rules);
+    const terminal = terminalRule(snapshot.rules, snapshot.profile.mode === 'rule');
     const currentIds = snapshot.rules.map((rule) => rule.id);
     if (
       new Set(ids).size !== ids.length ||
       ids.length !== currentIds.length ||
       ids.some((id) => !currentIds.includes(id)) ||
-      ids.at(-1) !== terminal.id
+      (terminal !== null && ids.at(-1) !== terminal.id)
     ) {
       throw new HttpError(
         409,
@@ -2063,7 +1818,9 @@ export function importYaml(profileId: number, yamlText: string): Snapshot {
   ensureInitialized();
   const document = parseYamlDocument(yamlText);
   return transaction((db) => {
-    replaceProfileResources(db, profileId, document);
+    replaceProfileResources(db, profileId, document, {
+      preserveExistingSources: true
+    });
     recordRevision(db, profileId);
     return publicSnapshot(snapshotFromDb(db, profileId));
   });

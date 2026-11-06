@@ -6,6 +6,8 @@ const scriptSrc =
 
 const nextConfig = {
   output: 'standalone',
+  // Runtime databases and backups must never become deployable build assets.
+  outputFileTracingExcludes: { '/*': ['./data/**/*'] },
   turbopack: {
     root: process.cwd()
   },

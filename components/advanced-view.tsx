@@ -4,6 +4,7 @@ import { Plus, Save, Trash2 } from 'lucide-react';
 import type { JsonValue, Snapshot } from '@/lib/types';
 import { ApiError, apiRequest } from './api-client';
 import { ConfigFields } from './config-fields';
+import { useUnsavedChanges } from './unsaved-changes';
 
 interface DraftSection {
   id: string;
@@ -71,17 +72,30 @@ export function AdvancedView({
   const [saving, setSaving] = useState(false),
     [error, setError] = useState('');
   const root = useRef<HTMLElement>(null);
-  useEffect(
-    () =>
-      setSections(
-        snapshot.advancedSections.map((section) => ({
-          id: String(section.id),
-          key: section.key,
-          text: JSON.stringify(section.value, null, 2)
-        }))
-      ),
-    [snapshot]
-  );
+  const [baseline, setBaseline] = useState('[]');
+  const fingerprint = JSON.stringify(sections.map(({ key, text }) => ({ key, text })));
+  const dirty = fingerprint !== baseline;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const loadedProfile = useRef(profileId);
+  useUnsavedChanges(dirty, saving, resetDraft);
+  function resetDraft() {
+    dirtyRef.current = false;
+    loadedProfile.current = profileId;
+    const next = snapshot.advancedSections.map((section) => ({
+      id: String(section.id),
+      key: section.key,
+      text: JSON.stringify(section.value, null, 2)
+    }));
+    setSections(next);
+    setBaseline(JSON.stringify(next.map(({ key, text }) => ({ key, text }))));
+    setCustomKey('');
+    setError('');
+  }
+  useEffect(() => {
+    if (loadedProfile.current === profileId && dirtyRef.current) return;
+    resetDraft();
+  }, [snapshot, profileId]);
   function add(key: string) {
     key = key.trim();
     if (!key || sections.some((s) => s.key === key)) {
@@ -101,6 +115,7 @@ export function AdvancedView({
     );
   }
   async function save() {
+    if (saving) return;
     const invalid =
       root.current?.querySelector<HTMLInputElement>('input:invalid');
     if (invalid) {
@@ -126,6 +141,8 @@ export function AdvancedView({
         token,
         body: JSON.stringify({ sections: parsed })
       });
+      dirtyRef.current = false;
+      setBaseline(fingerprint);
       await onSaved('扩展配置已保存并检查。');
     } catch (caught) {
       setError(
@@ -140,7 +157,7 @@ export function AdvancedView({
     }
   }
   return (
-    <section className="panel" ref={root}>
+    <section className="panel" ref={root} inert={saving} aria-busy={saving}>
       <div className="panel-heading">
         <div>
           <p className="kicker">扩展配置</p>
@@ -158,6 +175,7 @@ export function AdvancedView({
           {saving ? '保存中…' : '保存扩展配置'}
         </button>
       </div>
+      {dirty ? <p className="delivery-note" role="status">有未保存的修改，保存后才会检查并更新配置。</p> : null}
       <div className="preset-row">
         {PRESETS.filter((p) => !sections.some((s) => s.key === p.key)).map(
           (p) => (

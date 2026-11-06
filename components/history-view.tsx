@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { History, RotateCcw } from 'lucide-react';
 
 import { apiRequest } from './api-client';
+import { useUnsavedChanges } from './unsaved-changes';
 
 interface Revision {
   id: number;
@@ -34,8 +35,12 @@ export function HistoryView({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState<number | null>(null);
+  const mutationLock = useRef(false);
+  const loadRequest = useRef(0);
+  useUnsavedChanges(false, busy !== null);
 
-  async function load(before?: number) {
+  const load = useCallback(async (before?: number) => {
+    const request = ++loadRequest.current;
     setLoading(true);
     setError('');
     if (before === undefined) {
@@ -49,25 +54,30 @@ export function HistoryView({
         `/api/profiles/${profileId}/revisions?${params}`,
         { token }
       );
+      if (request !== loadRequest.current) return;
       setItems((current) =>
         before === undefined ? data.items : [...current, ...data.items]
       );
       setNextCursor(data.nextCursor);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '版本加载失败');
+      if (request === loadRequest.current)
+        setError(caught instanceof Error ? caught.message : '版本加载失败');
     } finally {
-      setLoading(false);
+      if (request === loadRequest.current) setLoading(false);
     }
-  }
+  }, [profileId, token]);
 
   useEffect(() => {
     void load();
-  }, [profileId, currentRevision]);
+    return () => { loadRequest.current++; };
+  }, [load, currentRevision]);
 
   async function restore(revision: number) {
+    if (mutationLock.current) return;
     if (!window.confirm(`恢复到 revision ${revision}？当前状态会保留在历史中。`)) {
       return;
     }
+    mutationLock.current = true;
     setBusy(revision);
     setError('');
     try {
@@ -79,6 +89,7 @@ export function HistoryView({
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '恢复失败');
     } finally {
+      mutationLock.current = false;
       setBusy(null);
     }
   }
@@ -112,11 +123,11 @@ export function HistoryView({
             ) : (
               <button
                 className="button secondary small"
-                disabled={busy === item.revision}
+                disabled={busy !== null || loading}
                 onClick={() => restore(item.revision)}
               >
                 <RotateCcw size={14} />
-                恢复
+                {busy === item.revision ? '恢复中…' : '恢复'}
               </button>
             )}
           </article>
@@ -128,7 +139,7 @@ export function HistoryView({
       {nextCursor !== null ? (
         <button
           className="button secondary small"
-          disabled={loading}
+          disabled={loading || busy !== null}
           onClick={() => void load(nextCursor)}
         >
           {loading ? '加载中…' : '加载更早版本'}

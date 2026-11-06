@@ -1,8 +1,11 @@
 import { cp, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { standaloneEnvironment } from './standalone-paths.mjs';
 
 const root = process.cwd();
+// Resolve persistent paths before server.js changes the working directory.
+const environment = standaloneEnvironment(root);
 const standalone = path.join(root, '.next', 'standalone');
 const standaloneNext = path.join(standalone, '.next');
 
@@ -27,7 +30,7 @@ await cp(
 
 const child = spawn(process.execPath, ['server.js'], {
   cwd: standalone,
-  env: process.env,
+  env: environment,
   stdio: 'inherit'
 });
 

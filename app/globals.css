@@ -525,3 +525,19 @@ details > summary { padding: 12px 0; color: var(--forest); cursor: pointer; font
 .resource-tree-more { padding: 10px 0 10px 32px; }
 @media(max-width:1100px) { .relationship-workspace { grid-template-columns: 1fr; }.relationship-workspace .relation-inspector { max-height: none; }.relationship-workspace .relation-directions { grid-template-columns: 1fr 1fr; } }
 @media(max-width:760px) { .dependency-tree-heading { flex-wrap: wrap; }.resource-tree { padding: 9px 7px; }.resource-tree-relation { display: none; }.resource-tree-branch > div > .resource-tree-list { margin-left: 10px; padding-left: 12px; }.resource-tree-branch > div > .resource-tree-list > .resource-tree-branch::before { width: 12px; left: -12px; }.relationship-workspace .relation-directions { grid-template-columns: 1fr; } }
+
+.workflow-guide { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 16px; }
+.workflow-guide article { display: flex; align-items: flex-start; gap: 12px; padding: 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
+.workflow-guide article > div { min-width: 0; }
+.workflow-number { display: grid; place-items: center; flex: 0 0 28px; height: 28px; border-radius: 50%; background: var(--forest); color: var(--lime); font: 12px var(--mono); }
+.workflow-guide h3 { margin: 3px 0 9px; font-size: 14px; color: var(--forest); }
+.workflow-guide p { margin: 0 0 12px; font-size: 12px; line-height: 1.7; color: var(--muted); }
+.workflow-guide .delivery-actions { margin: 8px 0 0; }
+.diagnostic-filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.diagnostic-filters [aria-pressed="true"] { border-color: var(--forest); background: #edf3df; color: var(--forest); }
+.connection-banner { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin: 24px 36px 0; padding: 16px 20px; border: 1px solid #d89b86; border-radius: 12px; background: #fff3eb; }
+.connection-banner p { margin: 6px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+.connection-banner .button { flex-shrink: 0; }
+.switch-root:disabled { cursor: not-allowed; opacity: .5; }
+@media(max-width:1100px) { .workflow-guide { grid-template-columns: 1fr; }.workflow-guide article { padding: 16px; } }
+@media(max-width:760px) { .connection-banner { margin: 16px 14px 0; flex-wrap: wrap; }.issue-row code { overflow-wrap: anywhere; } }

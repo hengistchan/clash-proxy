@@ -9,6 +9,7 @@ import { isJsonObject } from '@/lib/types';
 import { ApiError, apiRequest } from './api-client';
 import { SelectField, SwitchField } from './ui';
 import { ConfigFields } from './config-fields';
+import { useUnsavedChanges } from './unsaved-changes';
 
 const MANAGED_DNS_KEYS = new Set([
   'nameserver',
@@ -28,6 +29,27 @@ function splitLines(value: string): string[] {
     .split('\n')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function settingsDraft(snapshot: Snapshot) {
+  const dns = isJsonObject(snapshot.profile.settings.dns)
+    ? snapshot.profile.settings.dns
+    : {};
+  return {
+    mode: snapshot.profile.mode,
+    targetPlatform: snapshot.profile.targetPlatform,
+    logLevel: snapshot.profile.logLevel,
+    ipv6: snapshot.profile.ipv6 === true,
+    nameserver: lines(dns.nameserver),
+    defaultNameserver: lines(dns['default-nameserver']),
+    proxyNameserver: lines(dns['proxy-server-nameserver']),
+    fallback: lines(dns.fallback),
+    fakeIpRange: String(dns['fake-ip-range'] || ''),
+    fakeIpFilter: lines(dns['fake-ip-filter']),
+    advancedDns: JSON.stringify(Object.fromEntries(
+      Object.entries(dns).filter(([key]) => !MANAGED_DNS_KEYS.has(key))
+    ), null, 2)
+  };
 }
 
 export function SettingsView({
@@ -57,28 +79,43 @@ export function SettingsView({
   const [advancedDns, setAdvancedDns] = useState('{}');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [baseline, setBaseline] = useState<string | null>(null);
+  const fingerprint = JSON.stringify({
+    mode, targetPlatform, logLevel, ipv6, nameserver, defaultNameserver,
+    proxyNameserver, fallback, fakeIpRange, fakeIpFilter, advancedDns
+  });
+  const dirty = baseline !== null && fingerprint !== baseline;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const loadedProfile = useRef(profileId);
+  useUnsavedChanges(dirty, saving, resetDraft);
+
+  function resetDraft() {
+    dirtyRef.current = false;
+    loadedProfile.current = profileId;
+    const draft = settingsDraft(snapshot);
+    setMode(draft.mode);
+    setTargetPlatform(draft.targetPlatform);
+    setLogLevel(draft.logLevel);
+    setIpv6(draft.ipv6);
+    setNameserver(draft.nameserver);
+    setDefaultNameserver(draft.defaultNameserver);
+    setProxyNameserver(draft.proxyNameserver);
+    setFallback(draft.fallback);
+    setFakeIpRange(draft.fakeIpRange);
+    setFakeIpFilter(draft.fakeIpFilter);
+    setAdvancedDns(draft.advancedDns);
+    setBaseline(JSON.stringify(draft));
+    setError('');
+  }
 
   useEffect(() => {
-    const dns = isJsonObject(snapshot.profile.settings.dns)
-      ? snapshot.profile.settings.dns
-      : {};
-    setMode(snapshot.profile.mode);
-    setTargetPlatform(snapshot.profile.targetPlatform);
-    setLogLevel(snapshot.profile.logLevel);
-    setIpv6(snapshot.profile.ipv6 === true);
-    setNameserver(lines(dns.nameserver));
-    setDefaultNameserver(lines(dns['default-nameserver']));
-    setProxyNameserver(lines(dns['proxy-server-nameserver']));
-    setFallback(lines(dns.fallback));
-    setFakeIpRange(String(dns['fake-ip-range'] || ''));
-    setFakeIpFilter(lines(dns['fake-ip-filter']));
-    const rest = Object.fromEntries(
-      Object.entries(dns).filter(([key]) => !MANAGED_DNS_KEYS.has(key))
-    );
-    setAdvancedDns(JSON.stringify(rest, null, 2));
-  }, [snapshot]);
+    if (loadedProfile.current === profileId && dirtyRef.current) return;
+    resetDraft();
+  }, [snapshot, profileId]);
 
   async function save() {
+    if (saving) return;
     const invalid =
       formRoot.current?.querySelector<HTMLInputElement>('input:invalid');
     if (invalid) {
@@ -118,6 +155,8 @@ export function SettingsView({
           settings: { ...snapshot.profile.settings, dns }
         })
       });
+      dirtyRef.current = false;
+      setBaseline(fingerprint);
       await onSaved('全局设置与 DNS 已保存。');
     } catch (caught) {
       if (caught instanceof ApiError && caught.issues.length) {
@@ -131,7 +170,7 @@ export function SettingsView({
   }
 
   return (
-    <section className="panel settings-panel" ref={formRoot}>
+    <section className="panel settings-panel" ref={formRoot} inert={saving} aria-busy={saving}>
       <div className="panel-heading">
         <div>
           <p className="kicker">PROFILE / RUNTIME</p>
@@ -143,6 +182,8 @@ export function SettingsView({
           {saving ? '保存中…' : '保存设置'}
         </button>
       </div>
+
+      {dirty ? <p className="delivery-note" role="status">有未保存的修改，保存后才会检查并更新配置。</p> : null}
 
       <div className="settings-grid">
         <SelectField

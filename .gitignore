@@ -14,3 +14,5 @@ providers/
 rules/hj-*.list
 runtime-*.json
 Tests/live-remote-report.json
+playwright-report/
+test-results/

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { requireAdmin } from '@/lib/auth';
 import { jsonError, parseId, readJson } from '@/lib/http';
-import { getSnapshot, saveSettings } from '@/lib/repository';
+import { getCompilationSnapshot, getSnapshot, saveSettings } from '@/lib/repository';
 import { settingsSchema } from '@/lib/schemas';
 import { validateSnapshot } from '@/lib/validation';
 
@@ -38,7 +38,7 @@ export async function PUT(request: Request, context: Context) {
       logLevel: snapshot.profile.logLevel,
       ipv6: snapshot.profile.ipv6,
       settings: snapshot.profile.settings,
-      validation: validateSnapshot(snapshot)
+      validation: validateSnapshot(getCompilationSnapshot(snapshot.profile.id))
     });
   } catch (error) {
     return jsonError(error);

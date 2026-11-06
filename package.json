@@ -4,11 +4,14 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "prebuild": "node Scripts/check-build-data.mjs",
     "build": "next build",
     "start": "node Scripts/start-standalone.mjs",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test Tests/*.test.ts",
-    "check": "npm run typecheck && npm test"
+    "test:e2e": "playwright test",
+    "check": "npm run typecheck && npm test",
+    "postbuild": "node Scripts/check-build-data.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "1.1.15",
@@ -26,6 +29,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@playwright/test": "1.65.0",
     "@types/better-sqlite3": "7.6.13",
     "@types/node": "24.10.0",
     "@types/react": "19.2.2",
