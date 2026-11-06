@@ -1,6 +1,8 @@
+import { analyzeOrder } from './routing-analysis';
+import { validateSubscriptionUrl } from './provider-source';
 import { isIP } from 'node:net';
 
-import { isLogicalRuleType } from './rules';
+import { isLogicalRuleType, ruleSetNames } from './rules';
 import type {
   JsonValue,
   Snapshot,
@@ -76,11 +78,12 @@ function validCidr(payload: string): boolean {
   return prefix >= 0 && prefix <= (version === 4 ? 32 : 128);
 }
 
-function scanRuleSetReferences(value: JsonValue, references: Set<string>): void {
+function scanRuleSetReferences(
+  value: JsonValue,
+  references: Set<string>
+): void {
   if (typeof value === 'string') {
-    for (const match of value.matchAll(/rule-set:([A-Za-z0-9_.-]+)/g)) {
-      references.add(match[1]);
-    }
+    ruleSetNames(value).forEach((name) => references.add(name));
     return;
   }
   if (Array.isArray(value)) {
@@ -88,12 +91,17 @@ function scanRuleSetReferences(value: JsonValue, references: Set<string>): void 
     return;
   }
   if (isJsonObject(value)) {
-    Object.values(value).forEach((item) => scanRuleSetReferences(item, references));
+    Object.entries(value).forEach(([key, item]) => {
+      scanRuleSetReferences(key, references);
+      scanRuleSetReferences(item, references);
+    });
   }
 }
 
 function resolveScriptShortcuts(snapshot: Snapshot): Set<string> {
-  const section = snapshot.advancedSections.find((item) => item.key === 'script');
+  const section = snapshot.advancedSections.find(
+    (item) => item.key === 'script'
+  );
   if (!section || !isJsonObject(section.value)) return new Set();
   const shortcuts = section.value.shortcuts;
   if (!isJsonObject(shortcuts)) return new Set();
@@ -104,8 +112,12 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
   const issues: ValidationIssue[] = [];
   const proxyNames = new Set(snapshot.proxies.map((item) => item.name));
   const groupNames = new Set(snapshot.proxyGroups.map((item) => item.name));
-  const providerNames = new Set(snapshot.proxyProviders.map((item) => item.name));
-  const ruleProviderNames = new Set(snapshot.ruleProviders.map((item) => item.name));
+  const providerNames = new Set(
+    snapshot.proxyProviders.map((item) => item.name)
+  );
+  const ruleProviderNames = new Set(
+    snapshot.ruleProviders.map((item) => item.name)
+  );
   const ipRuleProviderNames = new Set(
     snapshot.ruleProviders
       .filter((item) => item.behavior === 'ipcidr')
@@ -129,10 +141,20 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
     );
   }
   for (const name of duplicates(snapshot.proxyProviders, (item) => item.name)) {
-    issue(issues, 'error', 'name.provider-duplicate', `Duplicate proxy provider: ${name}`);
+    issue(
+      issues,
+      'error',
+      'name.provider-duplicate',
+      `Duplicate proxy provider: ${name}`
+    );
   }
   for (const name of duplicates(snapshot.ruleProviders, (item) => item.name)) {
-    issue(issues, 'error', 'name.ruleset-duplicate', `Duplicate rule provider: ${name}`);
+    issue(
+      issues,
+      'error',
+      'name.ruleset-duplicate',
+      `Duplicate rule provider: ${name}`
+    );
   }
 
   for (const proxy of snapshot.proxies) {
@@ -149,15 +171,68 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
   }
 
   for (const provider of snapshot.proxyProviders) {
-    if (provider.requiresUrl) continue;
-    const hasUrl = typeof provider.config.url === 'string' && provider.config.url.length > 0;
-    const hasPath = typeof provider.config.path === 'string' && provider.config.path.length > 0;
-    if (!hasUrl && !hasPath) {
+    const hasUrl =
+      (provider.sourceType === 'remote' && provider.sourceConfigured) ||
+      (typeof provider.config.url === 'string' &&
+        provider.config.url.length > 0);
+    if (typeof provider.config.url === 'string') {
+      try {
+        validateSubscriptionUrl(provider.config.url);
+      } catch {
+        issue(
+          issues,
+          'error',
+          'proxy-provider.url-invalid',
+          `代理源 “${provider.name}” 的订阅地址无效，请重新配置 HTTP/HTTPS 地址。`,
+          'proxy-provider',
+          provider.id
+        );
+      }
+    }
+    if (
+      typeof provider.config.url === 'string' &&
+      provider.config.url.startsWith('http:')
+    ) {
+      issue(
+        issues,
+        'warning',
+        'proxy-provider.http-source',
+        `代理源 “${provider.name}” 使用明文 HTTP，设备更新订阅时地址与数据不会由 TLS 加密。`,
+        'proxy-provider',
+        provider.id
+      );
+    }
+    const headers = provider.config.headers;
+    if (
+      headers !== undefined &&
+      (!isJsonObject(headers) ||
+        Object.values(headers).some(
+          (value) =>
+            typeof value !== 'string' &&
+            !(Array.isArray(value) && value.every((v) => typeof v === 'string'))
+        ))
+    ) {
+      issue(
+        issues,
+        'error',
+        'proxy-provider.headers-invalid',
+        `代理源 “${provider.name}” 的请求头必须是字符串或字符串数组。`,
+        'proxy-provider',
+        provider.id
+      );
+    }
+    const hasPath =
+      typeof provider.config.path === 'string' &&
+      provider.config.path.length > 0;
+    if (
+      (provider.sourceType === 'remote' && !hasUrl) ||
+      (provider.sourceType === 'local' && !hasPath)
+    ) {
       issue(
         issues,
         'error',
         'proxy-provider.source-missing',
-        `Proxy provider “${provider.name}” needs url or path`,
+        `代理源 “${provider.name}” ${provider.sourceType === 'remote' ? '尚未填写订阅地址' : '尚未填写本地文件 path'}。`,
         'proxy-provider',
         provider.id
       );
@@ -264,7 +339,9 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
 
   const visiting = new Set<string>();
   const visited = new Set<string>();
-  const groupMap = new Map(snapshot.proxyGroups.map((group) => [group.name, group]));
+  const groupMap = new Map(
+    snapshot.proxyGroups.map((group) => [group.name, group])
+  );
   const walk = (name: string, chain: string[]): void => {
     if (visiting.has(name)) {
       issue(
@@ -357,7 +434,7 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
   const shortcuts = resolveScriptShortcuts(snapshot);
   const enabledRules = snapshot.rules.filter((rule) => rule.enabled);
   const matchRules = snapshot.rules.filter((rule) => rule.type === 'MATCH');
-  if (matchRules.length !== 1) {
+  if (snapshot.profile.mode === 'rule' && matchRules.length !== 1) {
     issue(
       issues,
       'error',
@@ -366,7 +443,10 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
     );
   }
   const finalEnabled = enabledRules.at(-1);
-  if (!finalEnabled || finalEnabled.type !== 'MATCH') {
+  if (
+    snapshot.profile.mode === 'rule' &&
+    (!finalEnabled || finalEnabled.type !== 'MATCH')
+  ) {
     issue(
       issues,
       'error',
@@ -481,7 +561,9 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
       const ports = rule.payload.split('-').map(Number);
       if (
         ports.length > 2 ||
-        ports.some((port) => !Number.isInteger(port) || port < 1 || port > 65535)
+        ports.some(
+          (port) => !Number.isInteger(port) || port < 1 || port > 65535
+        )
       ) {
         issue(
           issues,
@@ -521,12 +603,18 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
         rule.id
       );
     }
-    if (['PROCESS-NAME', 'PROCESS-PATH'].includes(rule.type)) {
+    if (
+      ['PROCESS-NAME', 'PROCESS-PATH'].includes(rule.type) &&
+      rule.enabled &&
+      snapshot.profile.targetPlatform !== 'macos'
+    ) {
       issue(
         issues,
-        'warning',
+        ['ios', 'tvos'].includes(snapshot.profile.targetPlatform)
+          ? 'warning'
+          : 'info',
         'rule.process-ios',
-        `Rule priority ${rule.priority} matches a process and is ignored by iOS/tvOS`,
+        `第 ${rule.priority} 条进程规则在 iOS/tvOS 不生效；${snapshot.profile.targetPlatform === 'any' ? '请在全局设置中选择目标平台。' : '当前配置将保留此规则，但设备会忽略它。'}`,
         'rule',
         rule.id
       );
@@ -577,6 +665,27 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
     }
   }
 
+  issues.push(...analyzeOrder(snapshot));
+  if (snapshot.ruleProviders.some((p) => p.providerType !== 'inline')) {
+    issue(
+      issues,
+      'info',
+      'analysis.remote-unchecked',
+      '远程或本地文件规则集的内容尚未加载，无法完整分析重叠范围；结构检查通过不代表远程资源或设备业务可用。'
+    );
+  }
+  if (
+    snapshot.proxyGroups.some(
+      (g) => Array.isArray(g.config.use) && g.config.use.length > 0
+    )
+  ) {
+    issue(
+      issues,
+      'info',
+      'group.members-unverified',
+      '订阅来源中的节点未由服务抓取，策略组筛选后的成员数量和连通性需在 Stash 中确认。'
+    );
+  }
   return {
     valid: !issues.some((item) => item.severity === 'error'),
     issues

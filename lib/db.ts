@@ -132,6 +132,26 @@ const MIGRATIONS = [
         ADD COLUMN display_name TEXT NOT NULL DEFAULT '';
       `);
     }
+  },
+  {
+    version: 3,
+    apply(db: Database.Database) {
+      db.exec(`
+        ALTER TABLE profiles ADD COLUMN target_platform TEXT NOT NULL DEFAULT 'any';
+        CREATE TABLE compiled_configs (
+          profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+          revision INTEGER NOT NULL,
+          artifact_ciphertext TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE TABLE download_links (
+          profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+          token_hash TEXT NOT NULL UNIQUE,
+          token_ciphertext TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+      `);
+    }
   }
 ] as const;
 
@@ -147,6 +167,10 @@ function migrate(db: Database.Database): void {
   for (const migration of MIGRATIONS) {
     if (migration.version <= version) continue;
     const apply = db.transaction(() => {
+      const actual = Number(db.pragma('user_version', { simple: true }));
+      if (actual > latestVersion)
+        throw new Error('Database schema is newer than this service supports');
+      if (actual >= migration.version) return;
       migration.apply(db);
       db.pragma(`user_version = ${migration.version}`);
     });
@@ -162,7 +186,10 @@ export function getDb(): Database.Database {
 
   process.umask(0o077);
   const file = databasePath();
-  mkdirSync(/*turbopackIgnore: true*/ path.dirname(file), { recursive: true, mode: 0o700 });
+  mkdirSync(/*turbopackIgnore: true*/ path.dirname(file), {
+    recursive: true,
+    mode: 0o700
+  });
   const db = new Database(/*turbopackIgnore: true*/ file);
   try {
     db.pragma('journal_mode = WAL');

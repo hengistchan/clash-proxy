@@ -1,20 +1,60 @@
 'use client';
-
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Plus, Save, Trash2 } from 'lucide-react';
-
 import type { JsonValue, Snapshot } from '@/lib/types';
-
 import { ApiError, apiRequest } from './api-client';
+import { ConfigFields } from './config-fields';
 
 interface DraftSection {
+  id: string;
   key: string;
   text: string;
-  original: JsonValue;
 }
-
-const PRESETS = ['http', 'cron', 'script-providers', 'script', 'mtproto', 'stashlink'];
-
+const PRESETS = [
+  {
+    key: 'http',
+    label: 'HTTP 处理',
+    description:
+      '配置需要处理的主机、重写和脚本规则。HTTPS 解密的证书信任需在设备中设置。',
+    fields: { mitm: [], 'force-http-engine': [], 'url-rewrite': [], script: [] }
+  },
+  {
+    key: 'cron',
+    label: '定时任务',
+    description: '配置任务名称、执行时间与参数；脚本需要在脚本来源中定义。',
+    fields: { script: [] }
+  },
+  {
+    key: 'script-providers',
+    label: '脚本来源',
+    description:
+      '按脚本标识定义下载地址和更新间隔。可以添加自定义名称的字段组。',
+    fields: {}
+  },
+  {
+    key: 'script',
+    label: '脚本条件',
+    description: '维护路由规则引用的脚本快捷条件。',
+    fields: { shortcuts: {} }
+  },
+  {
+    key: 'mtproto',
+    label: 'MTProto 服务',
+    description: '维护该顶层区块的设备服务参数。',
+    fields: {}
+  },
+  {
+    key: 'stashlink',
+    label: 'StashLink',
+    description: '维护该顶层区块的设备互联参数。',
+    fields: {}
+  }
+] as Array<{
+  key: string;
+  label: string;
+  description: string;
+  fields: Record<string, JsonValue>;
+}>;
 export function AdvancedView({
   snapshot,
   profileId,
@@ -26,136 +66,188 @@ export function AdvancedView({
   token: string;
   onSaved: (message: string) => Promise<void>;
 }) {
-  const [sections, setSections] = useState<DraftSection[]>([]);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    setSections(
-      snapshot.advancedSections.map((section) => ({
-        key: section.key,
-        text: JSON.stringify(section.value, null, 2),
-        original: section.value
-      }))
-    );
-  }, [snapshot]);
-
-  function updateSection(index: number, patch: Partial<DraftSection>) {
+  const [sections, setSections] = useState<DraftSection[]>([]),
+    [customKey, setCustomKey] = useState('');
+  const [saving, setSaving] = useState(false),
+    [error, setError] = useState('');
+  const root = useRef<HTMLElement>(null);
+  useEffect(
+    () =>
+      setSections(
+        snapshot.advancedSections.map((section) => ({
+          id: String(section.id),
+          key: section.key,
+          text: JSON.stringify(section.value, null, 2)
+        }))
+      ),
+    [snapshot]
+  );
+  function add(key: string) {
+    key = key.trim();
+    if (!key || sections.some((s) => s.key === key)) {
+      setError('请输入尚未存在的区块名称。');
+      return;
+    }
+    setSections((current) => [
+      ...current,
+      { id: crypto.randomUUID(), key, text: '{}' }
+    ]);
+    setCustomKey('');
+    setError('');
+  }
+  function update(index: number, patch: Partial<DraftSection>) {
     setSections((current) =>
-      current.map((section, itemIndex) =>
-        itemIndex === index ? { ...section, ...patch } : section
-      )
+      current.map((item, i) => (i === index ? { ...item, ...patch } : item))
     );
   }
-
   async function save() {
+    const invalid =
+      root.current?.querySelector<HTMLInputElement>('input:invalid');
+    if (invalid) {
+      invalid.reportValidity();
+      invalid.focus();
+      return;
+    }
     setSaving(true);
     setError('');
     try {
-      const parsed = sections.map((section) => {
-        if (!section.key.trim()) throw new Error('高级区块名称不能为空');
+      const parsed = sections.map((s) => {
+        if (!s.key.trim()) throw new Error('区块名称不能为空');
         let value: JsonValue;
         try {
-          value = JSON.parse(section.text || 'null') as JsonValue;
+          value = JSON.parse(s.text);
         } catch {
-          throw new Error(`区块 ${section.key} 不是合法 JSON`);
+          throw new Error(`区块 ${s.key} 的源码格式不正确，请在专家模式修复。`);
         }
-        return { key: section.key.trim(), value };
+        return { key: s.key.trim(), value };
       });
       await apiRequest(`/api/profiles/${profileId}/advanced`, {
         method: 'PUT',
         token,
         body: JSON.stringify({ sections: parsed })
       });
-      await onSaved('高级配置区块已保存。');
+      await onSaved('扩展配置已保存并检查。');
     } catch (caught) {
-      if (caught instanceof ApiError && caught.issues.length) {
-        setError(caught.issues.map((issue) => issue.message).join('\n'));
-      } else {
-        setError(caught instanceof Error ? caught.message : '保存失败');
-      }
+      setError(
+        caught instanceof ApiError && caught.issues.length
+          ? caught.issues.map((i) => i.message).join('\n')
+          : caught instanceof Error
+            ? caught.message
+            : '保存失败'
+      );
     } finally {
       setSaving(false);
     }
   }
-
   return (
-    <section className="panel">
+    <section className="panel" ref={root}>
       <div className="panel-heading">
         <div>
-          <p className="kicker">EXTENSIONS / FULL YAML</p>
-          <h2>高级配置区块</h2>
+          <p className="kicker">扩展配置</p>
+          <h2>按字段调整扩展功能</h2>
           <p>
-            管理 HTTP 引擎、脚本、定时任务、MTProto、StashLink 以及任何新版 Stash
-            顶层字段。内容加密写入 SQLite。
+            原文件中的区块会自动展开为字段表单。列表可添加、删除和调整顺序，开关和数字保持原类型；需要直接编辑源码时再切换专家模式。
           </p>
         </div>
-        <button className="button primary" onClick={save} disabled={saving}>
+        <button
+          className="button primary"
+          onClick={() => void save()}
+          disabled={saving}
+        >
           <Save size={16} />
-          {saving ? '保存中…' : '保存高级区块'}
+          {saving ? '保存中…' : '保存扩展配置'}
         </button>
       </div>
-
       <div className="preset-row">
-        {PRESETS.filter((preset) => !sections.some((section) => section.key === preset)).map(
-          (preset) => (
+        {PRESETS.filter((p) => !sections.some((s) => s.key === p.key)).map(
+          (p) => (
             <button
               className="preset-chip"
-              key={preset}
-              onClick={() =>
-                setSections((current) => [
-                  ...current,
-                  { key: preset, text: '{}', original: {} }
-                ])
-              }
+              key={p.key}
+              onClick={() => add(p.key)}
             >
               <Plus size={13} />
-              {preset}
+              {p.label}
             </button>
           )
         )}
       </div>
-
+      <details>
+        <summary>添加原文件以外的自定义顶层区块</summary>
+        <div className="value-add">
+          <input
+            className="input"
+            aria-label="自定义区块名称"
+            value={customKey}
+            onChange={(e) => setCustomKey(e.target.value)}
+            placeholder="Stash 顶层字段名"
+          />
+          <button className="button secondary" onClick={() => add(customKey)}>
+            添加区块
+          </button>
+        </div>
+        <p className="delivery-note">
+          自定义字段会按输入结构保存；兼容性取决于目标 Stash 版本。
+        </p>
+      </details>
       <div className="advanced-stack">
-        {sections.map((section, index) => (
-          <article className="advanced-card" key={`${section.key}-${index}`}>
-            <header>
-              <label className="field">
-                <span>顶层 key</span>
-                <input
-                  className="input mono"
-                  value={section.key}
-                  onChange={(event) => updateSection(index, { key: event.target.value })}
-                />
-              </label>
-              <button
-                className="icon-button danger"
-                aria-label="删除区块"
-                onClick={() =>
-                  setSections((current) =>
-                    current.filter((_item, itemIndex) => itemIndex !== index)
-                  )
-                }
-              >
-                <Trash2 size={16} />
-              </button>
-            </header>
-            <textarea
-              className="code-input"
-              rows={11}
-              value={section.text}
-              onChange={(event) => updateSection(index, { text: event.target.value })}
-            />
-          </article>
-        ))}
+        {sections.map((section, index) => {
+          const metadata = PRESETS.find((p) => p.key === section.key);
+          return (
+            <article className="advanced-card" key={section.id}>
+              <header>
+                <div>
+                  <h3>{metadata?.label || section.key}</h3>
+                  <p className="delivery-note">
+                    {metadata?.description ||
+                      '来自原文件的扩展字段，保留原结构并按需编辑。'}
+                  </p>
+                </div>
+                <button
+                  className="icon-button danger"
+                  aria-label={`删除区块 ${section.key}`}
+                  onClick={() =>
+                    setSections((current) =>
+                      current.filter((s) => s.id !== section.id)
+                    )
+                  }
+                >
+                  <Trash2 size={16} />
+                </button>
+              </header>
+              <details>
+                <summary>区块标识：{section.key}</summary>
+                <label className="field">
+                  <span>Stash 顶层字段名</span>
+                  <input
+                    className="input"
+                    value={section.key}
+                    onChange={(e) => update(index, { key: e.target.value })}
+                  />
+                </label>
+              </details>
+              <ConfigFields
+                label={metadata?.label || section.key}
+                text={section.text}
+                onChange={(text) => update(index, { text })}
+                objectOnly={false}
+                suggestions={metadata?.fields}
+              />
+            </article>
+          );
+        })}
         {sections.length === 0 ? (
           <div className="empty-state">
-            <strong>没有高级区块</strong>
-            <span>当前 Profile 只使用结构化区块。可从上方按需加入。</span>
+            <strong>当前配置没有额外区块</strong>
+            <span>只需添加自己会使用的功能。</span>
           </div>
         ) : null}
       </div>
-      {error ? <pre className="inline-error">{error}</pre> : null}
+      {error ? (
+        <pre className="inline-error" role="alert">
+          {error}
+        </pre>
+      ) : null}
     </section>
   );
 }

@@ -8,6 +8,7 @@ import {
   Edit3,
   Globe2,
   Layers3,
+  Network,
   Plus,
   Search,
   Trash2
@@ -55,15 +56,18 @@ function itemType(item: ResourceItem, kind: ResourceKind): string {
       remote: '远程下载',
       local: '本地文件'
     }[provider.providerType];
-    const behavior = {
-      domain: '域名',
-      ipcidr: 'IP 网段',
-      classical: '混合规则'
-    }[provider.behavior] || provider.behavior;
+    const behavior =
+      {
+        domain: '域名',
+        ipcidr: 'IP 网段',
+        classical: '混合规则'
+      }[provider.behavior] || provider.behavior;
     return `${source} · ${behavior}`;
   }
   if (kind === 'proxy-providers') {
-    return (item as ProxyProvider).requiresUrl ? 'request-scoped url' : 'stored source';
+    return (item as ProxyProvider).sourceConfigured
+      ? '来源已配置'
+      : '来源待填写';
   }
   return 'host map';
 }
@@ -72,6 +76,10 @@ function itemSummary(item: ResourceItem, kind: ResourceKind): string[] {
   if (kind === 'proxies') {
     const proxy = item as ProxyNode;
     return Object.entries(proxy.config)
+      .filter(
+        ([key]) =>
+          !/pass|secret|token|uuid|private.key|authorization/i.test(key)
+      )
       .slice(0, 3)
       .map(([key, value]) => `${key}: ${String(value)}`);
   }
@@ -91,6 +99,9 @@ function itemSummary(item: ResourceItem, kind: ResourceKind): string[] {
       : '';
     return [
       `${members} 个显式成员`,
+      Array.isArray(group.config.proxies) && group.config.proxies.length
+        ? `成员: ${group.config.proxies.map(String).join(' → ')}`
+        : '',
       use ? `use: ${use}` : '',
       typeof group.config.filter === 'string'
         ? `filter: ${group.config.filter}`
@@ -125,6 +136,7 @@ export function ResourceList({
   subtitle,
   items,
   onAdd,
+  onInspect,
   onEdit,
   onDelete
 }: {
@@ -133,6 +145,7 @@ export function ResourceList({
   subtitle: string;
   items: ResourceItem[];
   onAdd: () => void;
+  onInspect: (item: ResourceItem) => void;
   onEdit: (item: ResourceItem) => void;
   onDelete: (item: ResourceItem) => Promise<void>;
 }) {
@@ -152,7 +165,7 @@ export function ResourceList({
     <section className="panel">
       <div className="panel-heading">
         <div>
-          <p className="kicker">{kind.toUpperCase()} / SQLITE</p>
+          <p className="kicker">资源管理</p>
           <h2>{title}</h2>
           <p>{subtitle}</p>
         </div>
@@ -171,7 +184,9 @@ export function ResourceList({
             placeholder="搜索名称、类型或配置摘要"
           />
         </label>
-        <span>{visible.length} / {items.length}</span>
+        <span>
+          {visible.length} / {items.length}
+        </span>
       </div>
 
       <div className="resource-grid">
@@ -186,13 +201,25 @@ export function ResourceList({
                 <StatusBadge tone="muted">{itemType(item, kind)}</StatusBadge>
                 {kind === 'rule-providers' &&
                 (item as RuleProvider).displayName.trim() &&
-                (item as RuleProvider).displayName !== (item as RuleProvider).name ? (
+                (item as RuleProvider).displayName !==
+                  (item as RuleProvider).name ? (
                   <code className="resource-identifier" title="规则集配置标识">
                     {rawItemName(item)}
                   </code>
                 ) : null}
               </div>
               <div className="card-actions">
+                {kind !== 'hosts' ? (
+                  <button
+                    className="button secondary small"
+                    aria-label={`查看 ${rawItemName(item)} 的关联`}
+                    title="查看关联"
+                    onClick={() => onInspect(item)}
+                  >
+                    <Network size={15} />
+                    关联
+                  </button>
+                ) : null}
                 <button
                   className="icon-button"
                   aria-label={`编辑 ${rawItemName(item)}`}

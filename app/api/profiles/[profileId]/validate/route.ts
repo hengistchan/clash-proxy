@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { requireAdmin } from '@/lib/auth';
 import { jsonError, parseId } from '@/lib/http';
-import { getSnapshot } from '@/lib/repository';
+import { getCompilationSnapshot } from '@/lib/repository';
 import { validateSnapshot } from '@/lib/validation';
 
 export const runtime = 'nodejs';
@@ -15,7 +15,9 @@ export async function GET(
   try {
     requireAdmin(request);
     const { profileId } = await context.params;
-    return NextResponse.json(validateSnapshot(getSnapshot(parseId(profileId))));
+    return NextResponse.json(
+      validateSnapshot(getCompilationSnapshot(parseId(profileId)))
+    );
   } catch (error) {
     return jsonError(error);
   }

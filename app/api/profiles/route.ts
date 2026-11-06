@@ -21,7 +21,7 @@ export async function POST(request: Request) {
   try {
     requireAdmin(request);
     const input = profileCreateSchema.parse(await readJson(request));
-    const snapshot = createProfile(input.name, input.importYaml);
+    const snapshot = createProfile(input.name, input.importYaml, input.example);
     return NextResponse.json(snapshot, { status: 201 });
   } catch (error) {
     return jsonError(error);

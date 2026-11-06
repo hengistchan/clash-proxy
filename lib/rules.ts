@@ -114,7 +114,11 @@ export function normalizeRuleInput(input: {
   if (policy.includes('\n') || policy.includes('\r')) {
     throw new HttpError(400, 'Rule policy cannot contain line breaks');
   }
-  const options = [...new Set((input.options || []).map((option) => option.trim()).filter(Boolean))];
+  const options = [
+    ...new Set(
+      (input.options || []).map((option) => option.trim()).filter(Boolean)
+    )
+  ];
   for (const option of options) {
     if (!RULE_OPTIONS.includes(option as (typeof RULE_OPTIONS)[number])) {
       throw new HttpError(400, `Unsupported rule option: ${option}`);
@@ -169,3 +173,5 @@ export function ruleListToYaml(rules: StashRule[]): string[] {
 export function isJsonConfig(value: unknown): value is Record<string, unknown> {
   return isJsonObject(value);
 }
+
+export { ruleSetNames } from './references';

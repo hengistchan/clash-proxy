@@ -7,14 +7,23 @@ const standalone = path.join(root, '.next', 'standalone');
 const standaloneNext = path.join(standalone, '.next');
 
 await mkdir(standaloneNext, { recursive: true });
-await cp(path.join(root, '.next', 'static'), path.join(standaloneNext, 'static'), {
-  recursive: true,
-  force: true
-});
+await cp(
+  path.join(root, '.next', 'static'),
+  path.join(standaloneNext, 'static'),
+  {
+    recursive: true,
+    force: true
+  }
+);
 await cp(path.join(root, 'public'), path.join(standalone, 'public'), {
   recursive: true,
   force: true
 });
+
+await cp(
+  path.join(root, 'Production.yaml'),
+  path.join(standalone, 'Production.yaml')
+);
 
 const child = spawn(process.execPath, ['server.js'], {
   cwd: standalone,

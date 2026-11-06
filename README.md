@@ -48,20 +48,23 @@
 
 公开仓库：<https://github.com/hengistchan/clash-proxy>
 
-### 网页生成完整配置
+### 网页管理与下载配置
 
-仓库内置 SQLite 规则账本、前端和 API 服务。规则可以逐条增删改查并按
-`priority` 从小到大参与匹配；生成配置时会自动把相邻同类规则压缩为 inline rule-set：
+内置 React / Next.js + Node.js + SQLite 管理器。新配置可以从最小配置开始，导入已有 YAML，
+或显式选择示例；每个 provider 独立加密保存订阅地址，保存后自动检查和生成。
 
 ```text
-GET /api?url=https://your-subscription.example/path&template=production
+GET /api/profiles/{id}/config_download
 ```
 
-本地启动和 Docker 持久化部署方法见 [SERVICE.md](SERVICE.md)。服务可管理 Profile、DNS、
-代理节点与代理源、策略组、规则集、按优先级排列的路由规则、Hosts 和其他 Stash 顶层区块。
-SQLite 数据保存在 Docker named volume `stash-data`，容器重建不会丢失配置；订阅 URL 只
-参与当前请求，不会写入数据库。网页使用 POST，避免敏感 URL 进入浏览器地址栏；公网部署
-必须位于 HTTPS 反向代理之后，并配置 `STASH_ADMIN_TOKEN`。
+无需在下载时传入私人 URL。网页可以下载完整 YAML、交付 ZIP，或生成可撤销的设备订阅链接。
+有错误的草稿保留编辑内容，下载继续提供最近成功版本。没有特定品牌或广告规则名称的输出过滤。
+
+本地开发、持久化部署与数据备份见 [SERVICE.md](SERVICE.md)。运行后访问 `/docs/api` 阅读完整
+API 文档，或下载 `/api/openapi.json`。私人来源、历史快照与成功产物加密保存，普通 provider
+API 不回传 URL 和认证请求头。公开部署需 HTTPS 和 `STASH_ADMIN_TOKEN`。
+
+以下 GitHub 文件是可选的示例配置与规则资产；它们不是管理器必须依赖的业务结构。
 
 `main` 代表最新模板。当前 `Core.yaml` 和 `Production*.yaml` 中的 GLaDOS 地址仍是
 `example.invalid` 占位符，**不能直接作为可联网的完整配置导入**。完整配置应拉取

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { requireAdmin } from '@/lib/auth';
 import { jsonError, parseId } from '@/lib/http';
-import { getSnapshot } from '@/lib/repository';
+import { getSnapshot, getCompilationSnapshot } from '@/lib/repository';
 import { validateSnapshot } from '@/lib/validation';
 
 export const runtime = 'nodejs';
@@ -18,7 +18,7 @@ export async function GET(
     const snapshot = getSnapshot(parseId(profileId));
     return NextResponse.json({
       ...snapshot,
-      validation: validateSnapshot(snapshot)
+      validation: validateSnapshot(getCompilationSnapshot(snapshot.profile.id))
     });
   } catch (error) {
     return jsonError(error);

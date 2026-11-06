@@ -11,7 +11,7 @@ export async function GET() {
     return NextResponse.json({
       status: 'ok',
       service: 'stash-config-forge',
-      version: '3.0.0'
+      version: '4.0.0'
     });
   } catch {
     return NextResponse.json(

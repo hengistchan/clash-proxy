@@ -4,9 +4,16 @@ import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 
 import { decryptJson, encryptJson } from './crypto';
+import { refreshCompiledConfig } from './compilation';
+import { validateSubscriptionUrl } from './provider-source';
 import { getDb, transaction } from './db';
 import { HttpError } from './http';
-import { normalizeRuleInput, parseRuleLine, serializeRule } from './rules';
+import {
+  normalizeRuleInput,
+  parseRuleLine,
+  serializeRule,
+  ruleSetNames
+} from './rules';
 import type {
   AdvancedSection,
   HostEntry,
@@ -46,7 +53,6 @@ const REMOVED_TOP_LEVEL = new Set([
   'rule-providers',
   'rules'
 ]);
-const AD_PROVIDER = 'Repcz-Ads-AWAvenue';
 
 function now(): string {
   return new Date().toISOString();
@@ -73,8 +79,12 @@ function mapProfile(row: DbRow): Profile {
     name: String(row.name),
     mode: String(row.mode) as ProfileMode,
     logLevel: String(row.log_level) as LogLevel,
-    ipv6: row.ipv6 === null || row.ipv6 === undefined ? null : Boolean(row.ipv6),
+    ipv6:
+      row.ipv6 === null || row.ipv6 === undefined ? null : Boolean(row.ipv6),
     settings: decryptObject(row.settings_ciphertext),
+    targetPlatform: String(
+      row.target_platform || 'any'
+    ) as Profile['targetPlatform'],
     active: Boolean(row.active),
     revision: Number(row.revision),
     createdAt: String(row.created_at),
@@ -93,11 +103,20 @@ function mapProxy(row: DbRow): ProxyNode {
 }
 
 function mapProxyProvider(row: DbRow): ProxyProvider {
+  const config = decryptObject(row.config_ciphertext);
+  const sourceType =
+    Boolean(row.requires_url) || config.url ? 'remote' : 'local';
   return {
     id: Number(row.id),
     name: String(row.name),
-    config: decryptObject(row.config_ciphertext),
-    requiresUrl: Boolean(row.requires_url),
+    config,
+    requiresUrl: sourceType === 'remote' && !config.url,
+    sourceType,
+    sourceConfigured:
+      sourceType === 'remote' ? Boolean(config.url) : Boolean(config.path),
+    headersConfigured: Boolean(
+      config.headers && Object.keys(config.headers).length
+    ),
     sortOrder: Number(row.sort_order)
   };
 }
@@ -112,7 +131,10 @@ function mapProxyGroup(row: DbRow): ProxyGroup {
   };
 }
 
-function mapRuleProvider(row: DbRow, entries: RuleProviderEntry[]): RuleProvider {
+function mapRuleProvider(
+  row: DbRow,
+  entries: RuleProviderEntry[]
+): RuleProvider {
   return {
     id: Number(row.id),
     name: String(row.name),
@@ -164,7 +186,9 @@ function mapAdvanced(row: DbRow): AdvancedSection {
 }
 
 function getProfileRow(db: Database.Database, profileId: number): DbRow {
-  const row = db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId) as DbRow | undefined;
+  const row = db
+    .prepare('SELECT * FROM profiles WHERE id = ?')
+    .get(profileId) as DbRow | undefined;
   if (!row) {
     throw new HttpError(404, 'Profile not found');
   }
@@ -193,19 +217,27 @@ function listRuleEntries(
 function snapshotFromDb(db: Database.Database, profileId: number): Snapshot {
   const profile = mapProfile(getProfileRow(db, profileId));
   const proxies = db
-    .prepare('SELECT * FROM proxies WHERE profile_id = ? ORDER BY sort_order, id')
+    .prepare(
+      'SELECT * FROM proxies WHERE profile_id = ? ORDER BY sort_order, id'
+    )
     .all(profileId)
     .map((row) => mapProxy(row as DbRow));
   const proxyProviders = db
-    .prepare('SELECT * FROM proxy_providers WHERE profile_id = ? ORDER BY sort_order, id')
+    .prepare(
+      'SELECT * FROM proxy_providers WHERE profile_id = ? ORDER BY sort_order, id'
+    )
     .all(profileId)
     .map((row) => mapProxyProvider(row as DbRow));
   const proxyGroups = db
-    .prepare('SELECT * FROM proxy_groups WHERE profile_id = ? ORDER BY sort_order, id')
+    .prepare(
+      'SELECT * FROM proxy_groups WHERE profile_id = ? ORDER BY sort_order, id'
+    )
     .all(profileId)
     .map((row) => mapProxyGroup(row as DbRow));
   const ruleProviderRows = db
-    .prepare('SELECT * FROM rule_providers WHERE profile_id = ? ORDER BY sort_order, id')
+    .prepare(
+      'SELECT * FROM rule_providers WHERE profile_id = ? ORDER BY sort_order, id'
+    )
     .all(profileId) as DbRow[];
   const entriesByProvider = new Map<number, RuleProviderEntry[]>();
   const entryRows = db
@@ -260,15 +292,19 @@ function recordRevision(db: Database.Database, profileId: number): number {
   const profile = mapProfile(getProfileRow(db, profileId));
   const nextRevision = profile.revision + 1;
   const touched = now();
-  db.prepare('UPDATE profiles SET revision = ?, updated_at = ? WHERE id = ?').run(
-    nextRevision,
-    touched,
-    profileId
-  );
+  db.prepare(
+    'UPDATE profiles SET revision = ?, updated_at = ? WHERE id = ?'
+  ).run(nextRevision, touched, profileId);
   const updated = snapshotFromDb(db, profileId);
   db.prepare(
     'INSERT INTO revisions (profile_id, revision, config_ciphertext, created_at) VALUES (?, ?, ?, ?)'
-  ).run(profileId, nextRevision, encryptJson(updated as unknown as JsonValue), touched);
+  ).run(
+    profileId,
+    nextRevision,
+    encryptJson(updated as unknown as JsonValue),
+    touched
+  );
+  refreshCompiledConfig(db, updated);
   return nextRevision;
 }
 
@@ -278,7 +314,9 @@ function nextSortOrder(
   profileId: number
 ): number {
   const row = db
-    .prepare(`SELECT COALESCE(MAX(sort_order), 0) AS maximum FROM ${table} WHERE profile_id = ?`)
+    .prepare(
+      `SELECT COALESCE(MAX(sort_order), 0) AS maximum FROM ${table} WHERE profile_id = ?`
+    )
     .get(profileId) as DbRow;
   return Number(row.maximum) + 1;
 }
@@ -288,7 +326,8 @@ function deepReplaceString(
   replacement: (input: string) => string
 ): JsonValue {
   if (typeof value === 'string') return replacement(value);
-  if (Array.isArray(value)) return value.map((item) => deepReplaceString(item, replacement));
+  if (Array.isArray(value))
+    return value.map((item) => deepReplaceString(item, replacement));
   if (isJsonObject(value)) {
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [
@@ -300,10 +339,19 @@ function deepReplaceString(
   return value;
 }
 
-function replaceRuleSetReference(input: string, oldName: string, newName: string): string {
-  return input
-    .replaceAll(`rule-set:${oldName}`, `rule-set:${newName}`)
-    .replaceAll(`RULE-SET,${oldName},`, `RULE-SET,${newName},`);
+function replaceRuleSetReference(
+  input: string,
+  oldName: string,
+  newName: string
+): string {
+  if (input.startsWith('rule-set:'))
+    return (
+      'rule-set:' +
+      ruleSetNames(input)
+        .map((name) => (name === oldName ? newName : name))
+        .join(',')
+    );
+  return input.replaceAll(`RULE-SET,${oldName},`, `RULE-SET,${newName},`);
 }
 
 function rewriteRenamedResource(
@@ -315,18 +363,21 @@ function rewriteRenamedResource(
 ): void {
   if (kind === 'proxy-providers') {
     const groups = db
-      .prepare('SELECT id, config_ciphertext FROM proxy_groups WHERE profile_id = ?')
+      .prepare(
+        'SELECT id, config_ciphertext FROM proxy_groups WHERE profile_id = ?'
+      )
       .all(profileId) as DbRow[];
     for (const group of groups) {
       const config = decryptObject(group.config_ciphertext);
       const use = Array.isArray(config.use)
-        ? config.use.map((item) => (String(item) === oldName ? newName : String(item)))
+        ? config.use.map((item) =>
+            String(item) === oldName ? newName : String(item)
+          )
         : config.use;
       if (Array.isArray(use) && use.some((item) => String(item) === newName)) {
-        db.prepare('UPDATE proxy_groups SET config_ciphertext = ? WHERE id = ?').run(
-          encryptJson({ ...config, use }),
-          Number(group.id)
-        );
+        db.prepare(
+          'UPDATE proxy_groups SET config_ciphertext = ? WHERE id = ?'
+        ).run(encryptJson({ ...config, use }), Number(group.id));
       }
     }
     return;
@@ -337,40 +388,41 @@ function rewriteRenamedResource(
       "UPDATE rules SET payload = ? WHERE profile_id = ? AND type = 'RULE-SET' AND payload = ?"
     ).run(newName, profileId, oldName);
     const profile = getProfileRow(db, profileId);
-    const settings = decryptJson<JsonObject>(String(profile.settings_ciphertext));
-    const changed = deepReplaceString(
-      settings,
-      (value) => replaceRuleSetReference(value, oldName, newName)
+    const settings = decryptJson<JsonObject>(
+      String(profile.settings_ciphertext)
+    );
+    const changed = deepReplaceString(settings, (value) =>
+      replaceRuleSetReference(value, oldName, newName)
     );
     db.prepare('UPDATE profiles SET settings_ciphertext = ? WHERE id = ?').run(
       encryptJson(changed),
       profileId
     );
     const advanced = db
-      .prepare('SELECT id, value_ciphertext FROM advanced_sections WHERE profile_id = ?')
+      .prepare(
+        'SELECT id, value_ciphertext FROM advanced_sections WHERE profile_id = ?'
+      )
       .all(profileId) as DbRow[];
     for (const section of advanced) {
       const value = decryptJson<JsonValue>(String(section.value_ciphertext));
-      const next = deepReplaceString(
-        value,
-        (item) => replaceRuleSetReference(item, oldName, newName)
+      const next = deepReplaceString(value, (item) =>
+        replaceRuleSetReference(item, oldName, newName)
       );
-      db.prepare('UPDATE advanced_sections SET value_ciphertext = ? WHERE id = ?').run(
-        encryptJson(next),
-        Number(section.id)
-      );
+      db.prepare(
+        'UPDATE advanced_sections SET value_ciphertext = ? WHERE id = ?'
+      ).run(encryptJson(next), Number(section.id));
     }
     return;
   }
 
   if (kind === 'proxies' || kind === 'proxy-groups') {
-    db.prepare('UPDATE rules SET policy = ? WHERE profile_id = ? AND policy = ?').run(
-      newName,
-      profileId,
-      oldName
-    );
+    db.prepare(
+      'UPDATE rules SET policy = ? WHERE profile_id = ? AND policy = ?'
+    ).run(newName, profileId, oldName);
     const groups = db
-      .prepare('SELECT id, config_ciphertext FROM proxy_groups WHERE profile_id = ?')
+      .prepare(
+        'SELECT id, config_ciphertext FROM proxy_groups WHERE profile_id = ?'
+      )
       .all(profileId) as DbRow[];
     for (const group of groups) {
       const config = decryptObject(group.config_ciphertext);
@@ -396,16 +448,19 @@ function rewriteRenamedResource(
         updated['ssid-policy'] = policy;
       }
       if (changed) {
-        db.prepare('UPDATE proxy_groups SET config_ciphertext = ? WHERE id = ?').run(
-          encryptJson(updated),
-          Number(group.id)
-        );
+        db.prepare(
+          'UPDATE proxy_groups SET config_ciphertext = ? WHERE id = ?'
+        ).run(encryptJson(updated), Number(group.id));
       }
     }
   }
 }
 
-function collectReferences(snapshot: Snapshot, kind: string, name: string): string[] {
+function collectReferences(
+  snapshot: Snapshot,
+  kind: string,
+  name: string
+): string[] {
   const references = new Set<string>();
   const groupUses = (group: ProxyGroup) =>
     Array.isArray(group.config.use) ? group.config.use.map(String) : [];
@@ -422,7 +477,9 @@ function collectReferences(snapshot: Snapshot, kind: string, name: string): stri
   if (kind === 'proxy-providers') {
     for (const group of snapshot.proxyGroups) {
       if (groupUses(group).includes(name)) {
-        references.add(`strategy group “${group.name}” uses provider “${name}”`);
+        references.add(
+          `strategy group “${group.name}” uses provider “${name}”`
+        );
       }
     }
   } else if (kind === 'proxies' || kind === 'proxy-groups') {
@@ -446,15 +503,20 @@ function collectReferences(snapshot: Snapshot, kind: string, name: string): stri
   } else if (kind === 'rule-providers') {
     for (const rule of snapshot.rules) {
       if (rule.type === 'RULE-SET' && rule.payload === name) {
-        references.add(`rule priority ${rule.priority} references rule set “${name}”`);
+        references.add(
+          `rule priority ${rule.priority} references rule set “${name}”`
+        );
       }
     }
     const scan = (value: JsonValue): boolean => {
       if (typeof value === 'string') {
-        return value.includes(`rule-set:${name}`);
+        return ruleSetNames(value).includes(name);
       }
       if (Array.isArray(value)) return value.some((item) => scan(item));
-      if (isJsonObject(value)) return Object.values(value).some((item) => scan(item));
+      if (isJsonObject(value))
+        return Object.entries(value).some(
+          ([key, item]) => scan(key) || scan(item)
+        );
       return false;
     };
     if (scan(snapshot.profile.settings)) {
@@ -462,14 +524,20 @@ function collectReferences(snapshot: Snapshot, kind: string, name: string): stri
     }
     for (const section of snapshot.advancedSections) {
       if (scan(section.value)) {
-        references.add(`advanced section “${section.key}” references rule set “${name}”`);
+        references.add(
+          `advanced section “${section.key}” references rule set “${name}”`
+        );
       }
     }
   }
   return [...references];
 }
 
-function assertNoReferences(snapshot: Snapshot, kind: string, name: string): void {
+function assertNoReferences(
+  snapshot: Snapshot,
+  kind: string,
+  name: string
+): void {
   const references = collectReferences(snapshot, kind, name);
   if (references.length) {
     throw new HttpError(
@@ -485,7 +553,9 @@ function assertProfileNameAvailable(
   exceptId?: number
 ): void {
   const row = db
-    .prepare('SELECT id FROM profiles WHERE name = ? AND (? IS NULL OR id <> ?)')
+    .prepare(
+      'SELECT id FROM profiles WHERE name = ? AND (? IS NULL OR id <> ?)'
+    )
     .get(name, exceptId || null, exceptId || null);
   if (row) {
     throw new HttpError(409, `Profile name already exists: ${name}`);
@@ -518,7 +588,9 @@ function assertPolicyNameAvailable(
 ): void {
   const except = exceptId || null;
   const proxy = db
-    .prepare('SELECT id FROM proxies WHERE profile_id = ? AND name = ? AND (? IS NULL OR id <> ?)')
+    .prepare(
+      'SELECT id FROM proxies WHERE profile_id = ? AND name = ? AND (? IS NULL OR id <> ?)'
+    )
     .get(profileId, name, except, except);
   const group = db
     .prepare(
@@ -526,7 +598,10 @@ function assertPolicyNameAvailable(
     )
     .get(profileId, name, except, except);
   if ((kind === 'proxies' && group) || (kind === 'proxy-groups' && proxy)) {
-    throw new HttpError(409, 'Direct proxies and strategy groups must use unique policy names');
+    throw new HttpError(
+      409,
+      'Direct proxies and strategy groups must use unique policy names'
+    );
   }
 }
 
@@ -552,12 +627,21 @@ function replaceProfileResources(
   profileId: number,
   document: {
     mode?: ProfileMode;
+    targetPlatform?: Profile['targetPlatform'];
     logLevel?: LogLevel;
     ipv6?: boolean | null;
     settings: JsonObject;
     proxies: Array<{ name: string; type: string; config: JsonObject }>;
-    proxyProviders: Array<{ name: string; config: JsonObject; requiresUrl: boolean }>;
-    proxyGroups: Array<{ name: string; type: ProxyGroupType; config: JsonObject }>;
+    proxyProviders: Array<{
+      name: string;
+      config: JsonObject;
+      requiresUrl: boolean;
+    }>;
+    proxyGroups: Array<{
+      name: string;
+      type: ProxyGroupType;
+      config: JsonObject;
+    }>;
     ruleProviders: Array<{
       name: string;
       displayName?: string;
@@ -580,10 +664,21 @@ function replaceProfileResources(
 ): void {
   getProfileRow(db, profileId);
   const touched = now();
+  const existingSources = new Map(
+    (
+      db
+        .prepare('SELECT * FROM proxy_providers WHERE profile_id = ?')
+        .all(profileId) as DbRow[]
+    ).map((row) => [String(row.name), decryptObject(row.config_ciphertext)])
+  );
   const existingRuleSetNames = new Map(
-    (db.prepare('SELECT name, display_name FROM rule_providers WHERE profile_id = ?')
-      .all(profileId) as DbRow[])
-      .map((row) => [String(row.name), String(row.display_name || '')])
+    (
+      db
+        .prepare(
+          'SELECT name, display_name FROM rule_providers WHERE profile_id = ?'
+        )
+        .all(profileId) as DbRow[]
+    ).map((row) => [String(row.name), String(row.display_name || '')])
   );
   db.prepare('DELETE FROM proxies WHERE profile_id = ?').run(profileId);
   db.prepare('DELETE FROM proxy_providers WHERE profile_id = ?').run(profileId);
@@ -591,16 +686,21 @@ function replaceProfileResources(
   db.prepare('DELETE FROM rule_providers WHERE profile_id = ?').run(profileId);
   db.prepare('DELETE FROM rules WHERE profile_id = ?').run(profileId);
   db.prepare('DELETE FROM hosts WHERE profile_id = ?').run(profileId);
-  db.prepare('DELETE FROM advanced_sections WHERE profile_id = ?').run(profileId);
+  db.prepare('DELETE FROM advanced_sections WHERE profile_id = ?').run(
+    profileId
+  );
 
   db.prepare(
-    `UPDATE profiles SET mode = ?, log_level = ?, ipv6 = ?, settings_ciphertext = ?, updated_at = ? WHERE id = ?`
+    `UPDATE profiles SET mode = ?, log_level = ?, ipv6 = ?, settings_ciphertext = ?, updated_at = ?, target_platform = COALESCE(?, target_platform) WHERE id = ?`
   ).run(
     document.mode || 'rule',
     document.logLevel || 'silent',
-    document.ipv6 === null || document.ipv6 === undefined ? null : Number(document.ipv6),
+    document.ipv6 === null || document.ipv6 === undefined
+      ? null
+      : Number(document.ipv6),
     encryptJson(document.settings),
     touched,
+    document.targetPlatform ?? null,
     profileId
   );
 
@@ -627,7 +727,18 @@ function replaceProfileResources(
     providerInsert.run(
       profileId,
       item.name,
-      encryptJson(item.config),
+      encryptJson(
+        item.requiresUrl && existingSources.has(item.name)
+          ? {
+              ...item.config,
+              ...Object.fromEntries(
+                Object.entries(existingSources.get(item.name)!).filter(
+                  ([key]) => key === 'url' || key === 'headers'
+                )
+              )
+            }
+          : item.config
+      ),
       Number(item.requiresUrl),
       index + 1
     );
@@ -710,8 +821,16 @@ function documentFromYaml(value: unknown): {
   ipv6: boolean | null;
   settings: JsonObject;
   proxies: Array<{ name: string; type: string; config: JsonObject }>;
-  proxyProviders: Array<{ name: string; config: JsonObject; requiresUrl: boolean }>;
-  proxyGroups: Array<{ name: string; type: ProxyGroupType; config: JsonObject }>;
+  proxyProviders: Array<{
+    name: string;
+    config: JsonObject;
+    requiresUrl: boolean;
+  }>;
+  proxyGroups: Array<{
+    name: string;
+    type: ProxyGroupType;
+    config: JsonObject;
+  }>;
   ruleProviders: Array<{
     name: string;
     behavior: string;
@@ -728,12 +847,12 @@ function documentFromYaml(value: unknown): {
   }
   const source = asJsonObject(value);
   const mode = ['rule', 'global', 'direct'].includes(String(source.mode))
-    ? String(source.mode) as ProfileMode
+    ? (String(source.mode) as ProfileMode)
     : 'rule';
   const logLevel = ['silent', 'info', 'warning', 'error', 'debug'].includes(
     String(source['log-level'])
   )
-    ? String(source['log-level']) as LogLevel
+    ? (String(source['log-level']) as LogLevel)
     : 'silent';
   const ipv6 = typeof source.ipv6 === 'boolean' ? source.ipv6 : null;
   const dns = isJsonObject(source.dns) ? source.dns : {};
@@ -742,13 +861,21 @@ function documentFromYaml(value: unknown): {
   const proxies: Array<{ name: string; type: string; config: JsonObject }> = [];
   if (Array.isArray(source.proxies)) {
     source.proxies.forEach((item, index) => {
-      if (!isJsonObject(item) || typeof item.name !== 'string' || typeof item.type !== 'string') {
+      if (
+        !isJsonObject(item) ||
+        typeof item.name !== 'string' ||
+        typeof item.type !== 'string'
+      ) {
         throw new HttpError(400, `proxies[${index}] requires name and type`);
       }
       const config = { ...item };
       delete config.name;
       delete config.type;
-      proxies.push({ name: item.name, type: item.type, config: asJsonObject(config) });
+      proxies.push({
+        name: item.name,
+        type: item.type,
+        config: asJsonObject(config)
+      });
     });
   }
 
@@ -766,7 +893,12 @@ function documentFromYaml(value: unknown): {
       if (placeholder) {
         delete config.url;
       }
-      proxyProviders.push({ name, config, requiresUrl: placeholder });
+      proxyProviders.push({
+        name,
+        config,
+        requiresUrl:
+          placeholder && (typeof raw.url === 'string' || !config.path)
+      });
     }
   }
 
@@ -777,11 +909,21 @@ function documentFromYaml(value: unknown): {
   }> = [];
   if (Array.isArray(source['proxy-groups'])) {
     source['proxy-groups'].forEach((item, index) => {
-      if (!isJsonObject(item) || typeof item.name !== 'string' || typeof item.type !== 'string') {
-        throw new HttpError(400, `proxy-groups[${index}] requires name and type`);
+      if (
+        !isJsonObject(item) ||
+        typeof item.name !== 'string' ||
+        typeof item.type !== 'string'
+      ) {
+        throw new HttpError(
+          400,
+          `proxy-groups[${index}] requires name and type`
+        );
       }
       if (!PROXY_GROUP_TYPES.includes(item.type as ProxyGroupType)) {
-        throw new HttpError(400, `Unsupported strategy group type: ${item.type}`);
+        throw new HttpError(
+          400,
+          `Unsupported strategy group type: ${item.type}`
+        );
       }
       const config = { ...item };
       delete config.name;
@@ -805,7 +947,8 @@ function documentFromYaml(value: unknown): {
     for (const [name, raw] of Object.entries(source['rule-providers'])) {
       if (!isJsonObject(raw)) continue;
       const config = asJsonObject(raw);
-      const behavior = typeof raw.behavior === 'string' ? raw.behavior : 'classical';
+      const behavior =
+        typeof raw.behavior === 'string' ? raw.behavior : 'classical';
       const inline = raw.type === 'inline';
       const providerType: RuleProviderType = inline
         ? 'inline'
@@ -814,9 +957,7 @@ function documentFromYaml(value: unknown): {
           : 'local';
       let entries: string[] = [];
       if (inline) {
-        entries = Array.isArray(raw.payload)
-          ? raw.payload.map(String)
-          : [];
+        entries = Array.isArray(raw.payload) ? raw.payload.map(String) : [];
         delete config.type;
         delete config.payload;
       }
@@ -826,7 +967,16 @@ function documentFromYaml(value: unknown): {
 
   const rules = Array.isArray(source.rules)
     ? normalizeImportedRules(source.rules)
-    : [{ type: 'MATCH', payload: '', policy: 'DIRECT', options: [], enabled: true, note: '' }];
+    : [
+        {
+          type: 'MATCH',
+          payload: '',
+          policy: 'DIRECT',
+          options: [],
+          enabled: true,
+          note: ''
+        }
+      ];
 
   const hosts: Array<{ pattern: string; value: string }> = [];
   if (isJsonObject(source.hosts)) {
@@ -857,7 +1007,9 @@ function documentFromYaml(value: unknown): {
   };
 }
 
-function parseYamlDocument(yamlText: string): ReturnType<typeof documentFromYaml> {
+function parseYamlDocument(
+  yamlText: string
+): ReturnType<typeof documentFromYaml> {
   try {
     return documentFromYaml(parseYaml(yamlText));
   } catch (error) {
@@ -872,7 +1024,10 @@ function parseYamlDocument(yamlText: string): ReturnType<typeof documentFromYaml
 function seedTemplate(): string {
   const configured = process.env.STASH_TEMPLATE_DIR;
   const file = configured
-    ? path.join(path.resolve(/*turbopackIgnore: true*/ configured), 'Production.yaml')
+    ? path.join(
+        path.resolve(/*turbopackIgnore: true*/ configured),
+        'Production.yaml'
+      )
     : path.join(process.cwd(), 'Production.yaml');
   return readFileSync(/*turbopackIgnore: true*/ file, 'utf8');
 }
@@ -881,25 +1036,43 @@ let initialized = false;
 
 export function ensureInitialized(): void {
   if (initialized) return;
-  initialized = true;
   const db = getDb();
-  const existing = db.prepare('SELECT COUNT(*) AS total FROM profiles').get() as DbRow;
+  const existing = db
+    .prepare('SELECT COUNT(*) AS total FROM profiles')
+    .get() as DbRow;
   if (Number(existing.total) > 0) {
+    initialized = true;
     return;
   }
-  transaction((tx) => {
+  const initialize = db.transaction(() => {
+    const tx = db;
+    const count = tx
+      .prepare('SELECT COUNT(*) AS total FROM profiles')
+      .get() as DbRow;
+    if (Number(count.total) > 0) return;
     const created = tx
       .prepare(
         `INSERT INTO profiles
           (name, mode, log_level, ipv6, settings_ciphertext, active, revision, created_at, updated_at)
          VALUES (?, 'rule', 'info', NULL, ?, 1, 0, ?, ?)`
       )
-      .run('HJ Stash', encryptJson({ dns: {} }), now(), now());
+      .run(
+        process.env.STASH_SEED_EXAMPLE === '1' ? '示例配置' : '我的配置',
+        encryptJson({ dns: {} }),
+        now(),
+        now()
+      );
     const profileId = Number(created.lastInsertRowid);
-    const document = parseYamlDocument(seedTemplate());
+    const document = parseYamlDocument(
+      process.env.STASH_SEED_EXAMPLE === '1'
+        ? seedTemplate()
+        : 'mode: rule\nrules: ["MATCH,DIRECT"]\n'
+    );
     replaceProfileResources(tx, profileId, document);
     recordRevision(tx, profileId);
   });
+  initialize.immediate();
+  initialized = true;
 }
 
 export function resetRepositoryForTests(): void {
@@ -921,14 +1094,20 @@ export function getProfile(profileId: number): Profile {
 
 export function getActiveProfile(): Profile {
   ensureInitialized();
-  const row = getDb().prepare('SELECT * FROM profiles WHERE active = 1').get() as DbRow | undefined;
+  const row = getDb()
+    .prepare('SELECT * FROM profiles WHERE active = 1')
+    .get() as DbRow | undefined;
   if (!row) {
     throw new HttpError(503, 'No active configuration profile');
   }
   return mapProfile(row);
 }
 
-export function createProfile(name: string, yamlText?: string): Snapshot {
+export function createProfile(
+  name: string,
+  yamlText?: string,
+  example = false
+): Snapshot {
   ensureInitialized();
   return transaction((db) => {
     assertProfileNameAvailable(db, name);
@@ -940,33 +1119,34 @@ export function createProfile(name: string, yamlText?: string): Snapshot {
       )
       .run(name, encryptJson({ dns: {} }), now(), now());
     const profileId = Number(result.lastInsertRowid);
-    const document = yamlText
-      ? parseYamlDocument(yamlText)
-      : {
-          mode: 'rule' as const,
-          logLevel: 'silent' as const,
-          ipv6: null,
-          settings: { dns: { nameserver: ['223.5.5.5'] } },
-          proxies: [],
-          proxyProviders: [],
-          proxyGroups: [],
-          ruleProviders: [],
-          rules: [
-            {
-              type: 'MATCH',
-              payload: '',
-              policy: 'DIRECT',
-              options: [],
-              enabled: true,
-              note: ''
-            }
-          ],
-          hosts: [],
-          advancedSections: []
-        };
+    const document =
+      yamlText || example
+        ? parseYamlDocument(yamlText || seedTemplate())
+        : {
+            mode: 'rule' as const,
+            logLevel: 'silent' as const,
+            ipv6: null,
+            settings: { dns: { nameserver: ['223.5.5.5'] } },
+            proxies: [],
+            proxyProviders: [],
+            proxyGroups: [],
+            ruleProviders: [],
+            rules: [
+              {
+                type: 'MATCH',
+                payload: '',
+                policy: 'DIRECT',
+                options: [],
+                enabled: true,
+                note: ''
+              }
+            ],
+            hosts: [],
+            advancedSections: []
+          };
     replaceProfileResources(db, profileId, document);
     recordRevision(db, profileId);
-    return snapshotFromDb(db, profileId);
+    return publicSnapshot(snapshotFromDb(db, profileId));
   });
 }
 
@@ -980,14 +1160,19 @@ export function updateProfile(
     const name = patch.name ?? String(current.name);
     assertProfileNameAvailable(db, name, profileId);
     if (patch.active === false && Boolean(current.active)) {
-      throw new HttpError(409, 'Activate another profile instead of leaving no active profile');
+      throw new HttpError(
+        409,
+        'Activate another profile instead of leaving no active profile'
+      );
     }
     if (patch.active === true) {
       db.prepare('UPDATE profiles SET active = 0 WHERE active = 1').run();
     }
     db.prepare('UPDATE profiles SET name = ?, active = ? WHERE id = ?').run(
       name,
-      patch.active === undefined ? Number(current.active) : Number(patch.active),
+      patch.active === undefined
+        ? Number(current.active)
+        : Number(patch.active),
       profileId
     );
     recordRevision(db, profileId);
@@ -1006,9 +1191,28 @@ export function deleteProfile(profileId: number): void {
   });
 }
 
+export function publicProvider(provider: ProxyProvider): ProxyProvider {
+  const config = { ...provider.config };
+  delete config.url;
+  delete config.headers;
+  return { ...provider, config };
+}
+function publicSnapshot(snapshot: Snapshot): Snapshot {
+  return {
+    ...snapshot,
+    proxyProviders: snapshot.proxyProviders.map(publicProvider)
+  };
+}
+// Server compiler only. Do not serialize this snapshot into management responses.
+export function getCompilationSnapshot(profileId: number): Snapshot {
+  ensureInitialized();
+  const db = getDb();
+  return db.transaction(() => snapshotFromDb(db, profileId))();
+}
+
 export function getSnapshot(profileId: number): Snapshot {
   ensureInitialized();
-  return snapshotFromDb(getDb(), profileId);
+  return publicSnapshot(getCompilationSnapshot(profileId));
 }
 
 export function saveSettings(
@@ -1018,6 +1222,7 @@ export function saveSettings(
     logLevel: LogLevel;
     ipv6?: boolean | null;
     settings: JsonObject;
+    targetPlatform?: Profile['targetPlatform'];
   }
 ): Snapshot {
   ensureInitialized();
@@ -1025,18 +1230,21 @@ export function saveSettings(
     getProfileRow(db, profileId);
     db.prepare(
       `UPDATE profiles
-       SET mode = ?, log_level = ?, ipv6 = ?, settings_ciphertext = ?, updated_at = ?
+       SET mode = ?, log_level = ?, ipv6 = ?, settings_ciphertext = ?, updated_at = ?, target_platform = COALESCE(?, target_platform)
        WHERE id = ?`
     ).run(
       input.mode,
       input.logLevel,
-      input.ipv6 === undefined || input.ipv6 === null ? null : Number(input.ipv6),
+      input.ipv6 === undefined || input.ipv6 === null
+        ? null
+        : Number(input.ipv6),
       encryptJson(input.settings),
       now(),
+      input.targetPlatform ?? null,
       profileId
     );
     recordRevision(db, profileId);
-    return snapshotFromDb(db, profileId);
+    return publicSnapshot(snapshotFromDb(db, profileId));
   });
 }
 
@@ -1050,13 +1258,17 @@ export function createProxy(
     assertUniqueName(db, 'proxies', profileId, input.name);
     assertPolicyNameAvailable(db, profileId, input.name, 'proxies');
     const order = nextSortOrder(db, 'proxies', profileId);
-    const result = db.prepare(
-      `INSERT INTO proxies (profile_id, name, type, config_ciphertext, sort_order)
+    const result = db
+      .prepare(
+        `INSERT INTO proxies (profile_id, name, type, config_ciphertext, sort_order)
        VALUES (?, ?, ?, ?, ?)`
-    ).run(profileId, input.name, input.type, encryptJson(input.config), order);
+      )
+      .run(profileId, input.name, input.type, encryptJson(input.config), order);
     recordRevision(db, profileId);
     return mapProxy(
-      db.prepare('SELECT * FROM proxies WHERE id = ?').get(result.lastInsertRowid) as DbRow
+      db
+        .prepare('SELECT * FROM proxies WHERE id = ?')
+        .get(result.lastInsertRowid) as DbRow
     );
   });
 }
@@ -1082,7 +1294,9 @@ export function updateProxy(
       rewriteRenamedResource(db, profileId, 'proxies', oldName, input.name);
     }
     recordRevision(db, profileId);
-    return mapProxy(db.prepare('SELECT * FROM proxies WHERE id = ?').get(itemId) as DbRow);
+    return mapProxy(
+      db.prepare('SELECT * FROM proxies WHERE id = ?').get(itemId) as DbRow
+    );
   });
 }
 
@@ -1100,26 +1314,68 @@ export function deleteProxy(profileId: number, itemId: number): void {
   });
 }
 
+interface ProxyProviderInput {
+  name: string;
+  config: JsonObject;
+  sourceType?: 'remote' | 'local';
+  sourceUrl?: string;
+  sourceHeaders?: JsonObject;
+  clearSource?: boolean;
+  clearHeaders?: boolean;
+}
+function providerConfig(
+  input: ProxyProviderInput,
+  current: JsonObject = {}
+): JsonObject {
+  const config = { ...input.config };
+  if (input.clearSource) delete config.url;
+  else if (input.sourceUrl !== undefined)
+    config.url = validateSubscriptionUrl(input.sourceUrl);
+  else if (typeof config.url === 'string')
+    config.url = validateSubscriptionUrl(config.url);
+  else if (current.url) config.url = current.url;
+  if (input.clearHeaders) delete config.headers;
+  else if (input.sourceHeaders !== undefined)
+    config.headers = input.sourceHeaders;
+  else if (config.headers === undefined && current.headers)
+    config.headers = current.headers;
+  if (input.sourceType === 'local') delete config.url;
+  return config;
+}
+
 export function createProxyProvider(
   profileId: number,
-  input: { name: string; config: JsonObject; requiresUrl?: boolean }
+  input: ProxyProviderInput
 ): ProxyProvider {
   ensureInitialized();
   return transaction((db) => {
     getProfileRow(db, profileId);
     assertUniqueName(db, 'proxy_providers', profileId, input.name);
     const order = nextSortOrder(db, 'proxy_providers', profileId);
-    const config = { ...input.config };
-    const requiresUrl = input.requiresUrl ?? false;
-    if (requiresUrl) delete config.url;
-    const result = db.prepare(
-      `INSERT INTO proxy_providers
+    const config = providerConfig(input);
+    const requiresUrl = input.sourceType
+      ? input.sourceType === 'remote'
+      : Boolean(config.url) || !config.path;
+    const result = db
+      .prepare(
+        `INSERT INTO proxy_providers
          (profile_id, name, config_ciphertext, requires_url, sort_order)
        VALUES (?, ?, ?, ?, ?)`
-    ).run(profileId, input.name, encryptJson(config), Number(requiresUrl), order);
+      )
+      .run(
+        profileId,
+        input.name,
+        encryptJson(config),
+        Number(requiresUrl),
+        order
+      );
     recordRevision(db, profileId);
-    return mapProxyProvider(
-      db.prepare('SELECT * FROM proxy_providers WHERE id = ?').get(result.lastInsertRowid) as DbRow
+    return publicProvider(
+      mapProxyProvider(
+        db
+          .prepare('SELECT * FROM proxy_providers WHERE id = ?')
+          .get(result.lastInsertRowid) as DbRow
+      )
     );
   });
 }
@@ -1127,7 +1383,7 @@ export function createProxyProvider(
 export function updateProxyProvider(
   profileId: number,
   itemId: number,
-  input: { name: string; config: JsonObject; requiresUrl?: boolean }
+  input: ProxyProviderInput
 ): ProxyProvider {
   ensureInitialized();
   return transaction((db) => {
@@ -1137,19 +1393,33 @@ export function updateProxyProvider(
     if (!current) throw new HttpError(404, 'Proxy provider not found');
     assertUniqueName(db, 'proxy_providers', profileId, input.name, itemId);
     const oldName = String(current.name);
-    const requiresUrl = input.requiresUrl ?? Boolean(current.requires_url);
-    const config = { ...input.config };
-    if (requiresUrl) delete config.url;
+    const config = providerConfig(
+      input,
+      decryptObject(current.config_ciphertext)
+    );
+    const requiresUrl = input.sourceType
+      ? input.sourceType === 'remote'
+      : mapProxyProvider(current).sourceType === 'remote';
     db.prepare(
       `UPDATE proxy_providers
        SET name = ?, config_ciphertext = ?, requires_url = ? WHERE id = ?`
     ).run(input.name, encryptJson(config), Number(requiresUrl), itemId);
     if (oldName !== input.name) {
-      rewriteRenamedResource(db, profileId, 'proxy-providers', oldName, input.name);
+      rewriteRenamedResource(
+        db,
+        profileId,
+        'proxy-providers',
+        oldName,
+        input.name
+      );
     }
     recordRevision(db, profileId);
-    return mapProxyProvider(
-      db.prepare('SELECT * FROM proxy_providers WHERE id = ?').get(itemId) as DbRow
+    return publicProvider(
+      mapProxyProvider(
+        db
+          .prepare('SELECT * FROM proxy_providers WHERE id = ?')
+          .get(itemId) as DbRow
+      )
     );
   });
 }
@@ -1161,7 +1431,11 @@ export function deleteProxyProvider(profileId: number, itemId: number): void {
       .prepare('SELECT * FROM proxy_providers WHERE id = ? AND profile_id = ?')
       .get(itemId, profileId) as DbRow | undefined;
     if (!row) throw new HttpError(404, 'Proxy provider not found');
-    assertNoReferences(snapshotFromDb(db, profileId), 'proxy-providers', String(row.name));
+    assertNoReferences(
+      snapshotFromDb(db, profileId),
+      'proxy-providers',
+      String(row.name)
+    );
     db.prepare('DELETE FROM proxy_providers WHERE id = ?').run(itemId);
     recordRevision(db, profileId);
   });
@@ -1177,13 +1451,17 @@ export function createProxyGroup(
     assertUniqueName(db, 'proxy_groups', profileId, input.name);
     assertPolicyNameAvailable(db, profileId, input.name, 'proxy-groups');
     const order = nextSortOrder(db, 'proxy_groups', profileId);
-    const result = db.prepare(
-      `INSERT INTO proxy_groups (profile_id, name, type, config_ciphertext, sort_order)
+    const result = db
+      .prepare(
+        `INSERT INTO proxy_groups (profile_id, name, type, config_ciphertext, sort_order)
        VALUES (?, ?, ?, ?, ?)`
-    ).run(profileId, input.name, input.type, encryptJson(input.config), order);
+      )
+      .run(profileId, input.name, input.type, encryptJson(input.config), order);
     recordRevision(db, profileId);
     return mapProxyGroup(
-      db.prepare('SELECT * FROM proxy_groups WHERE id = ?').get(result.lastInsertRowid) as DbRow
+      db
+        .prepare('SELECT * FROM proxy_groups WHERE id = ?')
+        .get(result.lastInsertRowid) as DbRow
     );
   });
 }
@@ -1200,13 +1478,25 @@ export function updateProxyGroup(
       .get(itemId, profileId) as DbRow | undefined;
     if (!current) throw new HttpError(404, 'Strategy group not found');
     assertUniqueName(db, 'proxy_groups', profileId, input.name, itemId);
-    assertPolicyNameAvailable(db, profileId, input.name, 'proxy-groups', itemId);
+    assertPolicyNameAvailable(
+      db,
+      profileId,
+      input.name,
+      'proxy-groups',
+      itemId
+    );
     const oldName = String(current.name);
     db.prepare(
       'UPDATE proxy_groups SET name = ?, type = ?, config_ciphertext = ? WHERE id = ?'
     ).run(input.name, input.type, encryptJson(input.config), itemId);
     if (oldName !== input.name) {
-      rewriteRenamedResource(db, profileId, 'proxy-groups', oldName, input.name);
+      rewriteRenamedResource(
+        db,
+        profileId,
+        'proxy-groups',
+        oldName,
+        input.name
+      );
     }
     recordRevision(db, profileId);
     return mapProxyGroup(
@@ -1222,7 +1512,11 @@ export function deleteProxyGroup(profileId: number, itemId: number): void {
       .prepare('SELECT * FROM proxy_groups WHERE id = ? AND profile_id = ?')
       .get(itemId, profileId) as DbRow | undefined;
     if (!row) throw new HttpError(404, 'Strategy group not found');
-    assertNoReferences(snapshotFromDb(db, profileId), 'proxy-groups', String(row.name));
+    assertNoReferences(
+      snapshotFromDb(db, profileId),
+      'proxy-groups',
+      String(row.name)
+    );
     db.prepare('DELETE FROM proxy_groups WHERE id = ?').run(itemId);
     recordRevision(db, profileId);
   });
@@ -1244,19 +1538,21 @@ export function createRuleProvider(
     getProfileRow(db, profileId);
     assertUniqueName(db, 'rule_providers', profileId, input.name);
     const order = nextSortOrder(db, 'rule_providers', profileId);
-    const result = db.prepare(
-      `INSERT INTO rule_providers
+    const result = db
+      .prepare(
+        `INSERT INTO rule_providers
          (profile_id, name, display_name, behavior, provider_type, config_ciphertext, sort_order)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      profileId,
-      input.name,
-      input.displayName?.trim() || '',
-      input.behavior,
-      input.providerType,
-      encryptJson(input.config),
-      order
-    );
+      )
+      .run(
+        profileId,
+        input.name,
+        input.displayName?.trim() || '',
+        input.behavior,
+        input.providerType,
+        encryptJson(input.config),
+        order
+      );
     const providerId = Number(result.lastInsertRowid);
     input.entries.forEach((entry, index) => {
       db.prepare(
@@ -1265,7 +1561,9 @@ export function createRuleProvider(
     });
     recordRevision(db, profileId);
     return mapRuleProvider(
-      db.prepare('SELECT * FROM rule_providers WHERE id = ?').get(providerId) as DbRow,
+      db
+        .prepare('SELECT * FROM rule_providers WHERE id = ?')
+        .get(providerId) as DbRow,
       listRuleEntries(db, providerId)
     );
   });
@@ -1302,18 +1600,28 @@ export function updateRuleProvider(
       encryptJson(input.config),
       itemId
     );
-    db.prepare('DELETE FROM rule_provider_entries WHERE provider_id = ?').run(itemId);
+    db.prepare('DELETE FROM rule_provider_entries WHERE provider_id = ?').run(
+      itemId
+    );
     input.entries.forEach((entry, index) => {
       db.prepare(
         'INSERT INTO rule_provider_entries (provider_id, value, sort_order) VALUES (?, ?, ?)'
       ).run(itemId, entry, index + 1);
     });
     if (oldName !== input.name) {
-      rewriteRenamedResource(db, profileId, 'rule-providers', oldName, input.name);
+      rewriteRenamedResource(
+        db,
+        profileId,
+        'rule-providers',
+        oldName,
+        input.name
+      );
     }
     recordRevision(db, profileId);
     return mapRuleProvider(
-      db.prepare('SELECT * FROM rule_providers WHERE id = ?').get(itemId) as DbRow,
+      db
+        .prepare('SELECT * FROM rule_providers WHERE id = ?')
+        .get(itemId) as DbRow,
       listRuleEntries(db, itemId)
     );
   });
@@ -1326,7 +1634,11 @@ export function deleteRuleProvider(profileId: number, itemId: number): void {
       .prepare('SELECT * FROM rule_providers WHERE id = ? AND profile_id = ?')
       .get(itemId, profileId) as DbRow | undefined;
     if (!row) throw new HttpError(404, 'Rule provider not found');
-    assertNoReferences(snapshotFromDb(db, profileId), 'rule-providers', String(row.name));
+    assertNoReferences(
+      snapshotFromDb(db, profileId),
+      'rule-providers',
+      String(row.name)
+    );
     db.prepare('DELETE FROM rule_providers WHERE id = ?').run(itemId);
     recordRevision(db, profileId);
   });
@@ -1373,9 +1685,11 @@ export function createRuleProviderEntry(
       1,
       Math.min(input.position || ids.length + 1, ids.length + 1)
     );
-    const result = db.prepare(
-      'INSERT INTO rule_provider_entries (provider_id, value, sort_order) VALUES (?, ?, ?)'
-    ).run(providerId, value, ids.length + 1000001);
+    const result = db
+      .prepare(
+        'INSERT INTO rule_provider_entries (provider_id, value, sort_order) VALUES (?, ?, ?)'
+      )
+      .run(providerId, value, ids.length + 1000001);
     const id = Number(result.lastInsertRowid);
     ids.splice(position - 1, 0, id);
     renumberProviderEntries(db, providerId, ids);
@@ -1412,7 +1726,11 @@ export function updateRuleProviderEntry(
     const ids = listRuleEntries(db, providerId).map((entry) => entry.id);
     if (input.position !== undefined) {
       ids.splice(ids.indexOf(entryId), 1);
-      ids.splice(Math.max(0, Math.min(input.position - 1, ids.length)), 0, entryId);
+      ids.splice(
+        Math.max(0, Math.min(input.position - 1, ids.length)),
+        0,
+        entryId
+      );
       renumberProviderEntries(db, providerId, ids);
     }
     recordRevision(db, profileId);
@@ -1442,7 +1760,8 @@ export function deleteRuleProviderEntry(
         'DELETE FROM rule_provider_entries WHERE id = ? AND provider_id = ?'
       )
       .run(entryId, providerId);
-    if (!deleted.changes) throw new HttpError(404, 'Rule provider entry not found');
+    if (!deleted.changes)
+      throw new HttpError(404, 'Rule provider entry not found');
     const ids = listRuleEntries(db, providerId).map((entry) => entry.id);
     renumberProviderEntries(db, providerId, ids);
     recordRevision(db, profileId);
@@ -1459,16 +1778,18 @@ function terminalRule(rules: StashRule[]): StashRule {
   return terminal;
 }
 
-function renumberRules(db: Database.Database, profileId: number, ids: number[]): void {
+function renumberRules(
+  db: Database.Database,
+  profileId: number,
+  ids: number[]
+): void {
   db.prepare(
     'UPDATE rules SET priority = priority + 1000000 WHERE profile_id = ?'
   ).run(profileId);
   ids.forEach((id, index) => {
-    db.prepare('UPDATE rules SET priority = ? WHERE id = ? AND profile_id = ?').run(
-      index + 1,
-      id,
-      profileId
-    );
+    db.prepare(
+      'UPDATE rules SET priority = ? WHERE id = ? AND profile_id = ?'
+    ).run(index + 1, id, profileId);
   });
 }
 
@@ -1496,20 +1817,22 @@ export function createRule(
     const ids = current.rules
       .map((item) => item.id)
       .filter((id) => id !== terminal.id);
-    const order = db.prepare(
-      `INSERT INTO rules
+    const order = db
+      .prepare(
+        `INSERT INTO rules
         (profile_id, priority, type, payload, policy, options_json, enabled, note)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      profileId,
-      current.rules.length + 1,
-      rule.type,
-      rule.payload,
-      rule.policy,
-      JSON.stringify(rule.options),
-      Number(rule.enabled),
-      rule.note
-    );
+      )
+      .run(
+        profileId,
+        current.rules.length + 1,
+        rule.type,
+        rule.payload,
+        rule.policy,
+        JSON.stringify(rule.options),
+        Number(rule.enabled),
+        rule.note
+      );
     const id = Number(order.lastInsertRowid);
     const insertAt = Math.max(
       0,
@@ -1551,7 +1874,10 @@ export function updateRule(
     if (!existing) throw new HttpError(404, 'Rule not found');
     if (existing.type === 'MATCH') {
       if (rule.type !== 'MATCH' || !rule.enabled) {
-        throw new HttpError(409, 'The terminal MATCH rule cannot be converted or disabled');
+        throw new HttpError(
+          409,
+          'The terminal MATCH rule cannot be converted or disabled'
+        );
       }
       if (input.priority && input.priority !== existing.priority) {
         throw new HttpError(409, 'The terminal MATCH rule must remain last');
@@ -1600,9 +1926,11 @@ export function deleteRule(profileId: number, itemId: number): void {
     }
     db.prepare('DELETE FROM rules WHERE id = ?').run(itemId);
     const ids = (
-      db.prepare(
-        'SELECT id FROM rules WHERE profile_id = ? ORDER BY priority, id'
-      ).all(profileId) as DbRow[]
+      db
+        .prepare(
+          'SELECT id FROM rules WHERE profile_id = ? ORDER BY priority, id'
+        )
+        .all(profileId) as DbRow[]
     ).map((item) => Number(item.id));
     renumberRules(db, profileId, ids);
     recordRevision(db, profileId);
@@ -1621,7 +1949,10 @@ export function reorderRules(profileId: number, ids: number[]): StashRule[] {
       ids.some((id) => !currentIds.includes(id)) ||
       ids.at(-1) !== terminal.id
     ) {
-      throw new HttpError(409, 'Order must include every rule once and end with MATCH');
+      throw new HttpError(
+        409,
+        'Order must include every rule once and end with MATCH'
+      );
     }
     renumberRules(db, profileId, ids);
     recordRevision(db, profileId);
@@ -1641,12 +1972,16 @@ export function createHost(
       .get(profileId, input.pattern);
     if (exists) throw new HttpError(409, 'Host pattern already exists');
     const order = nextSortOrder(db, 'hosts', profileId);
-    const result = db.prepare(
-      'INSERT INTO hosts (profile_id, pattern, value, sort_order) VALUES (?, ?, ?, ?)'
-    ).run(profileId, input.pattern, input.value, order);
+    const result = db
+      .prepare(
+        'INSERT INTO hosts (profile_id, pattern, value, sort_order) VALUES (?, ?, ?, ?)'
+      )
+      .run(profileId, input.pattern, input.value, order);
     recordRevision(db, profileId);
     return mapHost(
-      db.prepare('SELECT * FROM hosts WHERE id = ?').get(result.lastInsertRowid) as DbRow
+      db
+        .prepare('SELECT * FROM hosts WHERE id = ?')
+        .get(result.lastInsertRowid) as DbRow
     );
   });
 }
@@ -1659,12 +1994,16 @@ export function updateHost(
   ensureInitialized();
   return transaction((db) => {
     const exists = db
-      .prepare('SELECT id FROM hosts WHERE profile_id = ? AND pattern = ? AND id <> ?')
+      .prepare(
+        'SELECT id FROM hosts WHERE profile_id = ? AND pattern = ? AND id <> ?'
+      )
       .get(profileId, input.pattern, itemId);
     if (exists) throw new HttpError(409, 'Host pattern already exists');
-    const changed = db.prepare(
-      'UPDATE hosts SET pattern = ?, value = ? WHERE id = ? AND profile_id = ?'
-    ).run(input.pattern, input.value, itemId, profileId);
+    const changed = db
+      .prepare(
+        'UPDATE hosts SET pattern = ?, value = ? WHERE id = ? AND profile_id = ?'
+      )
+      .run(input.pattern, input.value, itemId, profileId);
     if (!changed.changes) throw new HttpError(404, 'Host entry not found');
     recordRevision(db, profileId);
     return mapHost(
@@ -1676,10 +2015,9 @@ export function updateHost(
 export function deleteHost(profileId: number, itemId: number): void {
   ensureInitialized();
   transaction((db) => {
-    const changed = db.prepare('DELETE FROM hosts WHERE id = ? AND profile_id = ?').run(
-      itemId,
-      profileId
-    );
+    const changed = db
+      .prepare('DELETE FROM hosts WHERE id = ? AND profile_id = ?')
+      .run(itemId, profileId);
     if (!changed.changes) throw new HttpError(404, 'Host entry not found');
     recordRevision(db, profileId);
   });
@@ -1705,7 +2043,9 @@ export function replaceAdvancedSections(
       }
       seen.add(section.key);
     }
-    db.prepare('DELETE FROM advanced_sections WHERE profile_id = ?').run(profileId);
+    db.prepare('DELETE FROM advanced_sections WHERE profile_id = ?').run(
+      profileId
+    );
     const insert = db.prepare(
       `INSERT INTO advanced_sections
          (profile_id, section_key, value_ciphertext, sort_order)
@@ -1725,7 +2065,7 @@ export function importYaml(profileId: number, yamlText: string): Snapshot {
   return transaction((db) => {
     replaceProfileResources(db, profileId, document);
     recordRevision(db, profileId);
-    return snapshotFromDb(db, profileId);
+    return publicSnapshot(snapshotFromDb(db, profileId));
   });
 }
 
@@ -1740,21 +2080,22 @@ export function listRevisions(
   getProfileRow(getDb(), profileId);
   const limit = Math.min(100, Math.max(1, Math.floor(options.limit ?? 50)));
   const before = options.before ?? null;
-  const rows = before === null
-    ? getDb()
-        .prepare(
-          `SELECT id, revision, created_at
+  const rows =
+    before === null
+      ? (getDb()
+          .prepare(
+            `SELECT id, revision, created_at
            FROM revisions WHERE profile_id = ?
            ORDER BY revision DESC LIMIT ?`
-        )
-        .all(profileId, limit + 1) as DbRow[]
-    : (getDb()
-        .prepare(
-          `SELECT id, revision, created_at
+          )
+          .all(profileId, limit + 1) as DbRow[])
+      : (getDb()
+          .prepare(
+            `SELECT id, revision, created_at
            FROM revisions WHERE profile_id = ? AND revision < ?
            ORDER BY revision DESC LIMIT ?`
-        )
-        .all(profileId, before, limit + 1) as DbRow[]);
+          )
+          .all(profileId, before, limit + 1) as DbRow[]);
   const hasMore = rows.length > limit;
   const items = rows.slice(0, limit).map((row) => {
     const item = row as DbRow;
@@ -1766,7 +2107,7 @@ export function listRevisions(
   });
   return {
     items,
-    nextCursor: hasMore ? items.at(-1)?.revision ?? null : null
+    nextCursor: hasMore ? (items.at(-1)?.revision ?? null) : null
   };
 }
 
@@ -1782,6 +2123,7 @@ export function restoreRevision(profileId: number, revision: number): Snapshot {
     const snapshot = decryptJson<Snapshot>(String(row.config_ciphertext));
     replaceProfileResources(db, profileId, {
       mode: snapshot.profile.mode,
+      targetPlatform: snapshot.profile.targetPlatform,
       logLevel: snapshot.profile.logLevel,
       ipv6: snapshot.profile.ipv6,
       settings: snapshot.profile.settings,
@@ -1826,7 +2168,7 @@ export function restoreRevision(profileId: number, revision: number): Snapshot {
       }))
     });
     recordRevision(db, profileId);
-    return snapshotFromDb(db, profileId);
+    return publicSnapshot(snapshotFromDb(db, profileId));
   });
 }
 

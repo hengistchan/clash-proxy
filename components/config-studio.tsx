@@ -14,6 +14,7 @@ import {
   Globe2,
   History,
   Layers3,
+  Network,
   Plus,
   RefreshCw,
   Settings2,
@@ -46,8 +47,11 @@ import { ResourceList } from './resource-list';
 import { RulesView } from './rules-view';
 import { SettingsView } from './settings-view';
 import { Modal, SelectField, StatusBadge } from './ui';
+import { RelationshipsView, type EditorPreset } from './relationships-view';
+import { resourceKey, type ResourceNode } from '@/lib/resource-graph';
 
 type SectionId =
+  | 'relationships'
   | 'overview'
   | 'settings'
   | 'proxy-providers'
@@ -80,6 +84,7 @@ interface Meta {
 
 const NAV = [
   { id: 'overview', label: '总览', icon: Sparkles },
+  { id: 'relationships', label: '关联关系', icon: Network },
   { id: 'settings', label: '全局与 DNS', icon: Settings2 },
   { id: 'proxy-providers', label: '代理源', icon: Database },
   { id: 'proxies', label: '直接节点', icon: Box },
@@ -88,7 +93,7 @@ const NAV = [
   { id: 'rules', label: '路由规则', icon: Activity },
   { id: 'hosts', label: 'Hosts', icon: Globe2 },
   { id: 'advanced', label: '高级区块', icon: FileCode2 },
-  { id: 'export', label: '生成配置', icon: Download },
+  { id: 'export', label: '下载配置', icon: Download },
   { id: 'history', label: '版本', icon: History }
 ] as const;
 
@@ -98,7 +103,7 @@ const SECTION_COPY: Partial<
   'proxy-providers': {
     title: '代理源',
     subtitle:
-      '管理远程节点订阅、缓存路径、倍率、测速和过滤参数；私人 GLaDOS URL 默认只在导出时注入。',
+      '管理远程节点订阅、缓存路径、倍率、测速和过滤参数；每个来源的私人地址和认证请求头独立加密保存。',
     kind: 'proxy-providers'
   },
   proxies: {
@@ -174,11 +179,14 @@ export function ConfigStudio() {
   const [authRequired, setAuthRequired] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [graphFocus, setGraphFocus] = useState<string | null>(null);
+  const [editorPreset, setEditorPreset] = useState<EditorPreset | undefined>();
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorKind, setEditorKind] = useState<ResourceKind | null>(null);
   const [editing, setEditing] = useState<EditableResource>(null);
   const [profileDialog, setProfileDialog] = useState(false);
   const [newProfileName, setNewProfileName] = useState('');
+  const [newProfileSource, setNewProfileSource] = useState('empty');
   const [newProfileYaml, setNewProfileYaml] = useState('');
   const [importDialog, setImportDialog] = useState(false);
   const [importYamlText, setImportYamlText] = useState('');
@@ -222,6 +230,11 @@ export function ConfigStudio() {
         data.items[0];
       if (!next) throw new Error('没有可用的配置 Profile');
       setProfileId(next.id);
+      try {
+        window.sessionStorage.setItem('stash-profile-id', String(next.id));
+      } catch {
+        /* Session storage may be unavailable. */
+      }
       return next;
     },
     []
@@ -281,7 +294,14 @@ export function ConfigStudio() {
     const saved = readSessionToken();
     setToken(saved);
     setTokenDraft(saved);
-    void initialise(saved);
+    let savedProfile: number | undefined;
+    try {
+      const value = Number(window.sessionStorage.getItem('stash-profile-id'));
+      if (Number.isSafeInteger(value) && value > 0) savedProfile = value;
+    } catch {
+      /* Use active profile. */
+    }
+    void initialise(saved, savedProfile);
   }, [initialise]);
 
   async function unlock() {
@@ -295,9 +315,12 @@ export function ConfigStudio() {
     if (!profileId) return;
     try {
       await loadSnapshot(profileId, token, true);
-      const nextProfiles = await apiRequest<{ items: Profile[] }>('/api/profiles', {
-        token
-      });
+      const nextProfiles = await apiRequest<{ items: Profile[] }>(
+        '/api/profiles',
+        {
+          token
+        }
+      );
       setProfiles(nextProfiles.items);
       if (message) notify(message);
     } catch (caught) {
@@ -307,7 +330,13 @@ export function ConfigStudio() {
 
   async function switchProfile(id: number) {
     setProfileId(id);
+    try {
+      window.sessionStorage.setItem('stash-profile-id', String(id));
+    } catch {
+      /* Session storage may be unavailable. */
+    }
     setSection('overview');
+    setGraphFocus(null);
     try {
       await loadSnapshot(id, token);
     } catch (caught) {
@@ -330,6 +359,7 @@ export function ConfigStudio() {
   }
 
   function openEditor(kind: ResourceKind, item: EditableResource = null) {
+    setEditorPreset(undefined);
     setEditorKind(kind);
     setEditing(item);
     setEditorOpen(true);
@@ -355,6 +385,34 @@ export function ConfigStudio() {
     }
   }
 
+  function inspectResource(kind: ResourceKind, item: { id: number }) {
+    setGraphFocus(resourceKey(kind, item.id));
+    setSection('relationships');
+  }
+  function editGraphResource(node: ResourceNode) {
+    if (!snapshot) return;
+    if (node.kind === 'settings') {
+      setSection('settings');
+      return;
+    }
+    if (node.kind === 'advanced') {
+      setSection('advanced');
+      return;
+    }
+    if (node.kind === 'builtin' || node.kind === 'missing') return;
+    const kind = node.kind as ResourceKind;
+    const item = resourcesFor(snapshot, kind).find(
+      (entry) => entry.id === node.id
+    );
+    if (item) openEditor(kind, item as EditableResource);
+  }
+  function createRelated(kind: 'proxy-groups' | 'rules', preset: EditorPreset) {
+    setEditorKind(kind);
+    setEditing(null);
+    setEditorPreset(preset);
+    setEditorOpen(true);
+  }
+
   async function createProfile() {
     setProfileBusy(true);
     try {
@@ -363,14 +421,20 @@ export function ConfigStudio() {
         token,
         body: JSON.stringify({
           name: newProfileName.trim(),
-          importYaml: newProfileYaml.trim() || undefined
+          importYaml:
+            newProfileSource === 'import'
+              ? newProfileYaml.trim() || undefined
+              : undefined,
+          example: newProfileSource === 'example'
         })
       });
       setProfileDialog(false);
       setNewProfileName('');
       setNewProfileYaml('');
+      setNewProfileSource('empty');
+      setSection(newProfileSource === 'empty' ? 'overview' : 'relationships');
       await initialise(token, data.profile.id);
-      notify('新 Profile 已创建。');
+      notify('新配置已创建。');
     } catch (caught) {
       handleError(caught);
     } finally {
@@ -389,7 +453,9 @@ export function ConfigStudio() {
       });
       setImportDialog(false);
       setImportYamlText('');
-      await reload('完整 YAML 已导入并转为结构化资源。');
+      await reload('配置文件已解析，可以从关联关系中继续配置。');
+      setGraphFocus(null);
+      setSection('relationships');
     } catch (caught) {
       handleError(caught);
     } finally {
@@ -458,8 +524,10 @@ export function ConfigStudio() {
         <div className="sidebar-status">
           <span className="live-dot" />
           <div>
-            <strong>SQLITE / LIVE</strong>
-            <small>{currentProfile ? `REV ${currentProfile.revision}` : 'CONNECTING'}</small>
+            <strong>配置已保存</strong>
+            <small>
+              {currentProfile ? `REV ${currentProfile.revision}` : 'CONNECTING'}
+            </small>
           </div>
         </div>
         <nav className="side-nav" aria-label="配置导航">
@@ -483,7 +551,7 @@ export function ConfigStudio() {
             <RefreshCw size={15} className={refreshing ? 'spin' : ''} />
             刷新快照
           </button>
-          <span>Secrets encrypted at rest</span>
+          <span>凭据已加密保存</span>
         </div>
       </aside>
 
@@ -505,17 +573,26 @@ export function ConfigStudio() {
             )}
           </div>
           <div className="topbar-actions">
-            <button className="button secondary small" onClick={() => setImportDialog(true)}>
+            <button
+              className="button secondary small"
+              onClick={() => setImportDialog(true)}
+            >
               <FileInput size={15} />
-              导入 YAML
+              导入配置文件
             </button>
-            <button className="button secondary small" onClick={() => setProfileDialog(true)}>
+            <button
+              className="button secondary small"
+              onClick={() => setProfileDialog(true)}
+            >
               <Plus size={15} />
-              新建 Profile
+              新建配置
             </button>
-            <button className="button primary small" onClick={() => setSection('export')}>
+            <button
+              className="button primary small"
+              onClick={() => setSection('export')}
+            >
               <Download size={15} />
-              生成配置
+              下载配置
             </button>
           </div>
         </header>
@@ -545,12 +622,22 @@ export function ConfigStudio() {
           <div className="content-stage">
             {section === 'overview' ? (
               <OverviewView
+                token={token}
                 snapshot={snapshot}
                 validation={validation}
                 onNavigate={(value) => setSection(value as SectionId)}
               />
             ) : null}
 
+            {section === 'relationships' ? (
+              <RelationshipsView
+                snapshot={snapshot}
+                focus={graphFocus}
+                onFocus={setGraphFocus}
+                onEdit={editGraphResource}
+                onCreate={createRelated}
+              />
+            ) : null}
             {section === 'settings' ? (
               <SettingsView
                 snapshot={snapshot}
@@ -571,12 +658,22 @@ export function ConfigStudio() {
                 subtitle={SECTION_COPY[section]!.subtitle}
                 items={
                   resourcesFor(snapshot, SECTION_COPY[section]!.kind) as Array<
-                    ProxyNode | ProxyProvider | ProxyGroup | RuleProvider | HostEntry
+                    | ProxyNode
+                    | ProxyProvider
+                    | ProxyGroup
+                    | RuleProvider
+                    | HostEntry
                   >
+                }
+                onInspect={(item) =>
+                  inspectResource(SECTION_COPY[section]!.kind, item)
                 }
                 onAdd={() => openEditor(SECTION_COPY[section]!.kind)}
                 onEdit={(item) =>
-                  openEditor(SECTION_COPY[section]!.kind, item as EditableResource)
+                  openEditor(
+                    SECTION_COPY[section]!.kind,
+                    item as EditableResource
+                  )
                 }
                 onDelete={(item) =>
                   deleteResource(
@@ -593,6 +690,7 @@ export function ConfigStudio() {
                 validation={validation}
                 profileId={snapshot.profile.id}
                 token={token}
+                onInspect={(rule) => inspectResource('rules', rule)}
                 onAdd={() => openEditor('rules')}
                 onEdit={(rule) => openEditor('rules', rule)}
                 onChanged={reload}
@@ -631,10 +729,10 @@ export function ConfigStudio() {
         <footer className="studio-footer">
           <span>
             <Clock3 size={13} />
-            RM {errorCount ? 'BLOCKED' : 'READY'} ·{' '}
-            {validation.issues.length} diagnostics
+            配置状态 {errorCount ? '待修复' : '检查通过'} ·{' '}
+            {validation.issues.length} 项检查结果
           </span>
-          <span>Subscription URLs never stored · Secrets AES-256-GCM</span>
+          <span>来源凭据加密保存 · 保存后自动检查</span>
         </footer>
       </main>
 
@@ -642,6 +740,7 @@ export function ConfigStudio() {
         <EditorDialog
           open={editorOpen}
           onOpenChange={setEditorOpen}
+          initialValues={editorPreset}
           resource={editorKind}
           existing={editing}
           snapshot={snapshot!}
@@ -654,12 +753,15 @@ export function ConfigStudio() {
       <Modal
         open={profileDialog}
         onOpenChange={setProfileDialog}
-        title="新建 Profile"
+        title="新建配置"
         description="可以从空配置开始，或直接导入完整 Stash YAML。"
         wide
         footer={
           <>
-            <button className="button secondary" onClick={() => setProfileDialog(false)}>
+            <button
+              className="button secondary"
+              onClick={() => setProfileDialog(false)}
+            >
               取消
             </button>
             <button
@@ -667,43 +769,58 @@ export function ConfigStudio() {
               disabled={profileBusy || !newProfileName.trim()}
               onClick={createProfile}
             >
-              {profileBusy ? '创建中…' : '创建 Profile'}
+              {profileBusy ? '创建中…' : '创建配置'}
             </button>
           </>
         }
       >
         <div className="form-grid">
           <label className="field wide">
-            <span>Profile 名称</span>
+            <span>配置名称</span>
             <input
               className="input"
               value={newProfileName}
               onChange={(event) => setNewProfileName(event.target.value)}
-              placeholder="例如：USA-AI"
+              placeholder="例如：我的手机"
             />
           </label>
-          <label className="field wide">
-            <span>可选：完整 YAML</span>
-            <textarea
-              className="code-input"
-              rows={13}
-              value={newProfileYaml}
-              onChange={(event) => setNewProfileYaml(event.target.value)}
-              placeholder="留空则创建最小 Profile"
-            />
-          </label>
-          <label className="file-drop wide">
-            <Upload size={18} />
-            <span>选择 YAML 文件</span>
-            <input
-              type="file"
-              accept=".yaml,.yml,text/yaml,application/yaml"
-              onChange={async (event) => {
-                const file = event.target.files?.[0];
-                if (file) setNewProfileYaml(await file.text());
-              }}
-            />
-          </label>
+          <SelectField
+            label="从哪里开始"
+            value={newProfileSource}
+            onValueChange={setNewProfileSource}
+            options={[
+              { value: 'empty', label: '最小配置 · 自己添加需要的资源' },
+              { value: 'import', label: '导入已有 YAML' },
+              { value: 'example', label: '可选示例 · 用于了解各项功能' }
+            ]}
+            wide
+          />
+          {newProfileSource === 'import' ? (
+            <>
+              <label className="field wide">
+                <span>完整 YAML</span>
+                <textarea
+                  className="code-input"
+                  rows={13}
+                  value={newProfileYaml}
+                  onChange={(event) => setNewProfileYaml(event.target.value)}
+                  placeholder="留空则创建最小 Profile"
+                />
+              </label>
+              <label className="file-drop wide">
+                <Upload size={18} />
+                <span>选择 YAML 文件</span>
+                <input
+                  type="file"
+                  accept=".yaml,.yml,.conf,.config,text/yaml,application/yaml,text/plain,application/json"
+                  onChange={async (event) => {
+                    const file = event.target.files?.[0];
+                    if (file) setNewProfileYaml(await file.text());
+                  }}
+                />
+              </label>
+            </>
+          ) : null}
         </div>
       </Modal>
 
@@ -715,7 +832,10 @@ export function ConfigStudio() {
         wide
         footer={
           <>
-            <button className="button secondary" onClick={() => setImportDialog(false)}>
+            <button
+              className="button secondary"
+              onClick={() => setImportDialog(false)}
+            >
               取消
             </button>
             <button
@@ -733,7 +853,7 @@ export function ConfigStudio() {
           <span>读取 YAML 文件</span>
           <input
             type="file"
-            accept=".yaml,.yml,text/yaml,application/yaml"
+            accept=".yaml,.yml,.conf,.config,text/yaml,application/yaml,text/plain,application/json"
             onChange={async (event) => {
               const file = event.target.files?.[0];
               if (file) setImportYamlText(await file.text());
@@ -751,7 +871,11 @@ export function ConfigStudio() {
 
       {toast ? (
         <div className={`toast toast-${toast.tone}`}>
-          {toast.tone === 'bad' ? <ShieldAlert size={17} /> : <Sparkles size={17} />}
+          {toast.tone === 'bad' ? (
+            <ShieldAlert size={17} />
+          ) : (
+            <Sparkles size={17} />
+          )}
           <span>{toast.message}</span>
         </div>
       ) : null}

@@ -1,176 +1,252 @@
 'use client';
 
-import { useState } from 'react';
-import { Download, ExternalLink, ShieldCheck } from 'lucide-react';
-
+import { useEffect, useState } from 'react';
+import { Download, Link2, RefreshCw } from 'lucide-react';
 import type { Snapshot, ValidationResult } from '@/lib/types';
-
-import { downloadBlob, filenameFromDisposition } from './api-client';
+import {
+  apiRequest,
+  downloadBlob,
+  filenameFromDisposition
+} from './api-client';
 import { StatusBadge } from './ui';
 
+interface DeliveryStatus {
+  currentRevision: number;
+  compiledRevision: number | null;
+  current: boolean;
+  generatedAt: string | null;
+  subscriptionPath: string | null;
+  subscriptionUrl?: string | null;
+}
 export function ExportView({
   snapshot,
   validation,
   profileId,
-  token
+  token,
+  compact = false
 }: {
   snapshot: Snapshot;
   validation: ValidationResult;
   profileId: number;
   token: string;
+  compact?: boolean;
 }) {
-  const [subscriptionUrl, setSubscriptionUrl] = useState('');
-  const [template, setTemplate] = useState('production');
-  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<DeliveryStatus | null>(null);
   const [error, setError] = useState('');
-  const [result, setResult] = useState<{
-    filename: string;
-    size: number;
-    sha256: string;
-    rules: number;
-  } | null>(null);
-
-  async function generate() {
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [origin, setOrigin] = useState('');
+  useEffect(() => {
+    let active = true;
+    setStatus(null);
+    setError('');
+    setNotice('');
+    setOrigin(window.location.origin);
+    apiRequest<DeliveryStatus>(`/api/profiles/${profileId}/delivery`, { token })
+      .then((data) => {
+        if (active) setStatus(data);
+      })
+      .catch((caught) => {
+        if (active)
+          setError(
+            caught instanceof Error ? caught.message : '读取下载状态失败'
+          );
+      });
+    return () => {
+      active = false;
+    };
+  }, [profileId, snapshot.profile.revision, token]);
+  async function download(bundle = false) {
     setBusy(true);
     setError('');
-    setResult(null);
     try {
-      const headers: HeadersInit = {
-        'Content-Type': 'application/json'
-      };
-      if (token) headers['X-Admin-Token'] = token;
-      const response = await fetch(`/api/profiles/${profileId}/export`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ url: subscriptionUrl, template })
-      });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        throw new Error(payload?.detail || `生成失败（HTTP ${response.status}）`);
-      }
-      const blob = await response.blob();
-      const filename = filenameFromDisposition(
-        response.headers.get('content-disposition')
+      const response = await fetch(
+        `/api/profiles/${profileId}/${bundle ? 'bundle' : 'config_download'}`,
+        {
+          headers: token ? { 'X-Admin-Token': token } : {}
+        }
       );
-      downloadBlob(blob, filename);
-      setResult({
-        filename,
-        size: blob.size,
-        sha256: response.headers.get('x-config-sha256') || 'unknown',
-        rules: Number(response.headers.get('x-rule-count') || 0)
-      });
+      if (!response.ok)
+        throw new Error((await response.json()).detail || '下载失败');
+      downloadBlob(
+        await response.blob(),
+        filenameFromDisposition(response.headers.get('content-disposition'))
+      );
+      setNotice('已下载最近成功生成的版本。');
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '生成失败');
+      setError(caught instanceof Error ? caught.message : '下载失败');
     } finally {
       setBusy(false);
     }
   }
-
-  const invalid = validation.issues.filter((issue) => issue.severity === 'error');
-
+  async function changeLink(revoke = false) {
+    setBusy(true);
+    setError('');
+    try {
+      await apiRequest(`/api/profiles/${profileId}/download-link`, {
+        method: revoke ? 'DELETE' : 'POST',
+        token
+      });
+      setStatus(
+        await apiRequest<DeliveryStatus>(
+          `/api/profiles/${profileId}/delivery`,
+          { token }
+        )
+      );
+      setNotice(
+        revoke ? '订阅链接已撤销。' : '新订阅链接已生成，之前的链接已失效。'
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '链接操作失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+  const errors = validation.issues.filter((i) => i.severity === 'error');
+  const missing = snapshot.proxyProviders.filter((p) => !p.sourceConfigured);
   return (
     <section className="panel export-panel">
       <div className="panel-heading">
         <div>
-          <p className="kicker">BUILD / COMPLETE YAML</p>
-          <h2>生成完整 Stash 配置</h2>
-          <p>
-            将当前 SQLite 快照编译为单文件 YAML。私人订阅地址只用于本次请求，
-            不写入数据库。
-          </p>
+          <p className="kicker">CONFIGURATION / DOWNLOAD</p>
+          <h2>{compact ? '配置与下载' : '下载配置'}</h2>
+          <p>保存后自动检查并生成可用版本；订阅来源在各代理源中维护。</p>
         </div>
-        <StatusBadge tone={invalid.length ? 'bad' : 'good'}>
-          {invalid.length ? `${invalid.length} ERRORS` : 'VALID'}
+        <StatusBadge tone={status?.current ? 'good' : 'warn'}>
+          {status?.current
+            ? `版本 ${status.compiledRevision} 可用`
+            : status?.compiledRevision
+              ? `继续提供版本 ${status.compiledRevision}`
+              : '等待配置完成'}
         </StatusBadge>
       </div>
-
-      <div className="export-layout">
-        <div className="export-form">
-          <label className="field wide">
-            <span>GLaDOS 私人 YAML 订阅地址</span>
-            <input
-              className="input mono"
-              type="password"
-              autoComplete="off"
-              value={subscriptionUrl}
-              onChange={(event) => setSubscriptionUrl(event.target.value)}
-              placeholder="https://…"
-            />
-            <small>仅接受 HTTPS；不抓取、不落库、不使用访问日志记录。</small>
-          </label>
-          <label className="field">
-            <span>配置模板</span>
-            <select
-              className="input"
-              value={template}
-              onChange={(event) => setTemplate(event.target.value)}
-            >
-              <option value="production">Production / 包含广告规则集</option>
-              <option value="no_ads">No Ads / 排除广告规则集</option>
-            </select>
-          </label>
-          <button
-            className="button primary build-button"
-            onClick={generate}
-            disabled={busy || invalid.length > 0 || !subscriptionUrl.trim()}
-          >
-            <Download size={17} />
-            {busy ? '正在编译…' : '编译并下载 YAML'}
-          </button>
-        </div>
-
-        <aside className="export-contract">
-          <div className="contract-top">
-            <ShieldCheck size={20} />
-            <span>API CONTRACT</span>
-          </div>
-          <code>GET /api?url=…&amp;template=production</code>
-          <p>
-            浏览器使用 POST，避免私人 URL 进入地址栏；兼容链接仍保留 GET。
-          </p>
-          <div className="contract-stats">
-            <div>
-              <strong>{snapshot.proxyGroups.length}</strong>
-              <span>策略组</span>
-            </div>
-            <div>
-              <strong>{snapshot.ruleProviders.length}</strong>
-              <span>规则集</span>
-            </div>
-            <div>
-              <strong>{snapshot.rules.filter((rule) => rule.enabled).length}</strong>
-              <span>规则</span>
-            </div>
-          </div>
-        </aside>
+      {missing.length ? (
+        <p className="inline-error">
+          待配置来源：{missing.map((p) => p.name).join('、')}
+          。请打开“代理源”填写各自的订阅地址或本地文件路径。
+        </p>
+      ) : null}
+      {status && !status.current && status.compiledRevision !== null ? (
+        <p className="delivery-note">
+          最新修改（版本 {status.currentRevision}
+          ）尚未通过检查。下载和设备订阅仍使用最近成功的版本{' '}
+          {status.compiledRevision}。
+        </p>
+      ) : null}
+      <div className="delivery-actions">
+        <button
+          className="button primary"
+          disabled={busy || status?.compiledRevision == null}
+          onClick={() => void download()}
+        >
+          <Download size={16} />
+          下载 YAML
+        </button>
+        <button
+          className="button secondary"
+          disabled={busy || status?.compiledRevision == null}
+          onClick={() => void download(true)}
+        >
+          下载交付 ZIP
+        </button>
+        <a
+          className="button secondary"
+          href="/docs/api"
+          target="_blank"
+          rel="noreferrer"
+        >
+          API 使用文档
+        </a>
       </div>
-
-      {invalid.length ? (
+      {!compact ? (
+        <>
+          <p className="delivery-note">
+            YAML 可直接导入 Stash。ZIP
+            包含配置、诊断和版本清单；远程订阅仍需联网，本地资源文件需另行准备。下载文件可能含私人凭据。
+          </p>
+          <div className="section-rule">
+            <span>设备订阅链接</span>
+          </div>
+          <p className="delivery-note">
+            生成后可粘贴到
+            Stash；后续保存并检查成功的配置会自动更新。持有此链接的人可下载完整私人配置。
+          </p>
+          {status?.subscriptionPath ? (
+            <>
+              <input
+                className="input mono"
+                aria-label="固定配置订阅链接"
+                readOnly
+                value={
+                  status.subscriptionUrl || origin + status.subscriptionPath
+                }
+              />
+              <div className="delivery-actions">
+                <button
+                  className="button secondary"
+                  onClick={() =>
+                    void navigator.clipboard
+                      .writeText(
+                        status.subscriptionUrl ||
+                          origin + status.subscriptionPath
+                      )
+                      .then(() => setNotice('订阅链接已复制。'))
+                      .catch(() => setError('复制失败，请手动选择链接复制。'))
+                  }
+                >
+                  复制链接
+                </button>
+                <button
+                  className="button secondary"
+                  disabled={busy}
+                  onClick={() => void changeLink()}
+                >
+                  <RefreshCw size={15} />
+                  更换链接
+                </button>
+                <button
+                  className="button secondary"
+                  disabled={busy}
+                  onClick={() => void changeLink(true)}
+                >
+                  撤销链接
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="delivery-actions">
+              <button
+                className="button secondary"
+                disabled={busy || status?.compiledRevision == null}
+                onClick={() => void changeLink()}
+              >
+                <Link2 size={15} />
+                生成固定订阅链接
+              </button>
+            </div>
+          )}
+          <div className="export-contract">
+            <code>GET /api/profiles/{profileId}/config_download</code>
+            <p>
+              管理 API
+              使用管理员认证；设备使用上面的独立订阅链接。无需传入任何订阅地址参数。
+            </p>
+          </div>
+        </>
+      ) : null}
+      {!compact && errors.length ? (
         <div className="validation-block error-block">
-          <strong>导出被阻止</strong>
-          {invalid.slice(0, 8).map((issue, index) => (
-            <p key={`${issue.code}-${index}`}>{issue.message}</p>
+          <strong>最新修改需要修复 {errors.length} 个问题</strong>
+          {errors.slice(0, 8).map((i, n) => (
+            <p key={n}>{i.message}</p>
           ))}
         </div>
       ) : null}
-
-      {error ? <pre className="inline-error">{error}</pre> : null}
-
-      {result ? (
-        <div className="export-result">
-          <div className="result-check">✓</div>
-          <div>
-            <strong>{result.filename}</strong>
-            <p>
-              {result.size.toLocaleString()} bytes · {result.rules} rules · SHA-256{' '}
-              <code>{result.sha256}</code>
-            </p>
-          </div>
-          <a className="button secondary" href="/" target="_blank">
-            <ExternalLink size={15} />
-            服务状态
-          </a>
-        </div>
+      {notice ? <p role="status">{notice}</p> : null}
+      {error ? (
+        <pre className="inline-error" role="alert">
+          {error}
+        </pre>
       ) : null}
     </section>
   );

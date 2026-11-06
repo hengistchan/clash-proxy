@@ -26,7 +26,8 @@ const name = z.string().trim().min(1).max(160);
 
 export const profileCreateSchema = z.object({
   name,
-  importYaml: z.string().optional()
+  importYaml: z.string().optional(),
+  example: z.boolean().default(false)
 });
 
 export const profileUpdateSchema = z.object({
@@ -38,7 +39,8 @@ export const settingsSchema = z.object({
   mode: z.enum(['rule', 'global', 'direct']),
   logLevel: z.enum(['silent', 'info', 'warning', 'error', 'debug']),
   ipv6: z.boolean().nullable().optional(),
-  settings: jsonObject
+  settings: jsonObject,
+  targetPlatform: z.enum(['any', 'ios', 'tvos', 'macos']).optional()
 });
 
 export const proxySchema = z.object({
@@ -50,7 +52,13 @@ export const proxySchema = z.object({
 export const proxyProviderSchema = z.object({
   name,
   config: jsonObject.default({}),
-  requiresUrl: z.boolean().optional()
+  sourceType: z.enum(['remote', 'local']).optional(),
+  sourceUrl: z.string().max(16384).optional(),
+  sourceHeaders: z
+    .record(z.string(), z.union([z.string(), z.array(z.string())]))
+    .optional(),
+  clearSource: z.boolean().optional(),
+  clearHeaders: z.boolean().optional()
 });
 
 export const proxyGroupSchema = z.object({
@@ -91,9 +99,4 @@ export const advancedSchema = z.object({
   sections: z
     .array(z.object({ key: z.string().trim().min(1), value: jsonValue }))
     .default([])
-});
-
-export const exportSchema = z.object({
-  url: z.string().trim().min(1),
-  template: z.string().default('production')
 });

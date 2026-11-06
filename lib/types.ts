@@ -19,6 +19,7 @@ export interface Profile {
   logLevel: LogLevel;
   ipv6: boolean | null;
   settings: JsonObject;
+  targetPlatform: 'any' | 'ios' | 'tvos' | 'macos';
   active: boolean;
   revision: number;
   createdAt: string;
@@ -38,6 +39,9 @@ export interface ProxyProvider {
   name: string;
   config: JsonObject;
   requiresUrl: boolean;
+  sourceType: 'remote' | 'local';
+  sourceConfigured: boolean;
+  headersConfigured: boolean;
   sortOrder: number;
 }
 
@@ -125,12 +129,12 @@ export interface ValidationResult {
   issues: ValidationIssue[];
 }
 
-export interface ExportOptions {
-  subscriptionUrl: string;
-  template?: string;
-}
-
-export const BUILTIN_POLICIES = ['DIRECT', 'REJECT', 'REJECT-DROP', 'PASS'] as const;
+export const BUILTIN_POLICIES = [
+  'DIRECT',
+  'REJECT',
+  'REJECT-DROP',
+  'PASS'
+] as const;
 
 export const RESERVED_TOP_LEVEL_KEYS = new Set([
   'mode',

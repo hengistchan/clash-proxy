@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { createCipheriv, randomBytes } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { beforeEach, after, describe, test } from 'node:test';
@@ -9,8 +16,13 @@ import Database from 'better-sqlite3';
 import { parse as parseYaml } from 'yaml';
 
 import { closeDbForTests, getDb } from '../lib/db';
-import { decryptJson, encryptJson, resetEncryptionCacheForTests } from '../lib/crypto';
+import {
+  decryptJson,
+  encryptJson,
+  resetEncryptionCacheForTests
+} from '../lib/crypto';
 import { exportProfile } from '../lib/exporter';
+import { getCompilationSnapshot } from '../lib/repository';
 import {
   createHost,
   createProxy,
@@ -37,10 +49,18 @@ import {
 } from '../lib/repository';
 import { validateSnapshot } from '../lib/validation';
 
-const SECRET_URL =
-  'https://subscription.test.example/api?token=private-value';
+const SECRET_URL = 'https://subscription.test.example/api?token=private-value';
 const root = process.cwd();
 const tempRoot = mkdtempSync(path.join(os.tmpdir(), 'stash-forge-'));
+const fixtureDir = path.join(tempRoot, 'templates');
+mkdirSync(fixtureDir);
+writeFileSync(
+  path.join(fixtureDir, 'Production.yaml'),
+  readFileSync(path.join(root, 'Production.yaml'), 'utf8').replace(
+    'https://example.invalid/REPLACE_WITH_PRIVATE_GLADOS_CLASH_YAML_URL',
+    SECRET_URL
+  )
+);
 let sequence = 0;
 
 function currentDbPath(): string {
@@ -52,7 +72,8 @@ beforeEach(() => {
   resetRepositoryForTests();
   resetEncryptionCacheForTests();
   sequence += 1;
-  process.env.STASH_TEMPLATE_DIR = root;
+  process.env.STASH_TEMPLATE_DIR = fixtureDir;
+  process.env.STASH_SEED_EXAMPLE = '1';
   process.env.STASH_DB_PATH = path.join(tempRoot, `rules-${sequence}.sqlite3`);
   process.env.STASH_KEY_PATH = path.join(tempRoot, `rules-${sequence}.key`);
   delete process.env.STASH_ADMIN_TOKEN;
@@ -70,7 +91,7 @@ describe('seed and export', () => {
     const snapshot = getSnapshot(profile.id);
     assert.equal(snapshot.proxyProviders.length, 1);
     assert.equal(snapshot.proxyProviders[0].name, 'GLaDOS');
-    assert.equal(snapshot.proxyProviders[0].requiresUrl, true);
+    assert.equal(snapshot.proxyProviders[0].requiresUrl, false);
     assert.equal(snapshot.proxyGroups.length, 13);
     assert.equal(snapshot.ruleProviders.length, 21);
     assert.equal(
@@ -89,10 +110,7 @@ describe('seed and export', () => {
 
   test('exports a complete Stash configuration and keeps the private URL out of SQLite', () => {
     const profile = getActiveProfile();
-    const result = exportProfile(getSnapshot(profile.id), {
-      subscriptionUrl: SECRET_URL,
-      template: 'production'
-    });
+    const result = exportProfile(getCompilationSnapshot(profile.id));
     const parsed = parseYaml(result.yaml) as Record<string, unknown>;
     assert.equal(
       (parsed['proxy-providers'] as Record<string, Record<string, unknown>>)
@@ -101,33 +119,27 @@ describe('seed and export', () => {
     );
     assert.equal((parsed.rules as unknown[]).length, 30);
     assert.equal(Object.keys(parsed['proxy-groups'] as object).length, 13);
-    assert.equal(
-      Object.keys(parsed['rule-providers'] as object).length,
-      21
-    );
+    assert.equal(Object.keys(parsed['rule-providers'] as object).length, 21);
     assert.equal(result.sha256.length, 64);
     const databaseBytes = readFileSync(currentDbPath());
     assert.equal(databaseBytes.includes(SECRET_URL), false);
     assert.equal(existsSync(`${currentDbPath()}-wal`), true);
   });
 
-  test('no-ads export removes the ad rule provider and its rule only', () => {
+  test('export preserves user-managed providers without name-based filtering', () => {
     const profile = getActiveProfile();
-    const result = exportProfile(getSnapshot(profile.id), {
-      subscriptionUrl: SECRET_URL,
-      template: 'no_ads'
-    });
+    const result = exportProfile(getCompilationSnapshot(profile.id));
     const parsed = parseYaml(result.yaml) as Record<string, unknown>;
     assert.equal(
       'Repcz-Ads-AWAvenue' in
         (parsed['rule-providers'] as Record<string, unknown>),
-      false
+      true
     );
     assert.equal(
       (parsed.rules as string[]).some((rule) =>
         rule.includes('Repcz-Ads-AWAvenue')
       ),
-      false
+      true
     );
   });
 });
@@ -135,9 +147,10 @@ describe('seed and export', () => {
 describe('database and encrypted storage', () => {
   test('records the schema version and refuses to open a newer database', () => {
     const db = getDb();
-    assert.equal(Number(db.pragma('user_version', { simple: true })), 2);
+    assert.equal(Number(db.pragma('user_version', { simple: true })), 3);
     assert.ok(
-      db.prepare('PRAGMA table_info(rule_providers)')
+      db
+        .prepare('PRAGMA table_info(rule_providers)')
         .all()
         .some((column) => (column as { name: string }).name === 'display_name')
     );
@@ -156,6 +169,7 @@ describe('database and encrypted storage', () => {
     const legacyPath = path.join(tempRoot, `legacy-${sequence}.sqlite3`);
     const legacyDb = new Database(legacyPath);
     legacyDb.exec(`
+      CREATE TABLE profiles (id INTEGER PRIMARY KEY);
       CREATE TABLE rule_providers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         profile_id INTEGER NOT NULL,
@@ -172,11 +186,13 @@ describe('database and encrypted storage', () => {
     const previousPath = process.env.STASH_DB_PATH;
     process.env.STASH_DB_PATH = legacyPath;
     const migrated = getDb();
-    assert.equal(Number(migrated.pragma('user_version', { simple: true })), 2);
+    assert.equal(Number(migrated.pragma('user_version', { simple: true })), 3);
     assert.equal(
-      (migrated.prepare('PRAGMA table_info(rule_providers)').all() as Array<{ name: string }>).some(
-        (column) => column.name === 'display_name'
-      ),
+      (
+        migrated.prepare('PRAGMA table_info(rule_providers)').all() as Array<{
+          name: string;
+        }>
+      ).some((column) => column.name === 'display_name'),
       true
     );
     closeDbForTests();
@@ -184,7 +200,12 @@ describe('database and encrypted storage', () => {
   });
 
   test('compresses new encrypted JSON and still reads legacy v1 ciphertext', () => {
-    const value = { rules: Array.from({ length: 500 }, () => 'DOMAIN-SUFFIX,example.test,Proxy') };
+    const value = {
+      rules: Array.from(
+        { length: 500 },
+        () => 'DOMAIN-SUFFIX,example.test,Proxy'
+      )
+    };
     const token = encryptJson(value);
     assert.equal(token.startsWith('v2.'), true);
     assert.ok(
@@ -234,10 +255,7 @@ describe('configuration CRUD', () => {
     assert.equal(reordered[1].id, created.id);
     assert.equal(reordered.at(-1)?.type, 'MATCH');
 
-    assert.throws(
-      () => deleteRule(profile.id, reordered.at(-1)!.id),
-      /MATCH/
-    );
+    assert.throws(() => deleteRule(profile.id, reordered.at(-1)!.id), /MATCH/);
     deleteRule(profile.id, created.id);
     snapshot = getSnapshot(profile.id);
     assert.equal(snapshot.rules.length, 30);
@@ -303,9 +321,8 @@ describe('configuration CRUD', () => {
       false
     );
     assert.deepEqual(
-      renamedSnapshot.proxyGroups.find((group) => group.id === parent.id)?.config[
-        'ssid-policy'
-      ],
+      renamedSnapshot.proxyGroups.find((group) => group.id === parent.id)
+        ?.config['ssid-policy'],
       {
         office: 'AI-RENAMED',
         lab: 'ssid-node-renamed',
@@ -353,18 +370,22 @@ describe('configuration CRUD', () => {
     });
     assert.equal(updated.displayName, 'Apple Intelligence · Siri');
 
-    const reimported = importYaml(profile.id, readFileSync(path.join(root, 'Production.yaml'), 'utf8'));
+    const reimported = importYaml(
+      profile.id,
+      readFileSync(path.join(root, 'Production.yaml'), 'utf8')
+    );
     assert.equal(
-      reimported.ruleProviders.find((item) => item.name === provider.name)?.displayName,
+      reimported.ruleProviders.find((item) => item.name === provider.name)
+        ?.displayName,
       'Apple Intelligence · Siri'
     );
 
-    const exported = exportProfile(getSnapshot(profile.id), {
-      subscriptionUrl: SECRET_URL,
-      template: 'production'
-    });
+    const exported = exportProfile(getCompilationSnapshot(profile.id));
     const parsed = parseYaml(exported.yaml) as Record<string, unknown>;
-    const exportedProviders = parsed['rule-providers'] as Record<string, Record<string, unknown>>;
+    const exportedProviders = parsed['rule-providers'] as Record<
+      string,
+      Record<string, unknown>
+    >;
     assert.ok(exportedProviders[provider.name]);
     assert.equal('Apple Intelligence · Siri' in exportedProviders, false);
     assert.equal('displayName' in exportedProviders[provider.name], false);
@@ -376,7 +397,10 @@ describe('configuration CRUD', () => {
       item.name.startsWith('hj-99-safety-domain')
     );
     assert.ok(provider);
-    assert.throws(() => deleteRuleProvider(profile.id, provider.id), /referenced/);
+    assert.throws(
+      () => deleteRuleProvider(profile.id, provider.id),
+      /referenced/
+    );
   });
 
   test('host and directly declared proxy resources persist', () => {

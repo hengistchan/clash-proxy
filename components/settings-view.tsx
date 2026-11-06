@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Save } from 'lucide-react';
 
 import type { JsonObject, LogLevel, ProfileMode, Snapshot } from '@/lib/types';
@@ -8,6 +8,7 @@ import { isJsonObject } from '@/lib/types';
 
 import { ApiError, apiRequest } from './api-client';
 import { SelectField, SwitchField } from './ui';
+import { ConfigFields } from './config-fields';
 
 const MANAGED_DNS_KEYS = new Set([
   'nameserver',
@@ -40,6 +41,10 @@ export function SettingsView({
   token: string;
   onSaved: (message: string) => Promise<void>;
 }) {
+  const [targetPlatform, setTargetPlatform] = useState(
+    snapshot.profile.targetPlatform
+  );
+  const formRoot = useRef<HTMLElement>(null);
   const [mode, setMode] = useState<ProfileMode>(snapshot.profile.mode);
   const [logLevel, setLogLevel] = useState<LogLevel>(snapshot.profile.logLevel);
   const [ipv6, setIpv6] = useState(snapshot.profile.ipv6 === true);
@@ -58,6 +63,7 @@ export function SettingsView({
       ? snapshot.profile.settings.dns
       : {};
     setMode(snapshot.profile.mode);
+    setTargetPlatform(snapshot.profile.targetPlatform);
     setLogLevel(snapshot.profile.logLevel);
     setIpv6(snapshot.profile.ipv6 === true);
     setNameserver(lines(dns.nameserver));
@@ -73,6 +79,13 @@ export function SettingsView({
   }, [snapshot]);
 
   async function save() {
+    const invalid =
+      formRoot.current?.querySelector<HTMLInputElement>('input:invalid');
+    if (invalid) {
+      invalid.reportValidity();
+      invalid.focus();
+      return;
+    }
     setSaving(true);
     setError('');
     try {
@@ -99,6 +112,7 @@ export function SettingsView({
         token,
         body: JSON.stringify({
           mode,
+          targetPlatform,
           logLevel,
           ipv6,
           settings: { ...snapshot.profile.settings, dns }
@@ -117,7 +131,7 @@ export function SettingsView({
   }
 
   return (
-    <section className="panel settings-panel">
+    <section className="panel settings-panel" ref={formRoot}>
       <div className="panel-heading">
         <div>
           <p className="kicker">PROFILE / RUNTIME</p>
@@ -132,6 +146,20 @@ export function SettingsView({
 
       <div className="settings-grid">
         <SelectField
+          label="目标设备平台（用于兼容性检查）"
+          value={targetPlatform}
+          onValueChange={(value) =>
+            setTargetPlatform(value as typeof targetPlatform)
+          }
+          options={[
+            { value: 'any', label: '未指定 / 多平台' },
+            { value: 'ios', label: 'iOS' },
+            { value: 'tvos', label: 'tvOS' },
+            { value: 'macos', label: 'macOS' }
+          ]}
+        />
+
+        <SelectField
           label="运行模式"
           value={mode}
           onValueChange={(value) => setMode(value as ProfileMode)}
@@ -145,10 +173,12 @@ export function SettingsView({
           label="日志级别"
           value={logLevel}
           onValueChange={(value) => setLogLevel(value as LogLevel)}
-          options={['silent', 'info', 'warning', 'error', 'debug'].map((item) => ({
-            value: item,
-            label: item
-          }))}
+          options={['silent', 'info', 'warning', 'error', 'debug'].map(
+            (item) => ({
+              value: item,
+              label: item
+            })
+          )}
         />
         <div className="field wide">
           <SwitchField
@@ -219,17 +249,12 @@ export function SettingsView({
             onChange={(event) => setFakeIpFilter(event.target.value)}
           />
         </label>
-        <label className="field wide">
-          <span>nameserver-policy / fallback-filter / 其他 DNS JSON</span>
-          <textarea
-            className="code-input"
-            rows={12}
-            value={advancedDns}
-            onChange={(event) => setAdvancedDns(event.target.value)}
-            placeholder={'{\n  "nameserver-policy": {\n    "rule-set:company": "10.0.0.53"\n  }\n}'}
-          />
-          <small>完整保留 Stash 其他 DNS 字段，不认识的字段也不会丢失。</small>
-        </label>
+        <ConfigFields
+          label="其他 DNS 字段"
+          text={advancedDns}
+          onChange={setAdvancedDns}
+          suggestions={{ 'nameserver-policy': {}, 'follow-rule': false }}
+        />
       </div>
       {error ? <pre className="inline-error">{error}</pre> : null}
     </section>

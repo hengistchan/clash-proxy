@@ -6,6 +6,7 @@ import {
   ArrowUp,
   Edit3,
   LockKeyhole,
+  Network,
   Plus,
   Search,
   ShieldAlert,
@@ -16,6 +17,7 @@ import type { Snapshot, StashRule, ValidationResult } from '@/lib/types';
 
 import { ApiError, apiRequest } from './api-client';
 import { StatusBadge, SwitchField } from './ui';
+import { RoutingSimulator } from './routing-simulator';
 
 function ruleBody(rule: StashRule, patch: Partial<StashRule> = {}) {
   const next = { ...rule, ...patch };
@@ -36,6 +38,7 @@ export function RulesView({
   profileId,
   token,
   onAdd,
+  onInspect,
   onEdit,
   onChanged
 }: {
@@ -44,6 +47,7 @@ export function RulesView({
   profileId: number;
   token: string;
   onAdd: () => void;
+  onInspect: (rule: StashRule) => void;
   onEdit: (rule: StashRule) => void;
   onChanged: (message: string) => Promise<void>;
 }) {
@@ -116,7 +120,8 @@ export function RulesView({
 
   async function remove(rule: StashRule) {
     if (rule.type === 'MATCH') return;
-    if (!window.confirm(`删除优先级 ${rule.priority} 的 ${rule.type} 规则？`)) return;
+    if (!window.confirm(`删除优先级 ${rule.priority} 的 ${rule.type} 规则？`))
+      return;
     setBusy(rule.id);
     setError('');
     try {
@@ -146,6 +151,11 @@ export function RulesView({
         </button>
       </div>
 
+      <RoutingSimulator
+        key={snapshot.profile.revision}
+        profileId={profileId}
+        token={token}
+      />
       <div className="list-toolbar">
         <label className="search-box">
           <Search size={15} />
@@ -155,7 +165,9 @@ export function RulesView({
             placeholder="搜索域名、策略、类型、备注"
           />
         </label>
-        <span>{rules.length} / {snapshot.rules.length} 条</span>
+        <span>
+          {rules.length} / {snapshot.rules.length} 条
+        </span>
       </div>
 
       <div className="rules-stack">
@@ -177,7 +189,9 @@ export function RulesView({
               </div>
               <div className="rule-body">
                 <div className="rule-main">
-                  <StatusBadge tone={locked ? 'warn' : 'muted'}>{rule.type}</StatusBadge>
+                  <StatusBadge tone={locked ? 'warn' : 'muted'}>
+                    {rule.type}
+                  </StatusBadge>
                   <code>{locked ? 'fallback match' : rule.payload}</code>
                 </div>
                 <div className="rule-target">
@@ -203,6 +217,14 @@ export function RulesView({
                   description=""
                 />
                 <div className="icon-strip">
+                  <button
+                    className="icon-button"
+                    aria-label="查看关联"
+                    title="查看关联"
+                    onClick={() => onInspect(rule)}
+                  >
+                    <Network size={15} />
+                  </button>
                   <button
                     className="icon-button"
                     aria-label="上移"
