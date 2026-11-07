@@ -27,4 +27,8 @@
 
 浏览器验收覆盖管理器，不代表 Stash 设备上的节点可用性或实际业务分流验收。桌面和手机布局使用真实生产包检查；浏览器测试使用临时数据库，原有数据库不参与操作验收。
 
+## 资源仓库模块边界
+
+`lib/repository.ts` 只保留初始化状态、`recordRevision` 和组合根，公开 API 与行为保持不变。读取模型与共享校验位于 `repository-shared.ts`；引用收集与重命名传播位于 `resource-references.ts`；导入替换位于 `profile-content.ts`；资源写入按代理、规则集、Hosts、高级区块分别位于 `proxy-repository.ts`、`rule-provider-repository.ts`、`host-repository.ts`、`advanced-repository.ts`；Profile/设置/快照与导入/历史/恢复分别位于 `profile-repository.ts` 和 `revision-repository.ts`。模块沿用 `rule-repository.ts` 的依赖注入方式，避免循环依赖。
+
 后续工程审计整改以 [工程审计整改记录](engineering-audit-remediation.md) 为准；旧版规则包已从仓库移除，历史Python与静态等价检查数字仅记录前一轮验收，不属于当前CI。
