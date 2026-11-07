@@ -147,7 +147,7 @@ export function ResourceList({
   onAdd: () => void;
   onInspect: (item: ResourceItem) => void;
   onEdit: (item: ResourceItem) => void;
-  onDelete: (item: ResourceItem) => Promise<void>;
+  onDelete: (item: ResourceItem) => void | Promise<void>;
 }) {
   const [query, setQuery] = useState('');
   const Icon = kindIcon(kind);

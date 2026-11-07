@@ -10,7 +10,7 @@ import {
 } from './api-client';
 import { useUnsavedChanges } from './unsaved-changes';
 import { ValidationIssues } from './validation-issues';
-import { StatusBadge } from './ui';
+import { Modal, StatusBadge } from './ui';
 
 interface DeliveryStatus {
   currentRevision: number;
@@ -42,6 +42,7 @@ export function ExportView({
   const [origin, setOrigin] = useState('');
   const [statusAttempt, setStatusAttempt] = useState(0);
   const [changingLink, setChangingLink] = useState(false);
+  const [pendingLinkChange, setPendingLinkChange] = useState<'rotate' | 'revoke' | null>(null);
   const actionLock = useRef(false);
   useUnsavedChanges(false, changingLink);
   useEffect(() => {
@@ -90,9 +91,21 @@ export function ExportView({
       setBusy(false);
     }
   }
+  function requestLinkChange(revoke = false) {
+    if (actionLock.current) return;
+    if (!status?.subscriptionPath) {
+      void changeLink(revoke);
+      return;
+    }
+    setPendingLinkChange(revoke ? 'revoke' : 'rotate');
+  }
+  async function confirmLinkChange() {
+    const revoke = pendingLinkChange === 'revoke';
+    setPendingLinkChange(null);
+    await changeLink(revoke);
+  }
   async function changeLink(revoke = false) {
     if (actionLock.current) return;
-    if (status?.subscriptionPath && !window.confirm(revoke ? '撤销后，设备将无法通过此链接更新配置。确认撤销？' : '更换后，原链接立即失效，所有设备都需要重新填写新链接。确认更换？')) return;
     actionLock.current = true;
     setBusy(true);
     setChangingLink(true);
@@ -216,7 +229,7 @@ export function ExportView({
                 <button
                   className="button secondary"
                   disabled={busy}
-                  onClick={() => void changeLink()}
+                  onClick={() => requestLinkChange()}
                 >
                   <RefreshCw size={15} />
                   更换链接
@@ -224,7 +237,7 @@ export function ExportView({
                 <button
                   className="button secondary"
                   disabled={busy}
-                  onClick={() => void changeLink(true)}
+                  onClick={() => requestLinkChange(true)}
                 >
                   撤销链接
                 </button>
@@ -235,7 +248,7 @@ export function ExportView({
               <button
                 className="button secondary"
                 disabled={busy || status?.compiledRevision == null}
-                onClick={() => void changeLink()}
+                onClick={() => requestLinkChange()}
               >
                 <Link2 size={15} />
                 生成固定订阅链接
@@ -258,6 +271,40 @@ export function ExportView({
           <ValidationIssues issues={errors} onFix={onFixIssue} />
         </div>
       ) : null}
+      <Modal
+        open={pendingLinkChange !== null}
+        onOpenChange={(open) => {
+          if (!open && !busy) setPendingLinkChange(null);
+        }}
+        title={pendingLinkChange === 'revoke' ? '撤销固定订阅链接？' : '更换固定订阅链接？'}
+        description={
+          pendingLinkChange === 'revoke'
+            ? '撤销后，所有设备都无法再通过旧链接更新配置。'
+            : '更换后，旧链接立即失效，所有设备都需要重新填写新链接。'
+        }
+        footer={
+          <>
+            <button
+              className="button secondary"
+              onClick={() => setPendingLinkChange(null)}
+              disabled={busy}
+            >
+              取消
+            </button>
+            <button
+              className={pendingLinkChange === 'revoke' ? 'button danger' : 'button primary'}
+              onClick={confirmLinkChange}
+              disabled={busy}
+            >
+              {busy ? '处理中…' : pendingLinkChange === 'revoke' ? '撤销' : '更换'}
+            </button>
+          </>
+        }
+      >
+        <p className="delivery-note">
+          设备需要重新导入新的订阅链接才能继续自动更新。
+        </p>
+      </Modal>
       {notice ? <p role="status">{notice}</p> : null}
       {error ? <div role="alert">
         <pre className="inline-error">{error}</pre>

@@ -210,6 +210,10 @@ function Workspace() {
   const [importDialog, setImportDialog] = useState(false);
   const [importYamlText, setImportYamlText] = useState('');
   const [importPreviewRevision, setImportPreviewRevision] = useState<number | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{
+    kind: ResourceKind;
+    item: EditableResource;
+  } | null>(null);
   const [profileBusy, setProfileBusy] = useState(false);
   const [toast, setToast] = useState<{
     message: string;
@@ -421,25 +425,30 @@ function Workspace() {
     setEditorOpen(true);
   }
 
-  async function deleteResource(kind: ResourceKind, item: EditableResource) {
-    if (!item || !profileId || mutationLock.current) return;
-    if (
-      !window.confirm(
-        `删除 ${resourceLabel(kind, item)}？引用保护会拒绝删除仍被使用的资源。`
-      )
-    ) {
+  function requestDelete(kind: ResourceKind, item: EditableResource) {
+    if (!item || !profileId) return;
+    if (mutationLock.current) {
+      notify('正在处理上一个操作，请稍候再删除。', 'warn');
       return;
     }
+    setPendingDelete({ kind, item });
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete || !profileId || mutationLock.current) return;
+    const { kind, item } = pendingDelete;
     mutationLock.current = true;
     setProfileBusy(true);
     try {
-      await apiRequest(`/api/profiles/${profileId}/${kind}/${item.id}`, {
+      await apiRequest(`/api/profiles/${profileId}/${kind}/${item!.id}`, {
         method: 'DELETE',
         expectedRevision: snapshot!.profile.revision,
         token
       });
+      setPendingDelete(null);
       await reload('资源已删除。');
     } catch (caught) {
+      setPendingDelete(null);
       handleError(caught);
     } finally { mutationLock.current = false; setProfileBusy(false); }
   }
@@ -770,7 +779,7 @@ function Workspace() {
                   )
                 }
                 onDelete={(item) =>
-                  deleteResource(
+                  requestDelete(
                     SECTION_COPY[section]!.kind,
                     item as EditableResource
                   )
@@ -964,6 +973,41 @@ function Workspace() {
           placeholder="粘贴完整 Stash YAML"
         />
         {profileId ? <ImportPreview profileId={profileId} token={token} yaml={importYamlText} onPreview={setImportPreviewRevision} /> : null}
+      </Modal>
+
+      <Modal
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open && !profileBusy) setPendingDelete(null);
+        }}
+        title={
+          pendingDelete
+            ? `删除「${resourceLabel(pendingDelete.kind, pendingDelete.item)}」？`
+            : '确认删除'
+        }
+        description="删除会生成一个新的配置修订；仍被规则、策略组或高级区块引用的资源会被拒绝删除。"
+        footer={
+          <>
+            <button
+              className="button secondary"
+              onClick={() => setPendingDelete(null)}
+              disabled={profileBusy}
+            >
+              取消
+            </button>
+            <button
+              className="button danger"
+              onClick={confirmDelete}
+              disabled={profileBusy}
+            >
+              {profileBusy ? '删除中…' : '删除'}
+            </button>
+          </>
+        }
+      >
+        <p className="delivery-note">
+          资源一旦删除，只能从版本历史中恢复。请确认它不再被其他资源引用。
+        </p>
       </Modal>
 
       {toast ? (

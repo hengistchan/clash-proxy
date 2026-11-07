@@ -16,7 +16,7 @@ import {
 import { BUILTIN_POLICIES, type Snapshot, type StashRule, type ValidationResult } from '@/lib/types';
 
 import { ApiError, apiRequest } from './api-client';
-import { SelectField, StatusBadge, SwitchField } from './ui';
+import { Modal, SelectField, StatusBadge, SwitchField } from './ui';
 import { RoutingSimulator } from './routing-simulator';
 import { useUnsavedChanges } from './unsaved-changes';
 
@@ -57,6 +57,7 @@ export function RulesView({
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<number[]>([]);
   const [batchPolicy, setBatchPolicy] = useState('');
+  const [pendingRemove, setPendingRemove] = useState<StashRule | null>(null);
   const mutationLock = useRef(false);
   useUnsavedChanges(false, busy !== null);
   const matchCount = snapshot.rules.filter((rule) => rule.type === 'MATCH').length;
@@ -159,10 +160,14 @@ export function RulesView({
     }
   }
 
-  async function remove(rule: StashRule) {
+  function requestRemove(rule: StashRule) {
     if ((rule.type === 'MATCH' && matchCount <= 1) || mutationLock.current) return;
-    if (!window.confirm(`删除优先级 ${rule.priority} 的 ${rule.type} 规则？`))
-      return;
+    setPendingRemove(rule);
+  }
+
+  async function confirmRemove() {
+    const rule = pendingRemove;
+    if (!rule || mutationLock.current) return;
     if (!beginMutation(rule.id)) return;
     try {
       await apiRequest(`/api/profiles/${profileId}/rules/${rule.id}`, {
@@ -170,8 +175,10 @@ export function RulesView({
         token,
         expectedRevision: snapshot.profile.revision
       });
+      setPendingRemove(null);
       await onChanged('规则已删除，后续优先级已自动前移。');
     } catch (caught) {
+      setPendingRemove(null);
       setError(caught instanceof Error ? caught.message : '删除失败');
     } finally {
       finishMutation();
@@ -321,7 +328,7 @@ export function RulesView({
                       className="icon-button danger"
                       aria-label="删除"
                       disabled={busy !== null}
-                      onClick={() => remove(rule)}
+                      onClick={() => requestRemove(rule)}
                     >
                       <Trash2 size={15} />
                     </button>
@@ -333,6 +340,40 @@ export function RulesView({
         })}
       </div>
       {error ? <pre className="inline-error">{error}</pre> : null}
+      <Modal
+        open={pendingRemove !== null}
+        onOpenChange={(open) => {
+          if (!open && busy === null) setPendingRemove(null);
+        }}
+        title={
+          pendingRemove
+            ? `删除优先级 ${pendingRemove.priority} 的 ${pendingRemove.type} 规则？`
+            : '确认删除'
+        }
+        description="删除会生成一个新的配置修订，后续规则优先级会自动前移。"
+        footer={
+          <>
+            <button
+              className="button secondary"
+              onClick={() => setPendingRemove(null)}
+              disabled={busy !== null}
+            >
+              取消
+            </button>
+            <button
+              className="button danger"
+              onClick={confirmRemove}
+              disabled={busy !== null}
+            >
+              {busy !== null ? '删除中…' : '删除'}
+            </button>
+          </>
+        }
+      >
+        <p className="delivery-note">
+          删除后只能从版本历史恢复。MATCH 规则仍受末位保护。
+        </p>
+      </Modal>
     </section>
   );
 }

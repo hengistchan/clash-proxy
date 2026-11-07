@@ -217,14 +217,14 @@ test('invalid drafts preserve device downloads, repair updates them, and link ro
   await expect.poll(async () => (await request.get(oldLink)).headers()['x-config-revision']).not.toBe(previousRevision);
   const repaired = await request.get(oldLink);
   expect(await repaired.text()).toContain('https://subscription.example.test/browser-fixture');
-  page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: '更换链接', exact: true }).click();
+  await page.getByRole('dialog', { name: '更换固定订阅链接？' }).getByRole('button', { name: '更换', exact: true }).click();
   await expect(linkField).not.toHaveValue(oldLink);
   const newLink = await linkField.inputValue();
   expect((await request.get(oldLink)).status()).toBe(404);
   expect((await request.get(newLink)).status()).toBe(200);
-  page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: '撤销链接', exact: true }).click();
+  await page.getByRole('dialog', { name: '撤销固定订阅链接？' }).getByRole('button', { name: '撤销', exact: true }).click();
   await expect(linkField).toBeHidden();
   expect((await request.get(newLink)).status()).toBe(404);
   await navigate(page, '版本');
@@ -314,8 +314,8 @@ test('rotating a subscription hides the old link and uses the POST result withou
     await pending;
     await route.fulfill({ response });
   });
-  page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: '更换链接', exact: true }).click();
+  await page.getByRole('dialog', { name: '更换固定订阅链接？' }).getByRole('button', { name: '更换', exact: true }).click();
   await started;
   await expect(link).toBeHidden();
   release();
