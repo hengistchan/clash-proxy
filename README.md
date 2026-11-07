@@ -1,6 +1,7 @@
 # Stash Config Forge
 
 [![Offline CI](https://github.com/hengistchan/clash-proxy/actions/workflows/offline-ci.yml/badge.svg?branch=main)](https://github.com/hengistchan/clash-proxy/actions/workflows/offline-ci.yml)
+[![Security CI](https://github.com/hengistchan/clash-proxy/actions/workflows/security-ci.yml/badge.svg?branch=main)](https://github.com/hengistchan/clash-proxy/actions/workflows/security-ci.yml)
 
 一个用于创建、编辑、检查、版本化和交付 Stash 配置的 Web 管理工具。
 
@@ -9,7 +10,9 @@
 
 ## 功能
 
-- 管理多个配置，查看当前草稿、最近成功版本和修订历史。
+- 管理多个配置，查看当前草稿、最近成功版本和有保留策略的修订历史。
+- 导入和恢复前查看脱敏语义差异；批量修改规则策略、启停和顺序。
+- 服务端使用 If-Match 版本检查拒绝并发覆盖，保留发生冲突的本页输入。
 - 增删改查代理源、直接节点、策略组、规则集、路由规则、Hosts 和高级区块。
 - 保留未识别的 YAML 字段和嵌套类型，减少导入后再导出的信息损失。
 - 用关系树展示“路由规则 → 策略组 → 节点/代理源”以及规则集、DNS、脚本引用。
@@ -24,10 +27,10 @@
 
 ```bash
 npm ci
-npm run dev -- --hostname 127.0.0.1 --port 3010
+STASH_ALLOW_INSECURE_LOCAL=1 npm run dev -- --port 3010
 ```
 
-打开 <http://127.0.0.1:3010>。
+打开 <http://127.0.0.1:3010>。免认证仅允许显式开启的本机开发模式，启动器强制绑定回环地址。也可以设置 `STASH_ADMIN_TOKEN` 使用认证开发模式。生产启动必须配置管理员令牌，否则拒绝启动和管理访问。
 
 首次启动会创建只包含 `MATCH,DIRECT` 的最小配置。数据和加密密钥默认保存在：
 
@@ -41,7 +44,7 @@ data/stash-config.sqlite3.key
 如果要显式载入示例配置：
 
 ```bash
-STASH_SEED_EXAMPLE=1 npm run dev -- --hostname 127.0.0.1 --port 3010
+STASH_SEED_EXAMPLE=1 STASH_ALLOW_INSECURE_LOCAL=1 npm run dev -- --port 3010
 ```
 
 示例模板位于 `examples/Production.yaml`，其中的订阅地址是占位符，不能直接作为
@@ -63,7 +66,7 @@ GET /api/config_download/{token}/config.yaml
 ```
 
 下载接口不接受私人订阅 URL 参数。订阅地址绑定到各自的代理源，并经加密后保存在
-SQLite 中。普通资源 API 不会回传 URL 或认证请求头。
+SQLite 中。代理源和规则集的普通资源 API 均不回传 URL 或认证请求头；写入省略来源字段会保留既有凭据。
 
 ## 验证
 
@@ -78,7 +81,7 @@ npm run test:e2e
 - `npm run build`：生产构建及持久化数据排除检查。
 - `npm run test:e2e`：在临时数据库上启动真实生产服务，执行浏览器端到端回归。
 
-GitHub Actions 会执行类型检查、服务测试、生产构建和 Chromium 回归。
+GitHub Actions 会执行类型检查、服务测试、生产构建和 Chromium 回归。Security CI 另执行依赖漏洞审计、认证边界与生产配置检查、完整 Git 历史秘密扫描。
 
 ## Docker
 
@@ -90,7 +93,7 @@ STASH_ADMIN_TOKEN='replace-with-a-strong-token' \
 默认监听 `127.0.0.1:8080`。容器以非 root 用户运行，根文件系统只读，SQLite 和密钥
 保存在 named volume `stash-data` 中，容器或主机重启后仍会保留。
 
-公开部署必须配置 HTTPS 和 `STASH_ADMIN_TOKEN`。反向代理、环境变量、备份和恢复流程见
+所有生产部署必须配置 `STASH_ADMIN_TOKEN`，Compose 禁止空值；公开部署还需配置 HTTPS。反向代理、环境变量、备份和恢复流程见
 [SERVICE.md](SERVICE.md)。
 
 ## 目录
@@ -111,3 +114,5 @@ STASH_ADMIN_TOKEN='replace-with-a-strong-token' \
 - 管理页面只把管理员令牌保存在当前浏览器会话。
 - 固定下载链接持有者可以读取完整私人配置，应像密码一样保管。
 - 数据库和密钥丢失后无法恢复加密内容；迁移或回滚前必须成对备份。
+
+本轮工程审计整改的设计、兼容性变更与验收边界见 [工程审计整改记录](docs/engineering-audit-remediation.md)。

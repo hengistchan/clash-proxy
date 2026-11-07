@@ -1,3 +1,4 @@
+import { withProfileRevision } from '@/lib/revision-control';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
@@ -21,10 +22,12 @@ export async function POST(
     requireAdmin(request);
     const { profileId } = await context.params;
     const input = importSchema.parse(await readJson(request));
-    const snapshot = importYaml(parseId(profileId), input.yaml);
-    return NextResponse.json({
-      ...snapshot,
-      validation: validateSnapshot(getCompilationSnapshot(snapshot.profile.id))
+    return withProfileRevision(request, parseId(profileId), () => {
+      const snapshot = importYaml(parseId(profileId), input.yaml);
+      return NextResponse.json({
+        ...snapshot,
+        validation: validateSnapshot(getCompilationSnapshot(snapshot.profile.id))
+      });
     });
   } catch (error) {
     return jsonError(error);

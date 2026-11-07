@@ -5,6 +5,7 @@ import { refreshCompiledConfig } from './compilation';
 import type { ExportResult } from './exporter';
 import { getCompilationSnapshot } from './repository';
 import { HttpError } from './http';
+import { assertArtifactSemantics } from './artifact-semantics';
 
 function artifactRow(profileId: number) {
   const snapshot = getCompilationSnapshot(profileId);
@@ -15,6 +16,13 @@ function artifactRow(profileId: number) {
     .get(profileId) as
     | { revision: number; artifact_ciphertext: string; created_at: string }
     | undefined;
+  if (row) {
+    try { assertArtifactSemantics(decryptJson<ExportResult>(row.artifact_ciphertext)); }
+    catch (error) {
+      if (error instanceof HttpError && error.status === 409) return { snapshot, row: undefined };
+      throw error;
+    }
+  }
   return { snapshot, row };
 }
 export function getDeliveryStatus(profileId: number) {
@@ -88,8 +96,10 @@ export function configForToken(token: string) {
       409,
       'No successfully compiled configuration is available'
     );
+  const artifact = decryptJson<ExportResult>(row.artifact_ciphertext);
+  assertArtifactSemantics(artifact);
   return {
-    ...decryptJson<ExportResult>(row.artifact_ciphertext),
+    ...artifact,
     revision: row.revision
   };
 }

@@ -5,6 +5,8 @@ import type { ValidationIssue } from '@/lib/types';
 export class ApiError extends Error {
   status: number;
   issues: ValidationIssue[];
+  code?: string;
+  currentRevision?: number;
 
   constructor(status: number, message: string, issues: ValidationIssue[] = []) {
     super(message);
@@ -15,7 +17,7 @@ export class ApiError extends Error {
 
 export async function apiRequest<T>(
   path: string,
-  options: RequestInit & { token?: string } = {}
+  options: RequestInit & { token?: string; expectedRevision?: number } = {}
 ): Promise<T> {
   const headers = new Headers(options.headers || {});
   if (options.body && !headers.has('Content-Type')) {
@@ -24,8 +26,10 @@ export async function apiRequest<T>(
   if (options.token) {
     headers.set('X-Admin-Token', options.token);
   }
+  if (options.expectedRevision !== undefined) headers.set('If-Match', `"${options.expectedRevision}"`);
+  const { token: _token, expectedRevision: _revision, ...requestOptions } = options;
   const response = await fetch(path, {
-    ...options,
+    ...requestOptions,
     headers,
     cache: 'no-store'
   });
@@ -51,7 +55,12 @@ export async function apiRequest<T>(
       Array.isArray(payload.issues)
         ? (payload.issues as ValidationIssue[])
         : [];
-    throw new ApiError(response.status, detail, issues);
+    const error = new ApiError(response.status, detail, issues);
+    if (payload && typeof payload === 'object') {
+      if ('code' in payload && typeof payload.code === 'string') error.code = payload.code;
+      if ('currentRevision' in payload && typeof payload.currentRevision === 'number') error.currentRevision = payload.currentRevision;
+    }
+    throw error;
   }
   return payload as T;
 }

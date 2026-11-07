@@ -1,3 +1,5 @@
+import { createRuleRepository, mapRule } from './rule-repository';
+import { persistRevision } from './revision-store';
 import type Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -5,9 +7,11 @@ import path from 'node:path';
 import { decryptJson, encryptJson } from './crypto';
 import { refreshCompiledConfig } from './compilation';
 import { validateSubscriptionUrl } from './provider-source';
+import { publicRuleProvider, ruleProviderConfig, type RuleProviderInput } from './rule-provider-source';
 import { getDb, transaction } from './db';
 import { HttpError } from './http';
 import { parseYamlDocument, type ImportedDocument } from './yaml-import';
+import { revisionRetentionStatus } from './history-retention';
 import {
   normalizeRuleInput,
   serializeRule,
@@ -122,37 +126,22 @@ function mapRuleProvider(
   row: DbRow,
   entries: RuleProviderEntry[]
 ): RuleProvider {
+  const config = decryptObject(row.config_ciphertext);
+  const providerType = String(row.provider_type) as RuleProviderType;
   return {
     id: Number(row.id),
     name: String(row.name),
     displayName: String(row.display_name || ''),
     behavior: String(row.behavior),
-    providerType: String(row.provider_type) as RuleProviderType,
-    config: decryptObject(row.config_ciphertext),
+    providerType,
+    sourceConfigured: providerType === 'inline' || (providerType === 'remote' ? typeof config.url === 'string' && Boolean(config.url.trim()) : typeof config.path === 'string' && Boolean(config.path.trim())),
+    headersConfigured: Boolean(config.headers && Object.keys(config.headers).length),
+    config,
     entries,
     sortOrder: Number(row.sort_order)
   };
 }
 
-function mapRule(row: DbRow): StashRule {
-  let options: string[] = [];
-  try {
-    const parsed = JSON.parse(String(row.options_json || '[]'));
-    options = Array.isArray(parsed) ? parsed.map(String) : [];
-  } catch {
-    options = [];
-  }
-  return {
-    id: Number(row.id),
-    priority: Number(row.priority),
-    type: String(row.type),
-    payload: String(row.payload || ''),
-    policy: String(row.policy),
-    options,
-    enabled: Boolean(row.enabled),
-    note: String(row.note || '')
-  };
-}
 
 function mapHost(row: DbRow): HostEntry {
   return {
@@ -275,25 +264,13 @@ function snapshotFromDb(db: Database.Database, profileId: number): Snapshot {
   };
 }
 
-function recordRevision(db: Database.Database, profileId: number): number {
-  const profile = mapProfile(getProfileRow(db, profileId));
-  const nextRevision = profile.revision + 1;
-  const touched = now();
-  db.prepare(
-    'UPDATE profiles SET revision = ?, updated_at = ? WHERE id = ?'
-  ).run(nextRevision, touched, profileId);
-  const updated = snapshotFromDb(db, profileId);
-  db.prepare(
-    'INSERT INTO revisions (profile_id, revision, config_ciphertext, created_at) VALUES (?, ?, ?, ?)'
-  ).run(
-    profileId,
-    nextRevision,
-    encryptJson(updated as unknown as JsonValue),
-    touched
-  );
-  refreshCompiledConfig(db, updated);
-  return nextRevision;
+export function recordRevision(db: Database.Database, profileId: number): number {
+  return persistRevision(db, profileId, () => snapshotFromDb(db, profileId));
 }
+
+// The public repository remains a facade; rule ordering and edits live together.
+const ruleRepository = createRuleRepository({ ensureInitialized, snapshotFromDb, recordRevision });
+export const { createRule, updateRule, deleteRule, reorderRules } = ruleRepository;
 
 function nextSortOrder(
   db: Database.Database,
@@ -930,7 +907,8 @@ export function publicProvider(provider: ProxyProvider): ProxyProvider {
 function publicSnapshot(snapshot: Snapshot): Snapshot {
   return {
     ...snapshot,
-    proxyProviders: snapshot.proxyProviders.map(publicProvider)
+    proxyProviders: snapshot.proxyProviders.map(publicProvider),
+    ruleProviders: snapshot.ruleProviders.map(publicRuleProvider)
   };
 }
 // Server compiler only. Do not serialize this snapshot into management responses.
@@ -1253,19 +1231,13 @@ export function deleteProxyGroup(profileId: number, itemId: number): void {
 
 export function createRuleProvider(
   profileId: number,
-  input: {
-    name: string;
-    displayName?: string;
-    behavior: string;
-    providerType: RuleProviderType;
-    config: JsonObject;
-    entries: string[];
-  }
+  input: RuleProviderInput
 ): RuleProvider {
   ensureInitialized();
   return transaction((db) => {
     getProfileRow(db, profileId);
     assertUniqueName(db, 'rule_providers', profileId, input.name);
+    const config = ruleProviderConfig(input);
     const order = nextSortOrder(db, 'rule_providers', profileId);
     const result = db
       .prepare(
@@ -1279,7 +1251,7 @@ export function createRuleProvider(
         input.displayName?.trim() || '',
         input.behavior,
         input.providerType,
-        encryptJson(input.config),
+        encryptJson(config),
         order
       );
     const providerId = Number(result.lastInsertRowid);
@@ -1289,26 +1261,19 @@ export function createRuleProvider(
       ).run(providerId, entry, index + 1);
     });
     recordRevision(db, profileId);
-    return mapRuleProvider(
+    return publicRuleProvider(mapRuleProvider(
       db
         .prepare('SELECT * FROM rule_providers WHERE id = ?')
         .get(providerId) as DbRow,
       listRuleEntries(db, providerId)
-    );
+    ));
   });
 }
 
 export function updateRuleProvider(
   profileId: number,
   itemId: number,
-  input: {
-    name: string;
-    displayName?: string;
-    behavior: string;
-    providerType: RuleProviderType;
-    config: JsonObject;
-    entries: string[];
-  }
+  input: RuleProviderInput
 ): RuleProvider {
   ensureInitialized();
   return transaction((db) => {
@@ -1318,6 +1283,7 @@ export function updateRuleProvider(
     if (!current) throw new HttpError(404, 'Rule provider not found');
     assertUniqueName(db, 'rule_providers', profileId, input.name, itemId);
     const oldName = String(current.name);
+    const config = ruleProviderConfig(input, input.providerType === String(current.provider_type) ? decryptObject(current.config_ciphertext) : {});
     db.prepare(
       `UPDATE rule_providers
        SET name = ?, display_name = COALESCE(?, display_name), behavior = ?, provider_type = ?, config_ciphertext = ? WHERE id = ?`
@@ -1326,7 +1292,7 @@ export function updateRuleProvider(
       input.displayName === undefined ? null : input.displayName.trim(),
       input.behavior,
       input.providerType,
-      encryptJson(input.config),
+      encryptJson(config),
       itemId
     );
     db.prepare('DELETE FROM rule_provider_entries WHERE provider_id = ?').run(
@@ -1347,12 +1313,12 @@ export function updateRuleProvider(
       );
     }
     recordRevision(db, profileId);
-    return mapRuleProvider(
+    return publicRuleProvider(mapRuleProvider(
       db
         .prepare('SELECT * FROM rule_providers WHERE id = ?')
         .get(itemId) as DbRow,
       listRuleEntries(db, itemId)
-    );
+    ));
   });
 }
 
@@ -1497,223 +1463,6 @@ export function deleteRuleProviderEntry(
   });
 }
 
-function terminalRule(rules: StashRule[], required = true): StashRule | null {
-  const enabled = rules.filter((rule) => rule.enabled);
-  const terminal = enabled.at(-1);
-  const matches = rules.filter((rule) => rule.type === 'MATCH');
-  if (!required && matches.length === 0) return null;
-  if (matches.length !== 1 || !terminal || terminal.type !== 'MATCH') {
-    throw new HttpError(409, 'Exactly one enabled MATCH rule must remain last');
-  }
-  return terminal;
-}
-
-function renumberRules(
-  db: Database.Database,
-  profileId: number,
-  ids: number[]
-): void {
-  db.prepare(
-    'UPDATE rules SET priority = priority + 1000000 WHERE profile_id = ?'
-  ).run(profileId);
-  ids.forEach((id, index) => {
-    db.prepare(
-      'UPDATE rules SET priority = ? WHERE id = ? AND profile_id = ?'
-    ).run(index + 1, id, profileId);
-  });
-}
-
-export function createRule(
-  profileId: number,
-  input: {
-    type: string;
-    payload?: string;
-    policy: string;
-    options?: string[];
-    enabled?: boolean;
-    note?: string;
-    priority?: number;
-  }
-): StashRule {
-  ensureInitialized();
-  return transaction((db) => {
-    getProfileRow(db, profileId);
-    const current = snapshotFromDb(db, profileId);
-    const rule = normalizeRuleInput(input);
-    const matches = current.rules.filter((item) => item.type === 'MATCH');
-    if (rule.type === 'MATCH' && matches.length) {
-      throw new HttpError(409, 'A terminal MATCH rule already exists');
-    }
-    if (rule.type === 'MATCH' && !rule.enabled) {
-      throw new HttpError(409, 'The terminal MATCH rule must remain enabled');
-    }
-    // A structurally valid import can be an invalid draft. Let users add its
-    // missing terminal rule without first requiring that rule to already exist.
-    const terminal = rule.type === 'MATCH'
-      ? null
-      : terminalRule(current.rules, current.profile.mode === 'rule');
-    const ids = current.rules
-      .map((item) => item.id)
-      .filter((id) => id !== terminal?.id);
-    const order = db
-      .prepare(
-        `INSERT INTO rules
-        (profile_id, priority, type, payload, policy, options_json, enabled, note)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        profileId,
-        current.rules.length + 1,
-        rule.type,
-        rule.payload,
-        rule.policy,
-        JSON.stringify(rule.options),
-        Number(rule.enabled),
-        rule.note
-      );
-    const id = Number(order.lastInsertRowid);
-    const insertAt = Math.max(
-      0,
-      Math.min((input.priority || terminal?.priority || ids.length + 1) - 1, ids.length)
-    );
-    if (rule.type === 'MATCH') ids.push(id);
-    else ids.splice(insertAt, 0, id);
-    if (terminal) ids.push(terminal.id);
-    renumberRules(db, profileId, ids);
-    recordRevision(db, profileId);
-    return mapRule(
-      db.prepare('SELECT * FROM rules WHERE id = ?').get(id) as DbRow
-    );
-  });
-}
-
-export function updateRule(
-  profileId: number,
-  itemId: number,
-  input: {
-    type: string;
-    payload?: string;
-    policy: string;
-    options?: string[];
-    enabled?: boolean;
-    note?: string;
-    priority?: number;
-  }
-): StashRule {
-  ensureInitialized();
-  return transaction((db) => {
-    const currentRow = db
-      .prepare('SELECT * FROM rules WHERE id = ? AND profile_id = ?')
-      .get(itemId, profileId) as DbRow | undefined;
-    if (!currentRow) throw new HttpError(404, 'Rule not found');
-    const currentSnapshot = snapshotFromDb(db, profileId);
-    const rule = normalizeRuleInput(input);
-    const existing = currentSnapshot.rules.find((item) => item.id === itemId);
-    if (!existing) throw new HttpError(404, 'Rule not found');
-    const matches = currentSnapshot.rules.filter((item) => item.type === 'MATCH');
-    const protectedTerminal = matches.length === 1 && existing.type === 'MATCH' &&
-      existing.enabled && currentSnapshot.rules.filter((item) => item.enabled).at(-1)?.id === existing.id;
-    if (existing.type === 'MATCH') {
-      if (rule.type !== 'MATCH' || !rule.enabled) {
-        throw new HttpError(
-          409,
-          'The terminal MATCH rule cannot be converted or disabled'
-        );
-      }
-      if (protectedTerminal && input.priority && input.priority !== existing.priority) {
-        throw new HttpError(409, 'The terminal MATCH rule must remain last');
-      }
-    } else if (rule.type === 'MATCH' && matches.length) {
-      throw new HttpError(409, 'A terminal MATCH rule already exists');
-    }
-    if (rule.type === 'MATCH' && !rule.enabled) {
-      throw new HttpError(409, 'The terminal MATCH rule must remain enabled');
-    }
-    // Saving an existing misplaced/disabled MATCH repairs it by placing the
-    // enabled rule last. Converting the first MATCH follows the same path.
-    const terminal = rule.type === 'MATCH'
-      ? null
-      : terminalRule(currentSnapshot.rules, currentSnapshot.profile.mode === 'rule');
-    db.prepare(
-      `UPDATE rules
-       SET type = ?, payload = ?, policy = ?, options_json = ?, enabled = ?, note = ?
-       WHERE id = ?`
-    ).run(
-      rule.type,
-      rule.payload,
-      rule.policy,
-      JSON.stringify(rule.options),
-      Number(rule.enabled),
-      rule.note,
-      itemId
-    );
-    if ((input.priority && existing.type !== 'MATCH') || (rule.type === 'MATCH' && !protectedTerminal)) {
-      const ids = currentSnapshot.rules
-        .map((item) => item.id)
-        .filter((id) => id !== itemId && id !== terminal?.id);
-      const insertAt = Math.max(0, Math.min((input.priority || ids.length + 1) - 1, ids.length));
-      if (rule.type === 'MATCH') ids.push(itemId);
-      else ids.splice(insertAt, 0, itemId);
-      if (terminal) ids.push(terminal.id);
-      renumberRules(db, profileId, ids);
-    }
-    recordRevision(db, profileId);
-    return mapRule(
-      db.prepare('SELECT * FROM rules WHERE id = ?').get(itemId) as DbRow
-    );
-  });
-}
-
-export function deleteRule(profileId: number, itemId: number): void {
-  ensureInitialized();
-  transaction((db) => {
-    const row = db
-      .prepare('SELECT * FROM rules WHERE id = ? AND profile_id = ?')
-      .get(itemId, profileId) as DbRow | undefined;
-    if (!row) throw new HttpError(404, 'Rule not found');
-    if (String(row.type) === 'MATCH') {
-      const rules = snapshotFromDb(db, profileId).rules;
-      const matches = rules.filter((rule) => rule.type === 'MATCH');
-      const lastEnabled = rules.filter((rule) => rule.enabled).at(-1);
-      if (matches.length <= 1 || lastEnabled?.id === itemId) {
-        throw new HttpError(409, 'The terminal MATCH rule cannot be deleted');
-      }
-    }
-    db.prepare('DELETE FROM rules WHERE id = ?').run(itemId);
-    const ids = (
-      db
-        .prepare(
-          'SELECT id FROM rules WHERE profile_id = ? ORDER BY priority, id'
-        )
-        .all(profileId) as DbRow[]
-    ).map((item) => Number(item.id));
-    renumberRules(db, profileId, ids);
-    recordRevision(db, profileId);
-  });
-}
-
-export function reorderRules(profileId: number, ids: number[]): StashRule[] {
-  ensureInitialized();
-  return transaction((db) => {
-    const snapshot = snapshotFromDb(db, profileId);
-    const terminal = terminalRule(snapshot.rules, snapshot.profile.mode === 'rule');
-    const currentIds = snapshot.rules.map((rule) => rule.id);
-    if (
-      new Set(ids).size !== ids.length ||
-      ids.length !== currentIds.length ||
-      ids.some((id) => !currentIds.includes(id)) ||
-      (terminal !== null && ids.at(-1) !== terminal.id)
-    ) {
-      throw new HttpError(
-        409,
-        'Order must include every rule once and end with MATCH'
-      );
-    }
-    renumberRules(db, profileId, ids);
-    recordRevision(db, profileId);
-    return snapshotFromDb(db, profileId).rules;
-  });
-}
 
 export function createHost(
   profileId: number,
@@ -1832,6 +1581,9 @@ export function listRevisions(
 ): {
   items: Array<{ id: number; revision: number; createdAt: string }>;
   nextCursor: number | null;
+  retentionLimit: number;
+  retainedCount: number;
+  oldestRevision: number | null;
 } {
   ensureInitialized();
   getProfileRow(getDb(), profileId);
@@ -1863,6 +1615,7 @@ export function listRevisions(
     };
   });
   return {
+    ...revisionRetentionStatus(getDb(), profileId),
     items,
     nextCursor: hasMore ? (items.at(-1)?.revision ?? null) : null
   };

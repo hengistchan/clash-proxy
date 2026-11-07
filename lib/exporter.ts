@@ -6,9 +6,12 @@ import { ruleListToYaml } from './rules';
 import type { JsonObject, JsonValue, Snapshot } from './types';
 import { RESERVED_TOP_LEVEL_KEYS, isJsonObject } from './types';
 import { validateSnapshot } from './validation';
+import { exportRuleProvider } from './rule-provider-source';
+import { CONFIG_COMPILER_VERSION } from './artifact-semantics';
 
 const KNOWN_EARLY_SECTIONS = ['http', 'cron', 'script-providers', 'script'];
 export interface ExportResult {
+  compilerVersion?: number;
   yaml: string;
   filename: string;
   sha256: string;
@@ -88,17 +91,7 @@ export function buildConfigObject(snapshot: Snapshot): {
   if (Object.keys(providers).length) config['proxy-providers'] = providers;
 
   const ruleProviders = Object.fromEntries(
-    snapshot.ruleProviders.map((item) => {
-      const provider: JsonObject = {
-        ...item.config,
-        behavior: item.behavior
-      };
-      if (item.providerType === 'inline') {
-        provider.type = 'inline';
-        provider.payload = item.entries.map((entry) => entry.value);
-      }
-      return [item.name, provider];
-    })
+    snapshot.ruleProviders.map((item) => [item.name, exportRuleProvider(item)])
   );
   config['rule-providers'] = ruleProviders;
 
@@ -137,6 +130,7 @@ export function exportProfile(snapshot: Snapshot): ExportResult {
   }
   const sha256 = createHash('sha256').update(yaml, 'utf8').digest('hex');
   return {
+    compilerVersion: CONFIG_COMPILER_VERSION,
     yaml,
     filename: `config-${snapshot.profile.id}.yaml`,
     sha256,

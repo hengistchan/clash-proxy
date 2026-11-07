@@ -71,6 +71,8 @@ export function AdvancedView({
     [customKey, setCustomKey] = useState('');
   const [saving, setSaving] = useState(false),
     [error, setError] = useState('');
+  const [conflict, setConflict] = useState(false);
+  const [draftRevision, setDraftRevision] = useState(snapshot.profile.revision);
   const root = useRef<HTMLElement>(null);
   const [baseline, setBaseline] = useState('[]');
   const fingerprint = JSON.stringify(sections.map(({ key, text }) => ({ key, text })));
@@ -80,6 +82,8 @@ export function AdvancedView({
   const loadedProfile = useRef(profileId);
   useUnsavedChanges(dirty, saving, resetDraft);
   function resetDraft() {
+    setDraftRevision(snapshot.profile.revision);
+    setConflict(false);
     dirtyRef.current = false;
     loadedProfile.current = profileId;
     const next = snapshot.advancedSections.map((section) => ({
@@ -138,6 +142,7 @@ export function AdvancedView({
       });
       await apiRequest(`/api/profiles/${profileId}/advanced`, {
         method: 'PUT',
+        expectedRevision: draftRevision,
         token,
         body: JSON.stringify({ sections: parsed })
       });
@@ -145,6 +150,7 @@ export function AdvancedView({
       setBaseline(fingerprint);
       await onSaved('扩展配置已保存并检查。');
     } catch (caught) {
+      setConflict(caught instanceof ApiError && caught.code === 'revision.conflict');
       setError(
         caught instanceof ApiError && caught.issues.length
           ? caught.issues.map((i) => i.message).join('\n')
@@ -175,6 +181,9 @@ export function AdvancedView({
           {saving ? '保存中…' : '保存扩展配置'}
         </button>
       </div>
+      {conflict ? <div className="inline-error" role="alert"><p>其他会话已更新配置，本页输入仍保留。</p><button className="button secondary" onClick={() => {
+        if (window.confirm('放弃本页尚未保存的修改，读取最新配置？')) { resetDraft(); void onSaved('已重新读取配置，请检查最新内容。'); }
+      }}>放弃本页修改并读取最新配置</button></div> : null}
       {dirty ? <p className="delivery-note" role="status">有未保存的修改，保存后才会检查并更新配置。</p> : null}
       <div className="preset-row">
         {PRESETS.filter((p) => !sections.some((s) => s.key === p.key)).map(

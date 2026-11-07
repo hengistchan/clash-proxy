@@ -2,8 +2,10 @@ import { cp, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { standaloneEnvironment } from './standalone-paths.mjs';
+import { assertRuntimeSecurity } from './runtime-security.mjs';
 
 const root = process.cwd();
+assertRuntimeSecurity({ ...process.env, NODE_ENV: 'production' });
 // Resolve persistent paths before server.js changes the working directory.
 const environment = standaloneEnvironment(root);
 const standalone = path.join(root, '.next', 'standalone');

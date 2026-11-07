@@ -6,11 +6,13 @@ import type { ValidationIssue } from './types';
 export class HttpError extends Error {
   status: number;
   issues?: ValidationIssue[];
+  context?: { code?: string; expectedRevision?: number; currentRevision?: number };
 
-  constructor(status: number, message: string, issues?: ValidationIssue[]) {
+  constructor(status: number, message: string, issues?: ValidationIssue[], context?: HttpError['context']) {
     super(message);
     this.status = status;
     this.issues = issues;
+    this.context = context;
   }
 }
 
@@ -19,7 +21,7 @@ const MAX_JSON_BODY_BYTES = 2 * 1024 * 1024;
 export function jsonError(error: unknown): NextResponse {
   if (error instanceof HttpError) {
     return NextResponse.json(
-      { detail: error.message, issues: error.issues || [] },
+      { detail: error.message, issues: error.issues || [], ...error.context },
       { status: error.status }
     );
   }

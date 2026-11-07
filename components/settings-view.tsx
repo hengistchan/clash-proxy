@@ -79,6 +79,8 @@ export function SettingsView({
   const [advancedDns, setAdvancedDns] = useState('{}');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [conflict, setConflict] = useState(false);
+  const [draftRevision, setDraftRevision] = useState(snapshot.profile.revision);
   const [baseline, setBaseline] = useState<string | null>(null);
   const fingerprint = JSON.stringify({
     mode, targetPlatform, logLevel, ipv6, nameserver, defaultNameserver,
@@ -91,6 +93,8 @@ export function SettingsView({
   useUnsavedChanges(dirty, saving, resetDraft);
 
   function resetDraft() {
+    setDraftRevision(snapshot.profile.revision);
+    setConflict(false);
     dirtyRef.current = false;
     loadedProfile.current = profileId;
     const draft = settingsDraft(snapshot);
@@ -146,6 +150,7 @@ export function SettingsView({
       };
       await apiRequest(`/api/profiles/${profileId}/settings`, {
         method: 'PUT',
+        expectedRevision: draftRevision,
         token,
         body: JSON.stringify({
           mode,
@@ -159,6 +164,7 @@ export function SettingsView({
       setBaseline(fingerprint);
       await onSaved('全局设置与 DNS 已保存。');
     } catch (caught) {
+      setConflict(caught instanceof ApiError && caught.code === 'revision.conflict');
       if (caught instanceof ApiError && caught.issues.length) {
         setError(caught.issues.map((issue) => issue.message).join('\n'));
       } else {
@@ -183,6 +189,9 @@ export function SettingsView({
         </button>
       </div>
 
+      {conflict ? <div className="inline-error" role="alert"><p>其他会话已更新配置，本页输入仍保留。</p><button className="button secondary" onClick={() => {
+        if (window.confirm('放弃本页尚未保存的修改，读取最新配置？')) { resetDraft(); void onSaved('已重新读取配置，请检查最新内容。'); }
+      }}>放弃本页修改并读取最新配置</button></div> : null}
       {dirty ? <p className="delivery-note" role="status">有未保存的修改，保存后才会检查并更新配置。</p> : null}
 
       <div className="settings-grid">

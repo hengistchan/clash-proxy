@@ -47,7 +47,7 @@ beforeEach(() => {
   process.env.STASH_KEY_PATH = path.join(temp, `${sequence}.key`);
   delete process.env.STASH_SEED_EXAMPLE;
   delete process.env.STASH_SECRET_KEY;
-  delete process.env.STASH_ADMIN_TOKEN;
+  process.env.STASH_ADMIN_TOKEN = ['test','admin'].join('-');
 });
 after(() => {
   closeDbForTests();
@@ -416,7 +416,7 @@ test('API diagnostics inspect imported credentials without disclosing invalid so
     p.id,
     `proxy-providers:\n  source:\n    url: ${invalid}\nrules: ["MATCH,DIRECT"]`
   );
-  const response = await GET(new Request('http://localhost/snapshot'), {
+  const response = await GET(new Request('http://localhost/snapshot', { headers: { 'X-Admin-Token': process.env.STASH_ADMIN_TOKEN! } }), {
     params: Promise.resolve({ profileId: String(p.id) })
   });
   const data = await response.json();
@@ -461,7 +461,7 @@ test('download APIs return complete links and honor the configured external orig
   rotateDownloadLink(p.id);
   process.env.STASH_PUBLIC_BASE_URL = 'https://config.example';
   try {
-    const response = await GET(new Request('http://internal/delivery'), {
+    const response = await GET(new Request('http://internal/delivery', { headers: { 'X-Admin-Token': process.env.STASH_ADMIN_TOKEN! } }), {
       params: Promise.resolve({ profileId: String(p.id) })
     });
     const status = await response.json();

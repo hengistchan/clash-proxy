@@ -65,6 +65,8 @@ export interface RuleProvider {
   displayName: string;
   behavior: string;
   providerType: RuleProviderType;
+  sourceConfigured?: boolean;
+  headersConfigured?: boolean;
   config: JsonObject;
   entries: RuleProviderEntry[];
   sortOrder: number;

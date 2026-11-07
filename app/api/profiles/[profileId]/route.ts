@@ -1,3 +1,4 @@
+import { withProfileRevision } from '@/lib/revision-control';
 import { NextResponse } from 'next/server';
 
 import { requireAdmin } from '@/lib/auth';
@@ -25,7 +26,9 @@ export async function PUT(request: Request, context: Context) {
     requireAdmin(request);
     const { profileId } = await context.params;
     const input = profileUpdateSchema.parse(await readJson(request));
-    return NextResponse.json(updateProfile(parseId(profileId), input));
+    return withProfileRevision(request, parseId(profileId), () => {
+      return NextResponse.json(updateProfile(parseId(profileId), input));
+    });
   } catch (error) {
     return jsonError(error);
   }
@@ -35,8 +38,10 @@ export async function DELETE(request: Request, context: Context) {
   try {
     requireAdmin(request);
     const { profileId } = await context.params;
-    deleteProfile(parseId(profileId));
-    return new Response(null, { status: 204 });
+    return withProfileRevision(request, parseId(profileId), () => {
+      deleteProfile(parseId(profileId));
+      return new Response(null, { status: 204 });
+    });
   } catch (error) {
     return jsonError(error);
   }

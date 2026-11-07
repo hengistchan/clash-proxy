@@ -1,3 +1,4 @@
+import { withProfileRevision } from '@/lib/revision-control';
 import { NextResponse } from 'next/server';
 
 import { requireAdmin } from '@/lib/auth';
@@ -41,10 +42,12 @@ export async function POST(
     requireAdmin(request);
     const { profileId, providerId } = await context.params;
     const input = entrySchema.parse(await readJson(request));
-    return NextResponse.json(
-      createRuleProviderEntry(parseId(profileId), parseId(providerId), input),
-      { status: 201 }
-    );
+    return withProfileRevision(request, parseId(profileId), () => {
+      return NextResponse.json(
+        createRuleProviderEntry(parseId(profileId), parseId(providerId), input),
+        { status: 201 }
+      );
+    });
   } catch (error) {
     return jsonError(error);
   }

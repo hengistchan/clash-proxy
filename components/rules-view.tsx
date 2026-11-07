@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -13,10 +13,10 @@ import {
   Trash2
 } from 'lucide-react';
 
-import type { Snapshot, StashRule, ValidationResult } from '@/lib/types';
+import { BUILTIN_POLICIES, type Snapshot, type StashRule, type ValidationResult } from '@/lib/types';
 
 import { ApiError, apiRequest } from './api-client';
-import { StatusBadge, SwitchField } from './ui';
+import { SelectField, StatusBadge, SwitchField } from './ui';
 import { RoutingSimulator } from './routing-simulator';
 import { useUnsavedChanges } from './unsaved-changes';
 
@@ -55,6 +55,8 @@ export function RulesView({
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState<number | null>(null);
   const [error, setError] = useState('');
+  const [selected, setSelected] = useState<number[]>([]);
+  const [batchPolicy, setBatchPolicy] = useState('');
   const mutationLock = useRef(false);
   useUnsavedChanges(false, busy !== null);
   const matchCount = snapshot.rules.filter((rule) => rule.type === 'MATCH').length;
@@ -98,6 +100,25 @@ export function RulesView({
     );
   }, [query, snapshot.rules]);
 
+  useEffect(() => {
+    const available = new Set(snapshot.rules.filter((rule) => rule.type !== 'MATCH').map((rule) => rule.id));
+    setSelected((current) => current.filter((id) => available.has(id)));
+  }, [snapshot.rules]);
+  const selectedIds = snapshot.rules.filter((rule) => selected.includes(rule.id) && rule.type !== 'MATCH').map((rule) => rule.id);
+  const visibleIds = rules.filter((rule) => rule.type !== 'MATCH').map((rule) => rule.id);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.includes(id));
+  const policyOptions = Array.from(new Set([...BUILTIN_POLICIES, ...snapshot.proxies.map((item) => item.name), ...snapshot.proxyGroups.map((item) => item.name)]));
+
+  async function batch(action: { policy?: string; enabled?: boolean; move?: 'top' | 'bottom' | 'up' | 'down' }) {
+    if (!selectedIds.length || !beginMutation(-1)) return;
+    try {
+      await apiRequest(`/api/profiles/${profileId}/rules/batch`, { method: 'PUT', token, expectedRevision: snapshot.profile.revision, body: JSON.stringify({ ids: selectedIds, ...action }) });
+      await onChanged(`已一次性更新 ${selectedIds.length} 条规则。`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '批量更新失败');
+    } finally { finishMutation(); }
+  }
+
   async function toggle(rule: StashRule, enabled: boolean) {
     if (rule.type === 'MATCH' && (!enabled || rule.enabled)) return;
     if (!beginMutation(rule.id)) return;
@@ -105,6 +126,7 @@ export function RulesView({
       await apiRequest(`/api/profiles/${profileId}/rules/${rule.id}`, {
         method: 'PUT',
         token,
+        expectedRevision: snapshot.profile.revision,
         body: JSON.stringify(ruleBody(rule, { enabled }))
       });
       await onChanged(enabled ? '规则已启用。' : '规则已停用。');
@@ -126,6 +148,7 @@ export function RulesView({
       await apiRequest(`/api/profiles/${profileId}/rules/order`, {
         method: 'PUT',
         token,
+        expectedRevision: snapshot.profile.revision,
         body: JSON.stringify({ ids })
       });
       await onChanged('规则优先级已更新。');
@@ -144,7 +167,8 @@ export function RulesView({
     try {
       await apiRequest(`/api/profiles/${profileId}/rules/${rule.id}`, {
         method: 'DELETE',
-        token
+        token,
+        expectedRevision: snapshot.profile.revision
       });
       await onChanged('规则已删除，后续优先级已自动前移。');
     } catch (caught) {
@@ -187,6 +211,21 @@ export function RulesView({
         </span>
       </div>
 
+      <div className="batch-toolbar" aria-label="批量规则操作">
+        <label className="batch-select"><input type="checkbox" aria-label="选择筛选后的全部普通规则" checked={allVisibleSelected} disabled={busy !== null || !visibleIds.length} onChange={(event) => setSelected((current) => event.target.checked ? Array.from(new Set([...current, ...visibleIds])) : current.filter((id) => !visibleIds.includes(id)))} />选择当前筛选结果</label>
+        <span>已选 {selectedIds.length} 条（MATCH 受保护）</span>
+        {selectedIds.length ? <button className="text-action" disabled={busy !== null} onClick={() => setSelected([])}>清空选择</button> : null}
+        {selectedIds.length ? <div className="batch-actions">
+          <SelectField label="批量目标策略" value={batchPolicy} options={policyOptions.map((policy) => ({ value: policy, label: policy }))} onValueChange={setBatchPolicy} disabled={busy !== null} />
+          <button className="button secondary small" disabled={busy !== null || !batchPolicy} onClick={() => void batch({ policy: batchPolicy })}>批量改策略</button>
+          <button className="button secondary small" disabled={busy !== null} onClick={() => void batch({ enabled: true })}>批量启用</button>
+          <button className="button secondary small" disabled={busy !== null} onClick={() => void batch({ enabled: false })}>批量停用</button>
+          <button className="button secondary small" disabled={busy !== null} onClick={() => void batch({ move: 'up' })}>整体上移</button>
+          <button className="button secondary small" disabled={busy !== null} onClick={() => void batch({ move: 'down' })}>整体下移</button>
+          <button className="button secondary small" disabled={busy !== null} onClick={() => void batch({ move: 'top' })}>移到最前</button>
+          <button className="button secondary small" disabled={busy !== null} onClick={() => void batch({ move: 'bottom' })}>移到兜底前</button>
+        </div> : null}
+      </div>
       <div className="rules-stack">
         {rules.map((rule) => {
           const locked = rule.type === 'MATCH';
@@ -201,8 +240,9 @@ export function RulesView({
               key={rule.id}
             >
               <div className="priority-block">
+                {!locked ? <label className="rule-select-target"><input type="checkbox" aria-label={`选择规则 ${rule.priority}`} checked={selected.includes(rule.id)} disabled={busy !== null} onChange={(event) => setSelected((current) => event.target.checked ? [...current, rule.id] : current.filter((id) => id !== rule.id))} /></label> : null}
                 <strong>{String(rule.priority).padStart(2, '0')}</strong>
-                <span>PRIORITY</span>
+                <span>顺序</span>
               </div>
               <div className="rule-body">
                 <div className="rule-main">

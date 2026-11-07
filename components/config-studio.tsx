@@ -43,6 +43,7 @@ import { ApiError, apiRequest } from './api-client';
 import { EditorDialog } from './editor-dialog';
 import { ExportView } from './export-view';
 import { HistoryView } from './history-view';
+import { ImportPreview } from './import-preview';
 import { OverviewView } from './overview-view';
 import { ResourceList } from './resource-list';
 import { RulesView } from './rules-view';
@@ -208,6 +209,7 @@ function Workspace() {
   const [newProfileYaml, setNewProfileYaml] = useState('');
   const [importDialog, setImportDialog] = useState(false);
   const [importYamlText, setImportYamlText] = useState('');
+  const [importPreviewRevision, setImportPreviewRevision] = useState<number | null>(null);
   const [profileBusy, setProfileBusy] = useState(false);
   const [toast, setToast] = useState<{
     message: string;
@@ -402,6 +404,7 @@ function Workspace() {
     try {
       await apiRequest(`/api/profiles/${profileId}`, {
         method: 'PUT',
+        expectedRevision: snapshot!.profile.revision,
         token,
         body: JSON.stringify({ active: true })
       });
@@ -432,6 +435,7 @@ function Workspace() {
     try {
       await apiRequest(`/api/profiles/${profileId}/${kind}/${item.id}`, {
         method: 'DELETE',
+        expectedRevision: snapshot!.profile.revision,
         token
       });
       await reload('资源已删除。');
@@ -515,12 +519,13 @@ function Workspace() {
   }
 
   async function importCurrent() {
-    if (!profileId || mutationLock.current) return;
+    if (!profileId || importPreviewRevision === null || mutationLock.current) return;
     mutationLock.current = true;
     setProfileBusy(true);
     try {
       await apiRequest(`/api/profiles/${profileId}/import`, {
         method: 'POST',
+        expectedRevision: importPreviewRevision!,
         token,
         body: JSON.stringify({ yaml: importYamlText })
       });
@@ -887,6 +892,7 @@ function Workspace() {
           />
           {newProfileSource === 'import' ? (
             <>
+              <p className="delivery-note wide">将创建独立配置。导入会规范化 YAML，注释、排版与锚点写法不会保留；字段含义和嵌套类型按支持范围保留。</p>
               <label className="field wide">
                 <span>完整 YAML</span>
                 <textarea
@@ -930,7 +936,7 @@ function Workspace() {
             </button>
             <button
               className="button primary"
-              disabled={profileBusy || !importYamlText.trim()}
+              disabled={profileBusy || !importYamlText.trim() || importPreviewRevision === null}
               onClick={importCurrent}
             >
               {profileBusy ? '导入中…' : '导入完整 YAML'}
@@ -946,7 +952,7 @@ function Workspace() {
             accept=".yaml,.yml,.conf,.config,text/yaml,application/yaml,text/plain,application/json"
             onChange={async (event) => {
               const file = event.target.files?.[0];
-              if (file) setImportYamlText(await file.text());
+              if (file) { setImportPreviewRevision(null); setImportYamlText(await file.text()); }
             }}
           />
         </label>
@@ -954,9 +960,10 @@ function Workspace() {
           className="code-input import-code"
           rows={18}
           value={importYamlText}
-          onChange={(event) => setImportYamlText(event.target.value)}
+          onChange={(event) => { setImportPreviewRevision(null); setImportYamlText(event.target.value); }}
           placeholder="粘贴完整 Stash YAML"
         />
+        {profileId ? <ImportPreview profileId={profileId} token={token} yaml={importYamlText} onPreview={setImportPreviewRevision} /> : null}
       </Modal>
 
       {toast ? (

@@ -1,0 +1,65 @@
+name: Security CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-and-boundary-audit:
+    name: Audit dependencies and authentication boundaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Audit all production and development dependencies
+        run: npm audit --registry=https://registry.npmjs.org --audit-level=low
+      - name: Verify authentication and fail-closed production startup
+        run: npx tsx --test Tests/auth-security.test.ts Tests/security-startup.test.ts
+      - name: Verify Compose refuses missing production authentication
+        run: |
+          if env -u STASH_ADMIN_TOKEN docker compose config --quiet 2>/tmp/compose-security-error; then
+            echo 'Compose unexpectedly accepted an empty administrator token'
+            exit 1
+          fi
+          STASH_ADMIN_TOKEN=compose-validation-fixture docker compose config --quiet
+
+      - name: Build the real production container
+        run: docker build --tag stash-config-forge:audit .
+      - name: Verify production runtime isolation, authentication and atomic delivery
+        run: node Tests/docker-smoke.mjs stash-config-forge:audit
+
+  secret-scan:
+    name: Scan Git history for secrets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install checksum-pinned Gitleaks
+        run: |
+          curl --fail --location --retry 3 --connect-timeout 15 --max-time 180 \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            --output /tmp/gitleaks.tar.gz
+          echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tar.gz' | sha256sum --check
+          mkdir -p /tmp/gitleaks-bin
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp/gitleaks-bin gitleaks
+      - name: Scan all available history without printing secret values
+        run: /tmp/gitleaks-bin/gitleaks git --redact=100 --no-banner --log-opts='--all'

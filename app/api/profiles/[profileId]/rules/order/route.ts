@@ -1,3 +1,4 @@
+import { withProfileRevision } from '@/lib/revision-control';
 import { NextResponse } from 'next/server';
 
 import { requireAdmin } from '@/lib/auth';
@@ -16,8 +17,10 @@ export async function PUT(
     requireAdmin(request);
     const { profileId } = await context.params;
     const input = ruleOrderSchema.parse(await readJson(request));
-    return NextResponse.json({
-      items: reorderRules(parseId(profileId), input.ids)
+    return withProfileRevision(request, parseId(profileId), () => {
+      return NextResponse.json({
+        items: reorderRules(parseId(profileId), input.ids)
+      });
     });
   } catch (error) {
     return jsonError(error);

@@ -1,3 +1,4 @@
+import { withProfileRevision } from '@/lib/revision-control';
 import { NextResponse } from 'next/server';
 
 import { requireAdmin } from '@/lib/auth';
@@ -32,13 +33,15 @@ export async function PUT(request: Request, context: Context) {
     requireAdmin(request);
     const { profileId } = await context.params;
     const input = settingsSchema.parse(await readJson(request));
-    const snapshot = saveSettings(parseId(profileId), input);
-    return NextResponse.json({
-      mode: snapshot.profile.mode,
-      logLevel: snapshot.profile.logLevel,
-      ipv6: snapshot.profile.ipv6,
-      settings: snapshot.profile.settings,
-      validation: validateSnapshot(getCompilationSnapshot(snapshot.profile.id))
+    return withProfileRevision(request, parseId(profileId), () => {
+      const snapshot = saveSettings(parseId(profileId), input);
+      return NextResponse.json({
+        mode: snapshot.profile.mode,
+        logLevel: snapshot.profile.logLevel,
+        ipv6: snapshot.profile.ipv6,
+        settings: snapshot.profile.settings,
+        validation: validateSnapshot(getCompilationSnapshot(snapshot.profile.id))
+      });
     });
   } catch (error) {
     return jsonError(error);

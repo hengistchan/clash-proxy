@@ -2,6 +2,7 @@ import { LineCounter, parseDocument } from 'yaml';
 
 import { HttpError } from './http';
 import { parseRuleLine } from './rules';
+import { ruleProviderConflict } from './rule-provider-source';
 import {
   PROXY_GROUP_TYPES,
   RESERVED_TOP_LEVEL_KEYS,
@@ -158,7 +159,7 @@ function documentFromYaml(value: unknown): ImportedDocument {
     const config = { ...item };
     const behavior = typeof item.behavior === 'string' ? item.behavior : 'classical';
     const inline = item.type === 'inline';
-    const providerType: RuleProviderType = inline ? 'inline' : typeof item.url === 'string' ? 'remote' : 'local';
+    const providerType: RuleProviderType = inline ? 'inline' : item.type === 'http' || typeof item.url === 'string' ? 'remote' : 'local';
     let entries: string[] = [];
     if (inline) {
       if (Object.hasOwn(item, 'payload') && (!Array.isArray(item.payload) || !item.payload.every((entry) => typeof entry === 'string'))) {
@@ -168,6 +169,10 @@ function documentFromYaml(value: unknown): ImportedDocument {
       delete config.type;
       delete config.payload;
     }
+    const conflict = ruleProviderConflict(providerType, config, entries);
+    if (conflict) invalid(field, conflict);
+    delete config.type;
+    delete config.behavior;
     return { name, behavior, providerType, config, entries };
   });
 

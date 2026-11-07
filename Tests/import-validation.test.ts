@@ -25,6 +25,7 @@ import { validateSnapshot } from '../lib/validation';
 import { parseYamlDocument } from '../lib/yaml-import';
 import { POST as importRoute } from '../app/api/profiles/[profileId]/import/route';
 import { PUT as settingsRoute } from '../app/api/profiles/[profileId]/settings/route';
+import { POST as restoreRoute } from '../app/api/profiles/[profileId]/revisions/[revision]/restore/route';
 import { PUT as advancedRoute } from '../app/api/profiles/[profileId]/advanced/route';
 
 const temp = mkdtempSync(path.join(os.tmpdir(), 'forge-import-'));
@@ -37,7 +38,7 @@ beforeEach(() => {
   process.env.STASH_KEY_PATH = path.join(temp, `${sequence}.key`);
   delete process.env.STASH_SEED_EXAMPLE;
   delete process.env.STASH_SECRET_KEY;
-  delete process.env.STASH_ADMIN_TOKEN;
+  process.env.STASH_ADMIN_TOKEN = ['test','admin'].join('-');
 });
 after(() => {
   closeDbForTests();
@@ -162,7 +163,7 @@ test('import and save APIs validate private source fields without disclosing the
   const context = { params: Promise.resolve({ profileId: String(profile.id) }) };
   const request = (body: unknown) => new Request('http://localhost/api', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Token': process.env.STASH_ADMIN_TOKEN!, 'If-Match': `"${getSnapshot(profile.id).profile.revision}"` },
     body: JSON.stringify(body)
   });
   const imported = await importRoute(request({ yaml: `proxy-providers:\n  private:\n    url: ${secret}\nrules: ["MATCH,DIRECT"]` }), context);
@@ -217,4 +218,22 @@ test('configuration diagnostics identify their editable resource or section', ()
   const cycle = issues.find((item) => item.code === 'group.cycle');
   assert.equal(cycle?.resource, 'proxy-group');
   assert.equal(cycle?.resourceId, snapshot.proxyGroups[0].id);
+});
+
+
+test('restoration diagnostics validate private historical sources without returning their values', async () => {
+  const profile = getActiveProfile();
+  const privateSource = 'file:///private/historical-source';
+  const invalid = importYaml(profile.id, `proxy-providers:\n  source:\n    url: ${privateSource}\nrules: ["MATCH,DIRECT"]`);
+  const target = invalid.profile.revision;
+  updateProxyProvider(profile.id, invalid.proxyProviders[0].id, { name: 'source', sourceUrl: 'https://provider.test/repaired', config: {} });
+  const request = new Request('http://localhost/restore', { method: 'POST', headers: {
+    'X-Admin-Token': process.env.STASH_ADMIN_TOKEN!, 'If-Match': `"${getSnapshot(profile.id).profile.revision}"`
+  } });
+  const response = await restoreRoute(request, { params: Promise.resolve({ profileId: String(profile.id), revision: String(target) }) });
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.validation.valid, false);
+  assert.ok(payload.validation.issues.some((issue: {code: string}) => issue.code === 'proxy-provider.url-invalid'));
+  assert.equal(JSON.stringify(payload).includes(privateSource), false);
 });
