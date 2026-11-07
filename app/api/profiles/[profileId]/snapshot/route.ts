@@ -1,3 +1,4 @@
+import { revisionEtag } from '@/lib/revision-control';
 import { NextResponse } from 'next/server';
 
 import { requireAdmin } from '@/lib/auth';
@@ -19,7 +20,7 @@ export async function GET(
     return NextResponse.json({
       ...snapshot,
       validation: validateSnapshot(getCompilationSnapshot(snapshot.profile.id))
-    });
+    }, { headers: { ETag: revisionEtag(snapshot.profile.revision) } });
   } catch (error) {
     return jsonError(error);
   }

@@ -1,3 +1,4 @@
+import { withProfileRevision } from '@/lib/revision-control';
 import { NextResponse } from 'next/server';
 
 import { requireAdmin } from '@/lib/auth';
@@ -32,10 +33,13 @@ export async function POST(request: Request, context: Context) {
     requireAdmin(request);
     const { profileId, resource } = await context.params;
     const kind = asResourceKind(resource);
-    return NextResponse.json(
-      createResource(parseId(profileId), kind, await readJson(request)),
-      { status: 201 }
-    );
+    const body = await readJson(request);
+    return withProfileRevision(request, parseId(profileId), () => {
+      return NextResponse.json(
+        createResource(parseId(profileId), kind, body),
+        { status: 201 }
+      );
+    });
   } catch (error) {
     return jsonError(error);
   }

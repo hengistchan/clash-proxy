@@ -15,10 +15,10 @@ Next.js / React + Node.js + SQLite。用户从最小配置、导入的 YAML 或�
 
 ```bash
 npm ci
-npm run dev -- --hostname 127.0.0.1 --port 3010
+STASH_ALLOW_INSECURE_LOCAL=1 npm run dev -- --port 3010
 ```
 
-访问 http://127.0.0.1:3010 。开发不需要 Docker。
+访问 http://127.0.0.1:3010 。开发启动器只在显式 `STASH_ALLOW_INSECURE_LOCAL=1` 且未配置令牌时允许免认证，并强制绑定回环地址，拒绝跨源请求；生产启动不会接受此豁免。也可以提供管理员令牌进行认证开发。
 默认数据库为 `data/stash-config.sqlite3`，密钥为同路径加 `.key`；两者已被 Git 忽略。已有数据库不会被示例覆盖。新安装默认创建没有任何示例 provider、规则集或策略组的最小配置。
 
 ## 数据与凭据
@@ -84,11 +84,11 @@ provider 请求例子（两个来源需各自提交，地址不会作为下载�
 }
 ```
 
-YAML 响应包含 `X-Config-Revision`、`X-Config-SHA256`、`X-Rule-Count`，并禁止缓存。没有成功版本时下载返回 409；草稿错误不会覆盖上次成功版本。管理请求支持 `Authorization: Bearer ...` 或 `X-Admin-Token`。未设置 `STASH_ADMIN_TOKEN` 时仅适用于受信任的本机环境；公开部署必须配置管理员认证和 HTTPS。固定设备链接持有者可读取完整私人配置。
+YAML 响应包含 `X-Config-Revision`、`X-Config-SHA256`、`X-Rule-Count`，并禁止缓存。没有成功版本时下载返回 409；草稿错误不会覆盖上次成功版本。管理请求支持 `Authorization: Bearer ...` 或 `X-Admin-Token`。未配置 `STASH_ADMIN_TOKEN` 时生产启动及管理请求均拒绝；免认证只允许显式开启的本机开发模式。公开部署还需 HTTPS。固定设备链接持有者可读取完整私人配置。
 
 ## 部署与备份
 
-本机生产运行可执行 `npm run build` 后再执行 `npm start`。启动器会在切换到 standalone
+本机生产运行可执行 `npm run build` 后，在设置 `STASH_ADMIN_TOKEN` 的环境中执行 `npm start`。未配置令牌时启动器会在打开数据库和监听端口前拒绝启动。启动器会在切换到 standalone
 目录前，将数据库、密钥与示例目录解析为绝对路径；默认仍使用仓库根目录的
 `data/stash-config.sqlite3` 和同路径加 `.key`，与开发模式共用持久化位置。相对的
 `STASH_DB_PATH`、`STASH_KEY_PATH`、`STASH_TEMPLATE_DIR` 也均相对仓库根目录解析。
@@ -103,7 +103,7 @@ YAML 响应包含 `X-Config-Revision`、`X-Config-SHA256`、`X-Rule-Count`，并
 请使用 `npm run build`。整个过程不会自动覆盖、迁移或删除旧数据。
 
 ```bash
-docker compose up -d --build --wait
+STASH_ADMIN_TOKEN='replace-with-a-strong-token' docker compose up -d --build --wait
 ```
 
 Docker 默认 `127.0.0.1:8080`，非 root、只读根文件系统，SQLite 和密钥存于 named volume `/data`，重启与重建保留。开发调试使用上面的本地 Node 命令即可。
@@ -126,7 +126,9 @@ docker compose start api
 | STASH_DB_PATH | 本地 data/stash-config.sqlite3 | SQLite 路径 |
 | STASH_KEY_PATH | 数据库路径 + .key | AES 密钥文件 |
 | STASH_SECRET_KEY | 空 | 32 字节密钥，64 位 hex 或 Base64 |
-| STASH_ADMIN_TOKEN | 空 | 管理接口令牌 |
+| STASH_ADMIN_TOKEN | 空 | 所有生产部署必填的管理接口令牌 |
+| STASH_ALLOW_INSECURE_LOCAL | 空 | 仅显式本机开发模式允许值 1，实际监听强制回环 |
+| STASH_REVISION_LIMIT | 200 | 保留最近 10–10000 个修订，另保护当前和最近成功版本 |
 | STASH_PUBLIC_BASE_URL | 请求地址 | 反向代理后的对外服务 origin，用于返回完整下载链接 |
 | STASH_TEMPLATE_DIR | `examples/` | 可选示例 Production.yaml 所在目录 |
 | STASH_SEED_EXAMPLE | 空 | 仅在首次建库时设为 1 可显式加载示例；默认最小配置 |
@@ -146,3 +148,27 @@ npm run test:e2e
 CI 会独立构建并执行 Chromium 回归。
 
 架构与交互改进的边界、设计依据和验收路径见 [架构与体验审查](docs/architecture-review.md)。
+
+
+## 并发修改、预览与历史保留
+
+读取 `/api/profiles/:id/snapshot` 得到强 ETag（例如 `"12"`）和 `profile.revision`。对已有配置的元数据、资源、设置、导入、恢复、规则排序、条目和批量规则写入必须携带 `If-Match: "12"`。比较和写入在同一个 SQLite IMMEDIATE 事务中完成；缺少前提条件返回 428，格式错误返回 400，陈旧版本返回 409（`code: revision.conflict`，包含 expectedRevision/currentRevision），资源、修订和成功产物均不会改变。创建配置、只读模拟/预览和设备链接生命周期不使用配置修订前提条件。
+
+表单使用载入时的修订；后台刷新不会给未保存的旧输入赋予更新的修订号。冲突时保留本页输入，可以明确放弃后读取最新配置。API 调用方需要先比较最新状态，再决定如何重新提交，不能自动取最新版本号重试覆盖。
+
+替换导入先调用 `POST /api/profiles/:id/import-preview`，请求 `{yaml}`，返回 currentRevision 和脱敏语义差异；实际导入使用该版本作为 If-Match。文本改变会使预览失效。YAML 会规范化，注释、原始排版和锚点写法不保留。`GET /api/profiles/:id/revisions/:revision/compare` 为历史恢复提供同样的只读差异预览。差异只列固定字段类别和脱敏标识，不返回连接参数原值。
+
+`PUT /api/profiles/:id/rules/batch` 接收 `{ids, policy?, enabled?, move?}`；move 为 top/bottom/up/down，至少指定一项操作。所有 ID 必须属于当前配置且不重复，MATCH 不能批量停用或移动。整个操作只生成一个修订。
+
+每次成功写入后按 `STASH_REVISION_LIMIT` 清理更早历史，默认最近 200 版，当前版和最近成功版始终额外保留。升级后第一次写入即应用该策略，部署前请备份数据库和密钥。清理不影响成功下载产物或固定设备链接；SQLite 会重用释放的页，文件不会立即缩小。列表接口返回 retentionLimit、retainedCount 和 oldestRevision，页面明确展示保留边界。
+
+代理源与规则集使用相同的来源字段协议：sourceUrl/sourceHeaders 仅写入，省略保留、clearSource/clearHeaders 显式清除。inline 规则集仅使用 behavior 和 entries；remote/local 不得混入 inline 字段。所有普通 CRUD、快照与恢复响应剥离来源 URL 和 headers，完整内容仅用于受控交付。旧成功产物会按当前编译语义检查，已知来源冲突的产物不会继续交付。
+
+容器验收可独立执行，不接触现有服务或数据：
+
+```bash
+docker build --tag stash-config-forge:audit .
+node Tests/docker-smoke.mjs stash-config-forge:audit
+```
+
+脚本使用临时只读容器、独立内存数据目录和随机测试凭据，验证后清理容器。

@@ -90,13 +90,19 @@ test('a malformed replacement import preserves the complete current profile and 
   await page.getByRole('button', { name: '导入配置文件', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '导入并替换当前 Profile' });
   await dialog.getByRole('textbox').fill('rules: {invalid: true}');
-  await dialog.getByRole('button', { name: '导入完整 YAML', exact: true }).click();
-  await expect(page.locator('.toast[role=alert]')).toContainText(/rules/);
+  await expect(dialog.getByRole('button', { name: '导入完整 YAML', exact: true })).toBeDisabled();
+  await dialog.getByRole('button', { name: '预览导入变化', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText(/rules/);
+  await expect(dialog.getByRole('button', { name: '导入完整 YAML', exact: true })).toBeDisabled();
   await expect(dialog).toBeVisible();
   const unchanged = await snapshot(request, initial.profile.id);
   expect(unchanged.profile.revision).toBe(initial.profile.revision);
   expect(unchanged.hosts).toEqual(initial.hosts);
   await dialog.getByRole('textbox').fill('hosts:\n  replacement.test: 192.0.2.2\nrules: ["MATCH,DIRECT"]');
+  await dialog.getByRole('button', { name: '预览导入变化', exact: true }).click();
+  await expect(dialog.locator('.config-diff')).toContainText('original.test');
+  await expect(dialog.locator('.config-diff')).toContainText('replacement.test');
+  await expect(dialog.getByText(/注释、原始排版和锚点写法不会保留/)).toBeVisible();
   await dialog.getByRole('button', { name: '导入完整 YAML', exact: true }).click();
   await expect(dialog).toBeHidden();
   await expect.poll(async () => (await snapshot(request, initial.profile.id)).hosts[0]?.pattern).toBe('replacement.test');
@@ -196,7 +202,7 @@ test('invalid drafts preserve device downloads, repair updates them, and link ro
   expect(oldConfig.status()).toBe(200);
   const previousRevision = oldConfig.headers()['x-config-revision'];
   const invalidSource = await request.post(`/api/profiles/${profileId}/proxy-providers`, {
-    headers, data: { name: 'browser-source', sourceType: 'remote', config: { interval: 3600 } }
+    headers: { ...headers, 'If-Match': `"${initial.profile.revision}"` }, data: { name: 'browser-source', sourceType: 'remote', config: { interval: 3600 } }
   });
   expect(invalidSource.status()).toBe(201);
   await page.getByRole('button', { name: '刷新快照', exact: true }).click();
@@ -223,8 +229,11 @@ test('invalid drafts preserve device downloads, repair updates them, and link ro
   expect((await request.get(newLink)).status()).toBe(404);
   await navigate(page, '版本');
   await expect(page.locator('.timeline-item')).toHaveCount(3);
-  page.once('dialog', (dialog) => dialog.accept());
-  await page.locator('.timeline-item').last().getByRole('button', { name: '恢复', exact: true }).click();
+  await page.locator('.timeline-item').last().getByRole('button', { name: '查看变化', exact: true }).click();
+  const restorePreview = page.getByRole('dialog', { name: /恢复版本 .* 前的变化/ });
+  await expect(restorePreview.locator('.config-diff')).toContainText('browser-source');
+  await restorePreview.getByRole('button', { name: '确认恢复', exact: true }).click();
+  await expect(restorePreview).toBeHidden();
   await expect.poll(async () => (await snapshot(request, profileId)).proxyProviders.length).toBe(0);
   expect((await request.get(`/api/profiles/${profileId}/config_download`, { headers })).status()).toBe(200);
 });

@@ -1,3 +1,4 @@
+import { withProfileRevision } from '@/lib/revision-control';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
@@ -25,14 +26,17 @@ export async function PUT(
   try {
     requireAdmin(request);
     const { profileId, providerId, entryId } = await context.params;
-    return NextResponse.json(
-      updateRuleProviderEntry(
-        parseId(profileId),
-        parseId(providerId),
-        parseId(entryId),
-        entrySchema.parse(await readJson(request))
-      )
-    );
+    const input = entrySchema.parse(await readJson(request));
+    return withProfileRevision(request, parseId(profileId), () => {
+      return NextResponse.json(
+        updateRuleProviderEntry(
+          parseId(profileId),
+          parseId(providerId),
+          parseId(entryId),
+          input
+        )
+      );
+    });
   } catch (error) {
     return jsonError(error);
   }
@@ -47,12 +51,14 @@ export async function DELETE(
   try {
     requireAdmin(request);
     const { profileId, providerId, entryId } = await context.params;
-    deleteRuleProviderEntry(
-      parseId(profileId),
-      parseId(providerId),
-      parseId(entryId)
-    );
-    return new Response(null, { status: 204 });
+    return withProfileRevision(request, parseId(profileId), () => {
+      deleteRuleProviderEntry(
+        parseId(profileId),
+        parseId(providerId),
+        parseId(entryId)
+      );
+      return new Response(null, { status: 204 });
+    });
   } catch (error) {
     return jsonError(error);
   }

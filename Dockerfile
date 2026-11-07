@@ -31,6 +31,7 @@ COPY --from=builder --chown=10001:10001 /app/.next/standalone ./
 COPY --from=builder --chown=10001:10001 /app/.next/static ./.next/static
 COPY --from=builder --chown=10001:10001 /app/public ./public
 COPY --from=builder --chown=10001:10001 /app/examples ./examples
+COPY --from=builder --chown=10001:10001 /app/Scripts/runtime-security.mjs /app/Scripts/start-container.mjs ./Scripts/
 
 USER 10001:10001
 EXPOSE 8080
@@ -39,4 +40,4 @@ VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD ["node", "-e", "fetch('http://127.0.0.1:8080/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
 
-CMD ["node", "server.js"]
+CMD ["node", "Scripts/start-container.mjs"]

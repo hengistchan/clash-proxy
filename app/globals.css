@@ -541,3 +541,49 @@ details > summary { padding: 12px 0; color: var(--forest); cursor: pointer; font
 .switch-root:disabled { cursor: not-allowed; opacity: .5; }
 @media(max-width:1100px) { .workflow-guide { grid-template-columns: 1fr; }.workflow-guide article { padding: 16px; } }
 @media(max-width:760px) { .connection-banner { margin: 16px 14px 0; flex-wrap: wrap; }.issue-row code { overflow-wrap: anywhere; } }
+
+.config-diff { margin-top: 16px; min-width: 0; }
+.diff-summary { font-weight: 700; color: var(--forest); line-height: 1.7; }
+.diff-list { display: grid; gap: 8px; max-height: 360px; overflow: auto; }
+.diff-item { display: flex; align-items: flex-start; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; }
+.diff-kind { flex-shrink: 0; font-size: 12px; font-weight: 700; }
+.diff-added .diff-kind { color: #38753a; }.diff-removed .diff-kind { color: #a54832; }
+.diff-item strong { display: block; font-size: 13px; overflow-wrap: anywhere; }.diff-item small { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.import-preview { padding: 16px 0; border-top: 1px solid var(--line); margin-top: 16px; }
+.history-retention { margin: 0 24px 18px; }
+.batch-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 16px 24px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.batch-select { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.batch-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; width: 100%; }
+.batch-actions .field { margin: 0; min-width: 180px; }.batch-actions .button { min-height: 38px; }
+.priority-block input { width: 18px; height: 18px; margin: 0 auto 8px; accent-color: var(--forest); }
+
+@media(max-width:760px), (pointer:coarse) {
+  body { font-size: 14px; }
+  .button, .button.small, .icon-button, .text-action, .select-trigger, .mobile-nav button, .side-nav button, .resource-tree-toggle, .resource-tree-resource, .resource-tree-section > h3 > button { min-height: 44px; }
+  .icon-button, .resource-tree-toggle { min-width: 44px; width: 44px; }
+  .switch-field { min-height: 44px; }.switch-root { min-width: 44px; min-height: 28px; }
+  .input, .code-input, .search-box input, .select-trigger { font-size: 16px; }
+  .kicker, .delivery-note, .resource-meta, .resource-meta span, .resource-card p, .resource-card small, .resource-tree-resource small, .resource-tree-relation, .resource-tree-description, .resource-tree-count, .resource-tree-section > h3 > button > span, .resource-tree-warning, .rule-target, .rule-target code, .rule-body p, .rule-diagnostics, .lock-note, .priority-block span, .list-toolbar, .status-badge, .studio-footer, .config-fields-head > strong, .value-container > summary, .value-container-tools, .value-row > header, .value-field-name code, .value-type, .relation-link small, .relation-edge-label, .timeline-item span, .timeline-item .current-label { font-size: 12px; }
+  .rule-actions .switch-root { transform: none; }
+  .rule-actions .icon-strip { flex-wrap: wrap; justify-content: flex-end; }
+  .batch-toolbar { padding: 14px; }.batch-select { min-height: 44px; }.batch-select input, .priority-block input { width: 24px; height: 24px; }
+  .history-retention { margin-right: 16px; margin-left: 16px; }
+  .rules-panel .panel-heading .button { width: auto; overflow: visible; gap: 8px; padding: 0 12px; }
+}
+@media(max-width:760px), (pointer:coarse) {
+  .select-item, .dialog-close, .preset-chip, .value-type { min-height: 44px; }
+  .dialog-close { min-width: 44px; }
+  .studio-shell .field, .studio-shell .field small, .studio-shell .switch-field small, .select-item-description, .studio-shell .stat-card > span, .studio-shell .validation-head p, .studio-shell .issue-row code, .studio-shell .resource-title .status-badge, .studio-shell .resource-meta code, .studio-shell .rule-main code, .studio-shell .rule-target strong, .studio-shell .mobile-nav button, .studio-shell .profile-picker > span, .studio-shell .sidebar-status small, .studio-shell .sidebar-foot { font-size: 12px; }
+}
+@media(max-width:760px), (pointer:coarse) {
+  .dialog-content .field, .dialog-content .field small, .dialog-content .switch-field small, .dialog-content .delivery-note { font-size: 12px; }
+}
+
+.rule-select-target { display: grid; place-items: center; cursor: pointer; }
+@media(max-width:760px), (pointer:coarse) {
+  .overview-hero { flex-direction: column; gap: 12px; }
+  .overview-hero .status-badge { position: static; margin: 0; }
+  .overview-hero p:not(.kicker) { font-size: 12px; }
+  .rule-select-target { min-width: 44px; min-height: 44px; }
+  .rule-select-target input { margin: 0; }
+}

@@ -1,3 +1,4 @@
+import { withProfileRevision } from '@/lib/revision-control';
 import { NextResponse } from 'next/server';
 
 import { requireAdmin } from '@/lib/auth';
@@ -30,13 +31,15 @@ export async function PUT(request: Request, context: Context) {
     const { profileId } = await context.params;
     const input = advancedSchema.parse(await readJson(request));
     const id = parseId(profileId);
-    const items = replaceAdvancedSections(
-      id,
-      input.sections as Array<{ key: string; value: JsonValue }>
-    );
-    return NextResponse.json({
-      items,
-      validation: validateSnapshot(getCompilationSnapshot(id))
+    return withProfileRevision(request, parseId(profileId), () => {
+      const items = replaceAdvancedSections(
+        id,
+        input.sections as Array<{ key: string; value: JsonValue }>
+      );
+      return NextResponse.json({
+        items,
+        validation: validateSnapshot(getCompilationSnapshot(id))
+      });
     });
   } catch (error) {
     return jsonError(error);

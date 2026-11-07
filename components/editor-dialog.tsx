@@ -58,6 +58,14 @@ function configWithout(config: JsonObject, keys: string[]): JsonObject {
   ) as JsonObject;
 }
 
+function snapshotResources(snapshot: Snapshot, resource: ResourceKind) {
+  return {
+    proxies: snapshot.proxies, 'proxy-providers': snapshot.proxyProviders,
+    'proxy-groups': snapshot.proxyGroups, 'rule-providers': snapshot.ruleProviders,
+    rules: snapshot.rules, hosts: snapshot.hosts
+  }[resource];
+}
+
 export function EditorDialog({
   open,
   onOpenChange,
@@ -105,7 +113,9 @@ export function EditorDialog({
   const [hostValue, setHostValue] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [revisionConflict, setRevisionConflict] = useState(false);
   const [baseline, setBaseline] = useState<string | null>(null);
+  const [draftRevision, setDraftRevision] = useState(snapshot.profile.revision);
   const fingerprint = JSON.stringify({
     name, displayName, type, configText, sourceType, sourceUrl, sourceHeaders,
     clearSource, clearHeaders, providerBehavior, providerType, entriesText,
@@ -150,8 +160,12 @@ export function EditorDialog({
     dirtyRef.current = false;
     const identity = `${profileId}:${resource}:${existing?.id ?? 'new'}`;
     loadedIdentity.current = identity;
+    setDraftRevision(snapshot.profile.revision);
     setError('');
-    const item = existing as Record<string, unknown> | null;
+    setRevisionConflict(false);
+    const latest = existing ? snapshotResources(snapshot, resource).find((entry) => entry.id === existing.id) : null;
+    if (existing && !latest) setError('该资源已被其他会话删除或由导入替换。请关闭编辑器并从最新列表重新打开资源。');
+    const item = (latest || existing) as Record<string, unknown> | null;
     const config = (item?.config || {}) as JsonObject;
     const itemType = String(item?.type || '');
     const itemPayload = String(item?.payload || initialValues?.payload || '');
@@ -178,7 +192,9 @@ export function EditorDialog({
               'use',
               'filter'
             ])
-          : item?.config || {},
+          : resource === 'rule-providers'
+            ? configWithout(config, ['type', 'payload', 'behavior'])
+            : item?.config || {},
         null,
         2
       ),
@@ -246,7 +262,8 @@ export function EditorDialog({
     initialValues,
     profileId,
     snapshot.rules,
-    snapshot.ruleProviders
+    snapshot.ruleProviders,
+    snapshot.profile.revision
   ]);
 
   if (!resource) return null;
@@ -288,8 +305,26 @@ export function EditorDialog({
     }
   }
 
+  const missingResource = Boolean(resource && existing && !snapshotResources(snapshot, resource).some((entry) => entry.id === existing.id));
+
+  async function discardAndReload() {
+    if (saving || !window.confirm('放弃本次未保存输入，并读取最新配置后返回列表吗？')) return;
+    setSaving(true);
+    try {
+      await onSaved('已读取最新快照，请重新打开资源后编辑。');
+      dirtyRef.current = false;
+      setBaseline(fingerprint);
+      setRevisionConflict(false);
+      onOpenChange(false);
+    } finally { setSaving(false); }
+  }
+
   async function save() {
     if (saving) return;
+    if (missingResource) {
+      setError('该资源已被删除或替换。请关闭编辑器并重新打开最新资源。');
+      return;
+    }
     const invalid =
       formRoot.current?.querySelector<HTMLInputElement>('input:invalid');
     if (invalid) {
@@ -357,7 +392,11 @@ export function EditorDialog({
           behavior: providerBehavior.trim(),
           providerType,
           config: parseObject(configText, '规则集配置'),
-          entries: entriesText
+          ...(providerType === 'remote' && sourceUrl.trim() ? { sourceUrl: sourceUrl.trim() } : {}),
+          ...(providerType === 'remote' && sourceHeaders.trim() ? { sourceHeaders: parseObject(sourceHeaders, '认证请求头') } : {}),
+          clearSource,
+          clearHeaders,
+          entries: providerType !== 'inline' ? [] : entriesText
             .split('\n')
             .map((item) => item.trim())
             .filter(Boolean)
@@ -385,6 +424,7 @@ export function EditorDialog({
         }`,
         {
           method: existing ? 'PUT' : 'POST',
+          expectedRevision: draftRevision,
           body: JSON.stringify(body),
           token
         }
@@ -394,6 +434,7 @@ export function EditorDialog({
       await onSaved(existing ? '资源已更新。' : '资源已创建。');
       onOpenChange(false);
     } catch (caught) {
+      if (caught instanceof ApiError && caught.code === 'revision.conflict') setRevisionConflict(true);
       if (caught instanceof ApiError && caught.issues.length) {
         setError(caught.issues.map((issue) => issue.message).join('\n'));
       } else {
@@ -428,7 +469,8 @@ export function EditorDialog({
           >
             取消
           </button>
-          <button className="button primary" disabled={saving} onClick={save}>
+          {revisionConflict || missingResource ? <button className="button secondary" disabled={saving} onClick={() => void discardAndReload()}>放弃并读取最新配置</button> : null}
+          <button className="button primary" disabled={saving || missingResource} onClick={save}>
             {saving ? '保存中…' : '保存'}
           </button>
         </>
@@ -788,7 +830,18 @@ export function EditorDialog({
             <SelectField
               label="来源类型"
               value={providerType}
-              onValueChange={setProviderType}
+              onValueChange={(next) => {
+                try {
+                  const config = parseObject(configText, '规则集配置');
+                  ['type', 'payload', 'behavior'].forEach((key) => delete config[key]);
+                  if (next === 'inline') ['url', 'path', 'format', 'interval', 'headers'].forEach((key) => delete config[key]);
+                  if (next === 'local') ['url', 'headers', 'interval'].forEach((key) => delete config[key]);
+                  setConfigText(JSON.stringify(config, null, 2));
+                  setProviderType(next);
+                  setSourceUrl('');
+                  setSourceHeaders('');
+                } catch { setError('请先修复规则集配置，再切换来源类型。'); }
+              }}
               options={[
                 { value: 'inline', label: 'inline / 数据库条目' },
                 { value: 'remote', label: 'remote / 远程 URL' },
@@ -816,18 +869,31 @@ export function EditorDialog({
                 disabled={providerType !== 'inline'}
               />
             </label>
-            <ConfigFields
+            <p className="delivery-note wide">来源类型决定 Stash 如何加载规则；切换后不适用的来源字段会被移除，保存为本地或 inline 时会清除远程地址和认证。</p>
+            {providerType === 'inline' && configText.trim() !== '{}' ? <div className="wide">
+              <p className="delivery-note">Inline 来源只使用上面的条目。旧配置中残留的来源参数需要清理后才能保存。</p>
+              <button className="button secondary small" onClick={() => { setConfigText('{}'); setSourceUrl(''); setSourceHeaders(''); }}>清理 inline 来源参数</button>
+            </div> : null}
+            {providerType === 'remote' ? <>
+              <label className="field wide">
+                <span>私人规则集地址（HTTP/HTTPS）</span>
+                <input className="input mono" type="password" autoComplete="off" value={sourceUrl}
+                  onChange={(event) => setSourceUrl(event.target.value)} disabled={clearSource}
+                  placeholder={(existing as RuleProvider | null)?.sourceConfigured ? '已保存；留空保留当前地址' : '填写远程规则集地址'} />
+                <small>已保存的地址不会回显；缓存 path 不会替代远程来源。</small>
+              </label>
+              <ConfigFields label="规则集认证请求头" text={sourceHeaders || '{}'} onChange={setSourceHeaders} />
+              <SwitchField label="清除规则集地址" checked={clearSource} onCheckedChange={setClearSource} description="清除后草稿无法发布；最近成功版本仍可下载。" />
+              <SwitchField label="清除规则集认证请求头" checked={clearHeaders} onCheckedChange={setClearHeaders}
+                description={(existing as RuleProvider | null)?.headersConfigured ? '已有认证请求头；普通编辑会保留。' : '未保存认证请求头。'} />
+            </> : null}
+            {providerType !== 'inline' ? <ConfigFields
               key={resource}
               label="规则集来源与更新"
               text={configText}
               onChange={setConfigText}
-              suggestions={{
-                url: '',
-                path: '',
-                format: 'yaml',
-                interval: 86400
-              }}
-            />
+              suggestions={providerType === 'remote' ? { path: '', format: 'yaml', interval: 86400 } : { path: '', format: 'yaml' }}
+            /> : null}
           </>
         ) : null}
 

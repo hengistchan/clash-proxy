@@ -1,3 +1,4 @@
+import { ruleProviderConflict } from './rule-provider-source';
 import { analyzeOrder } from './routing-analysis';
 import { validateSubscriptionUrl } from './provider-source';
 import { isIP } from 'node:net';
@@ -372,6 +373,22 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
   groupMap.forEach((_group, name) => walk(name, []));
 
   for (const provider of snapshot.ruleProviders) {
+    const conflict = ruleProviderConflict(provider.providerType, provider.config, provider.entries);
+    if (conflict) issue(issues, 'error', 'rule-provider.source-conflict', `Rule provider “${provider.name}” ${conflict}`, 'rule-provider', provider.id);
+    if (provider.config.behavior !== undefined && provider.config.behavior !== provider.behavior) {
+      issue(issues, 'error', 'rule-provider.behavior-conflict', `Rule provider “${provider.name}” has conflicting behavior fields`, 'rule-provider', provider.id);
+    }
+    if (provider.providerType === 'remote' && typeof provider.config.url === 'string' && provider.config.url) {
+      try { validateSubscriptionUrl(provider.config.url); }
+      catch { issue(issues, 'error', 'rule-provider.url-invalid', `Remote rule provider “${provider.name}” needs a valid HTTP/HTTPS source`, 'rule-provider', provider.id); }
+    }
+    if (provider.config.format !== undefined && !['yaml', 'text', 'mrs'].includes(String(provider.config.format))) {
+      issue(issues, 'error', 'rule-provider.format', `Rule provider “${provider.name}” has an unsupported format`, 'rule-provider', provider.id);
+    }
+    if (provider.config.format === 'mrs' && !['domain', 'ipcidr'].includes(provider.behavior)) {
+      issue(issues, 'error', 'rule-provider.mrs-behavior', `MRS rule provider “${provider.name}” must use domain or ipcidr behavior`, 'rule-provider', provider.id);
+    }
+
     if (!['domain', 'ipcidr', 'classical'].includes(provider.behavior)) {
       issue(
         issues,
@@ -407,7 +424,7 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
     }
     if (
       provider.providerType === 'remote' &&
-      (typeof provider.config.url !== 'string' || !provider.config.url)
+      (typeof provider.config.url !== 'string' || !provider.config.url) && provider.sourceConfigured !== true
     ) {
       issue(
         issues,

@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
-import { encryptJson } from './crypto';
-import { exportProfile } from './exporter';
+import { decryptJson, encryptJson } from './crypto';
+import { exportProfile, type ExportResult } from './exporter';
+import { CONFIG_COMPILER_VERSION } from './artifact-semantics';
 import { HttpError } from './http';
 import type { JsonValue, Snapshot } from './types';
 
@@ -10,9 +11,9 @@ export function refreshCompiledConfig(
   snapshot: Snapshot
 ): void {
   const current = db
-    .prepare('SELECT revision FROM compiled_configs WHERE profile_id = ?')
-    .get(snapshot.profile.id) as { revision: number } | undefined;
-  if (current && current.revision >= snapshot.profile.revision) return;
+    .prepare('SELECT revision, artifact_ciphertext FROM compiled_configs WHERE profile_id = ?')
+    .get(snapshot.profile.id) as { revision: number; artifact_ciphertext: string } | undefined;
+  if (current && (current.revision > snapshot.profile.revision || (current.revision === snapshot.profile.revision && decryptJson<ExportResult>(current.artifact_ciphertext).compilerVersion === CONFIG_COMPILER_VERSION))) return;
   try {
     const artifact = exportProfile(snapshot);
     db.prepare(
@@ -20,7 +21,7 @@ export function refreshCompiledConfig(
       VALUES (?, ?, ?, ?) ON CONFLICT(profile_id) DO UPDATE SET
       revision = excluded.revision, artifact_ciphertext = excluded.artifact_ciphertext,
       created_at = excluded.created_at
-      WHERE excluded.revision > compiled_configs.revision`
+      WHERE excluded.revision >= compiled_configs.revision`
     ).run(
       snapshot.profile.id,
       snapshot.profile.revision,

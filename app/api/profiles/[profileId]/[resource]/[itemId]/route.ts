@@ -1,3 +1,4 @@
+import { withProfileRevision } from '@/lib/revision-control';
 import { NextResponse } from 'next/server';
 
 import { requireAdmin } from '@/lib/auth';
@@ -32,14 +33,17 @@ export async function PUT(request: Request, context: Context) {
   try {
     requireAdmin(request);
     const { profileId, resource, itemId } = await context.params;
-    return NextResponse.json(
-      updateResource(
-        parseId(profileId),
-        asResourceKind(resource),
-        parseId(itemId),
-        await readJson(request)
-      )
-    );
+    const body = await readJson(request);
+    return withProfileRevision(request, parseId(profileId), () => {
+      return NextResponse.json(
+        updateResource(
+          parseId(profileId),
+          asResourceKind(resource),
+          parseId(itemId),
+          body
+        )
+      );
+    });
   } catch (error) {
     return jsonError(error);
   }
@@ -49,12 +53,14 @@ export async function DELETE(request: Request, context: Context) {
   try {
     requireAdmin(request);
     const { profileId, resource, itemId } = await context.params;
-    deleteResource(
-      parseId(profileId),
-      asResourceKind(resource),
-      parseId(itemId)
-    );
-    return new Response(null, { status: 204 });
+    return withProfileRevision(request, parseId(profileId), () => {
+      deleteResource(
+        parseId(profileId),
+        asResourceKind(resource),
+        parseId(itemId)
+      );
+      return new Response(null, { status: 204 });
+    });
   } catch (error) {
     return jsonError(error);
   }

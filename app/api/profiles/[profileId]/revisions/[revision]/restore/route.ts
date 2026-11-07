@@ -1,8 +1,9 @@
+import { withProfileRevision } from '@/lib/revision-control';
 import { NextResponse } from 'next/server';
 
 import { requireAdmin } from '@/lib/auth';
 import { jsonError, parseId } from '@/lib/http';
-import { restoreRevision } from '@/lib/repository';
+import { getCompilationSnapshot, restoreRevision } from '@/lib/repository';
 import { validateSnapshot } from '@/lib/validation';
 
 export const runtime = 'nodejs';
@@ -15,10 +16,12 @@ export async function POST(
   try {
     requireAdmin(request);
     const { profileId, revision } = await context.params;
-    const snapshot = restoreRevision(parseId(profileId), parseId(revision));
-    return NextResponse.json({
-      ...snapshot,
-      validation: validateSnapshot(snapshot)
+    return withProfileRevision(request, parseId(profileId), () => {
+      const snapshot = restoreRevision(parseId(profileId), parseId(revision));
+      return NextResponse.json({
+        ...snapshot,
+        validation: validateSnapshot(getCompilationSnapshot(snapshot.profile.id))
+      });
     });
   } catch (error) {
     return jsonError(error);

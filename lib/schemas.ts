@@ -73,7 +73,11 @@ export const ruleProviderSchema = z.object({
   behavior: z.string().trim().min(1).max(64),
   providerType: z.enum(['inline', 'remote', 'local']),
   config: jsonObject.default({}),
-  entries: z.array(z.string()).default([])
+  entries: z.array(z.string()).default([]),
+  sourceUrl: z.string().max(16384).optional(),
+  sourceHeaders: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional(),
+  clearSource: z.boolean().optional(),
+  clearHeaders: z.boolean().optional()
 });
 
 export const ruleSchema = z.object({

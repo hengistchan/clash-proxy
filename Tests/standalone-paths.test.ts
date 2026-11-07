@@ -45,7 +45,7 @@ function run(script: string, root: string, overrides: Partial<NodeJS.ProcessEnv>
   }
   return spawnSync(process.execPath, [script], {
     cwd: root,
-    env: { ...environment, ...overrides },
+    env: { ...environment, STASH_ADMIN_TOKEN: 'startup-fixture-only', ...overrides },
     encoding: 'utf8',
     timeout: 10_000
   });

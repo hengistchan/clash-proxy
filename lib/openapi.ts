@@ -1,3 +1,5 @@
+import { SERVICE_VERSION } from './version';
+
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const json = (schema: object) => ({ 'application/json': { schema } });
 const id = {
@@ -9,9 +11,11 @@ const id = {
 const errors = {
   '400': { description: '输入错误', content: json(ref('Error')) },
   '401': { description: '管理员凭据无效' },
+  '428': { description: '缺少 If-Match 版本前提条件' },
+  '503': { description: '服务未配置管理员认证' },
   '404': { description: '资源不存在' },
   '409': {
-    description: '引用冲突或没有成功生成的版本',
+    description: '版本冲突、引用冲突或没有成功生成的版本；revision.conflict 含 currentRevision 和 expectedRevision',
     content: json(ref('Error'))
   }
 };
@@ -265,13 +269,35 @@ paths[
   put: operation('修改或移动 inline 条目', ref('Entry')),
   delete: operation('删除 inline 条目')
 };
+paths['/api/profiles/{profileId}/import-preview'] = {
+  parameters: [id], post: operation('只读预览规范化导入的脱敏语义变化', { type: 'object', required: ['yaml'], properties: { yaml: { type: 'string' } } })
+};
+paths['/api/profiles/{profileId}/revisions/{revision}/compare'] = {
+  parameters: [id, { name: 'revision', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } }],
+  get: operation('比较当前配置与历史版本；只返回脱敏变化摘要')
+};
+paths['/api/profiles/{profileId}/rules/batch'] = {
+  parameters: [id], put: operation('批量修改策略、启停或有序移动规则；单事务单版本', {
+    type: 'object', required: ['ids'], properties: {
+      ids: { type: 'array', minItems: 1, maxItems: 10000, uniqueItems: true, items: { type: 'integer', minimum: 1 } },
+      policy: { type: 'string' }, enabled: { type: 'boolean' }, move: { enum: ['top', 'bottom', 'up', 'down'] }
+    }
+  })
+};
+for (const [path, value] of Object.entries(paths)) {
+  if (!path.startsWith('/api/profiles/{profileId}') || ['/simulate', '/download-link', '/import-preview'].some((suffix) => path.endsWith(suffix))) continue;
+  for (const [method, operation] of Object.entries(value as Record<string, unknown>)) {
+    if (!['put', 'post', 'delete', 'patch'].includes(method) || !operation || typeof operation !== 'object') continue;
+    Object.assign(operation, { parameters: [{ name: 'If-Match', in: 'header', required: true, description: '编辑基线版本的强 ETag，从 snapshot 响应读取；冲突返回409且不写入', schema: { type: 'string', example: '"12"' } }] });
+  }
+}
 export const openapi = {
   openapi: '3.1.0',
   info: {
     title: 'Stash 配置管理 API',
-    version: '4.0.0',
+    version: SERVICE_VERSION,
     description:
-      '保存配置后自动检查，成功版本更新 YAML 下载；有错误时仍保存草稿并保留上次成功版本。私人订阅 URL 绑定到各 provider，加密保存，普通响应不返回。旧 /api?url= 和导出时模板过滤已移除。'
+      '保存配置后自动检查，成功版本更新 YAML 下载；有错误时仍保存草稿并保留上次成功版本。私人订阅 URL 绑定到各 provider，加密保存，普通响应不返回。配置写入必须携带基线 If-Match，缺失428，过期409。导入/恢复前可读取脱敏变化预览。旧 /api?url= 和导出时模板过滤已移除。'
   },
   security: [{ BearerAuth: [] }, { AdminToken: [] }],
   paths,
@@ -367,7 +393,11 @@ export const openapi = {
           displayName: { type: 'string', maxLength: 160 },
           behavior: { enum: ['domain', 'ipcidr', 'classical'] },
           providerType: { enum: ['inline', 'remote', 'local'] },
-          config: object,
+          sourceUrl: { type: 'string', format: 'uri', writeOnly: true },
+          sourceHeaders: { ...object, writeOnly: true },
+          clearSource: { type: 'boolean' }, clearHeaders: { type: 'boolean' },
+          sourceConfigured: { type: 'boolean', readOnly: true }, headersConfigured: { type: 'boolean', readOnly: true },
+          config: { ...object, description: '来源类型必须与字段一致；普通响应不含 URL/headers。inline 不能包含远程或文件参数。' },
           entries: { type: 'array', items: { type: 'string' } }
         }
       },
@@ -434,6 +464,7 @@ export const openapi = {
         type: 'object',
         properties: {
           detail: { type: 'string' },
+          code: { type: 'string' }, currentRevision: { type: 'integer' }, expectedRevision: { type: 'integer' },
           issues: { type: 'array', items: object }
         }
       }
