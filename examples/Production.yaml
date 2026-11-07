@@ -1,0 +1,47 @@
+# Generic example only. Replace the placeholder before using real credentials.
+mode: rule
+log-level: info
+dns:
+  nameserver:
+    - 223.5.5.5
+
+proxy-providers:
+  example-subscription:
+    type: http
+    url: https://example.invalid/REPLACE_WITH_PRIVATE_SUBSCRIPTION_URL
+    path: ./providers/example-subscription.yaml
+    interval: 3600
+
+proxies:
+  - name: example-node
+    type: ss
+    server: 192.0.2.10
+    port: 443
+    cipher: aes-128-gcm
+    password: example-only-password
+
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - example-node
+      - DIRECT
+    use:
+      - example-subscription
+  - name: Regional
+    type: select
+    proxies:
+      - Proxy
+      - DIRECT
+
+rule-providers:
+  example-domains:
+    type: inline
+    behavior: domain
+    payload:
+      - +.example.com
+
+rules:
+  - RULE-SET,example-domains,Proxy
+  - DOMAIN,regional.example.com,Regional
+  - MATCH,Proxy

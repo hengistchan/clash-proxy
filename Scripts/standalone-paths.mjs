@@ -67,6 +67,9 @@ export function standaloneEnvironment(root, environment = process.env) {
     ...environment,
     STASH_DB_PATH: persistent.database,
     STASH_KEY_PATH: persistent.key,
-    STASH_TEMPLATE_DIR: path.resolve(root, environment.STASH_TEMPLATE_DIR || '.')
+    STASH_TEMPLATE_DIR: path.resolve(
+      root,
+      environment.STASH_TEMPLATE_DIR || 'examples'
+    )
   };
 }

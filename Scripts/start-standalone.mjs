@@ -23,9 +23,10 @@ await cp(path.join(root, 'public'), path.join(standalone, 'public'), {
   force: true
 });
 
+await mkdir(path.join(standalone, 'examples'), { recursive: true });
 await cp(
-  path.join(root, 'Production.yaml'),
-  path.join(standalone, 'Production.yaml')
+  path.join(root, 'examples', 'Production.yaml'),
+  path.join(standalone, 'examples', 'Production.yaml')
 );
 
 const child = spawn(process.execPath, ['server.js'], {

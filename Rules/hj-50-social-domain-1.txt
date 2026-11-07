@@ -1,5 +1,0 @@
-+.telegram.org
-+.telegram.me
-+.telegram-cdn.org
-+.t.me
-+.telegra.ph

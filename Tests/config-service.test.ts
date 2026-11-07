@@ -56,8 +56,8 @@ const fixtureDir = path.join(tempRoot, 'templates');
 mkdirSync(fixtureDir);
 writeFileSync(
   path.join(fixtureDir, 'Production.yaml'),
-  readFileSync(path.join(root, 'Production.yaml'), 'utf8').replace(
-    'https://example.invalid/REPLACE_WITH_PRIVATE_GLADOS_CLASH_YAML_URL',
+  readFileSync(path.join(root, 'examples', 'Production.yaml'), 'utf8').replace(
+    'https://example.invalid/REPLACE_WITH_PRIVATE_SUBSCRIPTION_URL',
     SECRET_URL
   )
 );
@@ -90,20 +90,21 @@ describe('seed and export', () => {
     const profile = getActiveProfile();
     const snapshot = getSnapshot(profile.id);
     assert.equal(snapshot.proxyProviders.length, 1);
-    assert.equal(snapshot.proxyProviders[0].name, 'GLaDOS');
+    assert.equal(snapshot.proxyProviders[0].name, 'example-subscription');
     assert.equal(snapshot.proxyProviders[0].requiresUrl, false);
-    assert.equal(snapshot.proxyGroups.length, 13);
-    assert.equal(snapshot.ruleProviders.length, 21);
+    assert.equal(snapshot.proxies.length, 1);
+    assert.equal(snapshot.proxyGroups.length, 2);
+    assert.equal(snapshot.ruleProviders.length, 1);
     assert.equal(
       snapshot.ruleProviders.filter((item) => item.providerType === 'inline')
         .length,
-      17
+      1
     );
-    assert.equal(snapshot.rules.length, 30);
+    assert.equal(snapshot.rules.length, 3);
     assert.equal(snapshot.rules.at(-1)?.type, 'MATCH');
     assert.deepEqual(
       snapshot.rules.map((rule) => rule.priority),
-      Array.from({ length: 30 }, (_unused, index) => index + 1)
+      [1, 2, 3]
     );
     assert.equal(validateSnapshot(snapshot).valid, true);
   });
@@ -114,30 +115,30 @@ describe('seed and export', () => {
     const parsed = parseYaml(result.yaml) as Record<string, unknown>;
     assert.equal(
       (parsed['proxy-providers'] as Record<string, Record<string, unknown>>)
-        .GLaDOS.url,
+        ['example-subscription'].url,
       SECRET_URL
     );
-    assert.equal((parsed.rules as unknown[]).length, 30);
-    assert.equal(Object.keys(parsed['proxy-groups'] as object).length, 13);
-    assert.equal(Object.keys(parsed['rule-providers'] as object).length, 21);
+    assert.equal((parsed.rules as unknown[]).length, 3);
+    assert.equal(Object.keys(parsed['proxy-groups'] as object).length, 2);
+    assert.equal(Object.keys(parsed['rule-providers'] as object).length, 1);
     assert.equal(result.sha256.length, 64);
     const databaseBytes = readFileSync(currentDbPath());
     assert.equal(databaseBytes.includes(SECRET_URL), false);
     assert.equal(existsSync(`${currentDbPath()}-wal`), true);
   });
 
-  test('export preserves user-managed providers without name-based filtering', () => {
+  test('export preserves imported providers without name-based filtering', () => {
     const profile = getActiveProfile();
     const result = exportProfile(getCompilationSnapshot(profile.id));
     const parsed = parseYaml(result.yaml) as Record<string, unknown>;
     assert.equal(
-      'Repcz-Ads-AWAvenue' in
+      'example-domains' in
         (parsed['rule-providers'] as Record<string, unknown>),
       true
     );
     assert.equal(
       (parsed.rules as string[]).some((rule) =>
-        rule.includes('Repcz-Ads-AWAvenue')
+        rule.includes('example-domains')
       ),
       true
     );
@@ -258,10 +259,10 @@ describe('configuration CRUD', () => {
     assert.throws(() => deleteRule(profile.id, reordered.at(-1)!.id), /MATCH/);
     deleteRule(profile.id, created.id);
     snapshot = getSnapshot(profile.id);
-    assert.equal(snapshot.rules.length, 30);
+    assert.equal(snapshot.rules.length, 3);
     assert.deepEqual(
       snapshot.rules.map((rule) => rule.priority),
-      Array.from({ length: 30 }, (_unused, index) => index + 1)
+      [1, 2, 3]
     );
   });
 
@@ -269,11 +270,9 @@ describe('configuration CRUD', () => {
     const profile = getActiveProfile();
     const snapshot = getSnapshot(profile.id);
     const source = snapshot.proxyGroups.find(
-      (group) => group.name === '🤖 AI 服務'
+      (group) => group.name === 'Regional'
     );
-    const parent = snapshot.proxyGroups.find(
-      (group) => group.name === '🌐 通用代理'
-    );
+    const parent = snapshot.proxyGroups.find((group) => group.name === 'Proxy');
     assert.ok(source);
     assert.ok(parent);
     const node = createProxy(profile.id, {
@@ -299,10 +298,10 @@ describe('configuration CRUD', () => {
     );
     assert.throws(
       () => deleteProxyGroup(profile.id, source.id),
-      /SSID policy “office” targets “🤖 AI 服務”/
+      /referenced/
     );
     updateProxyGroup(profile.id, source.id, {
-      name: 'AI-RENAMED',
+      name: 'Regional-Renamed',
       type: source.type,
       config: source.config
     });
@@ -313,18 +312,18 @@ describe('configuration CRUD', () => {
     });
     const renamedSnapshot = getSnapshot(profile.id);
     assert.equal(
-      renamedSnapshot.rules.some((rule) => rule.policy === 'AI-RENAMED'),
+      renamedSnapshot.rules.some((rule) => rule.policy === 'Regional-Renamed'),
       true
     );
     assert.equal(
-      renamedSnapshot.rules.some((rule) => rule.policy === '🤖 AI 服務'),
+      renamedSnapshot.rules.some((rule) => rule.policy === 'Regional'),
       false
     );
     assert.deepEqual(
       renamedSnapshot.proxyGroups.find((group) => group.id === parent.id)
         ?.config['ssid-policy'],
       {
-        office: 'AI-RENAMED',
+        office: 'Regional-Renamed',
         lab: 'ssid-node-renamed',
         default: 'DIRECT'
       }
@@ -357,27 +356,27 @@ describe('configuration CRUD', () => {
   test('rule-provider display names persist in SQLite but never change Stash identifiers', () => {
     const profile = getActiveProfile();
     const provider = getSnapshot(profile.id).ruleProviders.find(
-      (item) => item.name === 'hj-99-safety-domain-5'
+      (item) => item.name === 'example-domains'
     );
     assert.ok(provider);
     const updated = updateRuleProvider(profile.id, provider.id, {
       name: provider.name,
-      displayName: 'Apple Intelligence · Siri',
+      displayName: '示例域名',
       behavior: provider.behavior,
       providerType: provider.providerType,
       config: provider.config,
       entries: provider.entries.map((entry) => entry.value)
     });
-    assert.equal(updated.displayName, 'Apple Intelligence · Siri');
+    assert.equal(updated.displayName, '示例域名');
 
     const reimported = importYaml(
       profile.id,
-      readFileSync(path.join(root, 'Production.yaml'), 'utf8')
+      readFileSync(path.join(root, 'examples', 'Production.yaml'), 'utf8')
     );
     assert.equal(
       reimported.ruleProviders.find((item) => item.name === provider.name)
         ?.displayName,
-      'Apple Intelligence · Siri'
+      '示例域名'
     );
 
     const exported = exportProfile(getCompilationSnapshot(profile.id));
@@ -387,14 +386,14 @@ describe('configuration CRUD', () => {
       Record<string, unknown>
     >;
     assert.ok(exportedProviders[provider.name]);
-    assert.equal('Apple Intelligence · Siri' in exportedProviders, false);
+    assert.equal('示例域名' in exportedProviders, false);
     assert.equal('displayName' in exportedProviders[provider.name], false);
   });
 
   test('referenced rule providers cannot be deleted', () => {
     const profile = getActiveProfile();
-    const provider = getSnapshot(profile.id).ruleProviders.find((item) =>
-      item.name.startsWith('hj-99-safety-domain')
+    const provider = getSnapshot(profile.id).ruleProviders.find(
+      (item) => item.name === 'example-domains'
     );
     assert.ok(provider);
     assert.throws(
@@ -449,10 +448,10 @@ describe('validation, history and import', () => {
       payload: 'revision.example.test',
       policy: 'DIRECT'
     });
-    assert.equal(getSnapshot(profile.id).rules.length, 31);
+    assert.equal(getSnapshot(profile.id).rules.length, 4);
     assert.equal(listRevisions(profile.id).items.length > 0, true);
     restoreRevision(profile.id, before);
-    assert.equal(getSnapshot(profile.id).rules.length, 30);
+    assert.equal(getSnapshot(profile.id).rules.length, 3);
   });
 
   test('revision history pages newest-first without gaps or duplicates', () => {

@@ -128,7 +128,7 @@ docker compose start api
 | STASH_SECRET_KEY | 空 | 32 字节密钥，64 位 hex 或 Base64 |
 | STASH_ADMIN_TOKEN | 空 | 管理接口令牌 |
 | STASH_PUBLIC_BASE_URL | 请求地址 | 反向代理后的对外服务 origin，用于返回完整下载链接 |
-| STASH_TEMPLATE_DIR | 仓库根目录 | 可选示例 Production.yaml 所在目录 |
+| STASH_TEMPLATE_DIR | `examples/` | 可选示例 Production.yaml 所在目录 |
 | STASH_SEED_EXAMPLE | 空 | 仅在首次建库时设为 1 可显式加载示例；默认最小配置 |
 
 ## 验证
@@ -143,6 +143,6 @@ npm run test:e2e
 测试涵盖通用配置、多来源凭据隔离、脱敏与重启持久化、无效草稿保留成功产物、设备链接轮换撤销、顺序导出与有限匹配分析。
 浏览器回归运行真实生产包，使用独立临时数据库、密钥和测试管理员令牌，退出后清理，不读取本机配置；
 验证连接恢复、登录、导入、未保存修改保护、保存中导航、错误草稿修复、交付与历史恢复及配置切换。
-CI 会独立构建并执行 Chromium 回归，同时保留示例 YAML parity 和 Python 工具回归。
+CI 会独立构建并执行 Chromium 回归。
 
 架构与交互改进的边界、设计依据和验收路径见 [架构与体验审查](docs/architecture-review.md)。

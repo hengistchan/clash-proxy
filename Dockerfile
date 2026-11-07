@@ -30,7 +30,7 @@ RUN groupadd --system --gid 10001 app \
 COPY --from=builder --chown=10001:10001 /app/.next/standalone ./
 COPY --from=builder --chown=10001:10001 /app/.next/static ./.next/static
 COPY --from=builder --chown=10001:10001 /app/public ./public
-COPY --from=builder --chown=10001:10001 /app/Production.yaml ./Production.yaml
+COPY --from=builder --chown=10001:10001 /app/examples ./examples
 
 USER 10001:10001
 EXPOSE 8080

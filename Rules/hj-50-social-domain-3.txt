@@ -1,5 +1,0 @@
-+.x.com
-+.twitter.com
-+.twimg.com
-+.t.co
-+.twttr.com

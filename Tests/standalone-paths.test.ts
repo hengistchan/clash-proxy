@@ -10,7 +10,11 @@ const buildGuard = path.resolve('Scripts/check-build-data.mjs');
 
 function fixture() {
   const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'forge-startup-')));
-  writeFileSync(path.join(root, 'Production.yaml'), 'rules: ["MATCH,DIRECT"]\n');
+  mkdirSync(path.join(root, 'examples'));
+  writeFileSync(
+    path.join(root, 'examples', 'Production.yaml'),
+    'rules: ["MATCH,DIRECT"]\n'
+  );
   mkdirSync(path.join(root, 'public'));
   prepareBundle(root);
   return root;
@@ -55,7 +59,7 @@ test('standalone startup persists the default database and key outside rebuilt o
     const info = JSON.parse(first.stdout);
     assert.equal(info.database, path.join(root, 'data', 'stash-config.sqlite3'));
     assert.equal(info.key, `${info.database}.key`);
-    assert.equal(info.template, root);
+    assert.equal(info.template, path.join(root, 'examples'));
     writeFileSync(info.database, 'saved-before-rebuild');
     assert.equal(run(buildGuard, root).status, 0);
     rmSync(path.join(root, '.next'), { recursive: true });

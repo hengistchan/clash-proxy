@@ -1,7 +1,0 @@
-+.github-releases.githubusercontent.com
-+.github.com
-+.githubusercontent.com
-+.githubassets.com
-+.github.io
-+.github.dev
-+.githubapp.com

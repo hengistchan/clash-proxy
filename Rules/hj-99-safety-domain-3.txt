@@ -1,2 +1,0 @@
-+.push.apple.com
-+.akadns.net

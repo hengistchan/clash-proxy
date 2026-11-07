@@ -758,7 +758,7 @@ function seedTemplate(): string {
         path.resolve(/*turbopackIgnore: true*/ configured),
         'Production.yaml'
       )
-    : path.join(process.cwd(), 'Production.yaml');
+    : path.join(process.cwd(), 'examples', 'Production.yaml');
   return readFileSync(/*turbopackIgnore: true*/ file, 'utf8');
 }
 

@@ -13,7 +13,7 @@ const environment = {
   STASH_KEY_PATH: path.join(temporary, 'config.key'),
   STASH_ADMIN_TOKEN: ['browser', 'test', 'admin'].join('-'),
   STASH_PUBLIC_BASE_URL: 'http://127.0.0.1:3117',
-  STASH_TEMPLATE_DIR: process.cwd()
+  STASH_TEMPLATE_DIR: path.join(process.cwd(), 'examples')
 };
 delete environment.STASH_SECRET_KEY;
 delete environment.STASH_SEED_EXAMPLE;
