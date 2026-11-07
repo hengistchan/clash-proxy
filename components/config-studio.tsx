@@ -228,17 +228,31 @@ function Workspace() {
   const { confirmDiscard: discardImportDialog } = useUnsavedChanges(
     importDialog && Boolean(importYamlText), false, () => setImportYamlText('')
   );
-  function closeProfileDialog(open: boolean) {
-    if (open || discardProfileDialog()) setProfileDialog(open);
+  async function closeProfileDialog(open: boolean) {
+    if (open || (await discardProfileDialog())) setProfileDialog(open);
   }
-  function closeImportDialog(open: boolean) {
+  async function closeImportDialog(open: boolean) {
     if (profileBusy) return;
-    if (open || discardImportDialog()) setImportDialog(open);
+    if (open || (await discardImportDialog())) setImportDialog(open);
   }
 
-  function navigate(next: SectionId) {
-    if (next === section || !confirmNavigation()) return;
+  async function navigate(next: SectionId) {
+    if (next === section || !(await confirmNavigation())) return;
     setSection(next);
+  }
+
+  async function openImportDialog() {
+    if (await confirmNavigation()) setImportDialog(true);
+  }
+
+  async function openProfileDialog() {
+    if (await confirmNavigation()) setProfileDialog(true);
+  }
+
+  async function inspectGraphNode(node: ResourceNode) {
+    if (!(await confirmNavigation())) return;
+    setGraphFocus(node.key);
+    setSection('relationships');
   }
 
   const notify = useCallback(
@@ -381,7 +395,7 @@ function Workspace() {
   }
 
   async function switchProfile(id: number) {
-    if (id === profileId || !confirmNavigation()) return;
+    if (id === profileId || !(await confirmNavigation())) return;
     initialiseRequest.current++;
     try {
       if (await loadSnapshot(id, token)) {
@@ -395,8 +409,8 @@ function Workspace() {
     }
   }
 
-  function refreshWorkspace() {
-    if (!confirmNavigation()) return;
+  async function refreshWorkspace() {
+    if (!(await confirmNavigation())) return;
     if (snapshot && meta) void reload();
     else void initialise(token, profileId);
   }
@@ -453,19 +467,19 @@ function Workspace() {
     } finally { mutationLock.current = false; setProfileBusy(false); }
   }
 
-  function inspectResource(kind: ResourceKind, item: { id: number }) {
-    if (!confirmNavigation()) return;
+  async function inspectResource(kind: ResourceKind, item: { id: number }) {
+    if (!(await confirmNavigation())) return;
     setGraphFocus(resourceKey(kind, item.id));
     setSection('relationships');
   }
-  function editGraphResource(node: ResourceNode) {
+  async function editGraphResource(node: ResourceNode) {
     if (!snapshot) return;
     if (node.kind === 'settings') {
-      navigate('settings');
+      await navigate('settings');
       return;
     }
     if (node.kind === 'advanced') {
-      navigate('advanced');
+      await navigate('advanced');
       return;
     }
     if (node.kind === 'builtin' || node.kind === 'missing') return;
@@ -482,8 +496,8 @@ function Workspace() {
     setEditorOpen(true);
   }
 
-  function fixIssue(issue: ValidationIssue) {
-    if (!snapshot || !confirmNavigation()) return;
+  async function fixIssue(issue: ValidationIssue) {
+    if (!snapshot || !(await confirmNavigation())) return;
     const kind = ({
       'proxy-provider': 'proxy-providers', 'proxy-group': 'proxy-groups',
       'rule-provider': 'rule-providers', rule: 'rules', proxy: 'proxies', host: 'hosts'
@@ -665,14 +679,14 @@ function Workspace() {
             <button
               className="button secondary small"
               disabled={loading || !snapshot}
-              onClick={() => { if (confirmNavigation()) setImportDialog(true); }}
+              onClick={() => void openImportDialog()}
             >
               <FileInput size={15} />
               导入配置文件
             </button>
             <button
               className="button secondary small"
-              onClick={() => { if (confirmNavigation()) setProfileDialog(true); }}
+              onClick={() => void openProfileDialog()}
             >
               <Plus size={15} />
               新建配置
@@ -723,12 +737,8 @@ function Workspace() {
                 validation={validation}
                 onNavigate={(value) => navigate(value as SectionId)}
                 onFixIssue={fixIssue}
-                onImport={() => { if (confirmNavigation()) setImportDialog(true); }}
-                onInspect={(node) => {
-                  if (!confirmNavigation()) return;
-                  setGraphFocus(node.key);
-                  setSection('relationships');
-                }}
+                onImport={() => void openImportDialog()}
+                onInspect={(node) => void inspectGraphNode(node)}
               />
             ) : null}
 

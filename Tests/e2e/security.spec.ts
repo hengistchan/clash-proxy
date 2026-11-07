@@ -90,8 +90,8 @@ test('two browser tabs cannot silently overwrite a newer configuration and retai
     let stored = await snapshot(request, initial.profile.id);
     expect(stored.profile.revision).toBe(initial.profile.revision + 1);
     expect(stored.profile.settings.dns).toMatchObject({ nameserver: [firstValue] });
-    second.once('dialog', (dialog) => dialog.dismiss());
     await second.getByRole('button', { name: '刷新快照', exact: true }).click();
+    await second.getByRole('dialog', { name: '放弃未保存的修改？' }).getByRole('button', { name: '取消', exact: true }).click();
     await expect(secondDns).toHaveValue(secondValue);
     const stillStale = second.waitForResponse((response) => response.url().endsWith(`/api/profiles/${initial.profile.id}/settings`) && response.request().method() === 'PUT');
     await second.getByRole('button', { name: '保存设置', exact: true }).click();
@@ -99,8 +99,8 @@ test('two browser tabs cannot silently overwrite a newer configuration and retai
     stored = await snapshot(request, initial.profile.id);
     expect(stored.profile.revision).toBe(initial.profile.revision + 1);
     expect(stored.profile.settings.dns).toMatchObject({ nameserver: [firstValue] });
-    second.once('dialog', (dialog) => dialog.accept());
     await second.getByRole('button', { name: '放弃本页修改并读取最新配置', exact: true }).click();
+    await second.getByRole('dialog', { name: '放弃未保存的修改？' }).getByRole('button', { name: '放弃修改', exact: true }).click();
     await expect(secondDns).toHaveValue(firstValue);
     await expect(second.locator('.settings-panel').getByRole('alert')).toBeHidden();
   } finally { await second.close(); }

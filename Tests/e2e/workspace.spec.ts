@@ -38,6 +38,18 @@ async function navigate(page: Page, section: string) {
   await page.locator('.side-nav').getByRole('button', { name: section, exact: true }).click();
 }
 
+async function dismissDiscard(page: Page) {
+  const dialog = page.getByRole('dialog', { name: '放弃未保存的修改？' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+}
+
+async function acceptDiscard(page: Page) {
+  const dialog = page.getByRole('dialog', { name: '放弃未保存的修改？' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: '放弃修改', exact: true }).click();
+}
+
 test('initial connection failure is recoverable and management requires login', async ({ page, request }) => {
   let fail = true;
   await page.route('**/api/meta', async (route) => {
@@ -114,45 +126,45 @@ test('unsaved settings and resource dialogs protect cancel, navigation and refre
   await navigate(page, '全局与 DNS');
   const originalDns = await page.getByRole('textbox', { name: 'nameserver', exact: true }).inputValue();
   await page.getByRole('textbox', { name: 'nameserver', exact: true }).fill('https://dns.example.test/dns-query');
-  page.once('dialog', (dialog) => dialog.dismiss());
   await navigate(page, '路由规则');
+  await dismissDiscard(page);
   await expect(page.getByRole('heading', { name: '全局设置与 DNS', exact: true })).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'nameserver', exact: true })).toHaveValue('https://dns.example.test/dns-query');
-  page.once('dialog', (dialog) => dialog.dismiss());
   await page.getByRole('button', { name: '刷新快照', exact: true }).click();
+  await dismissDiscard(page);
   await expect(page.getByRole('textbox', { name: 'nameserver', exact: true })).toHaveValue('https://dns.example.test/dns-query');
-  page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: '刷新快照', exact: true }).click();
+  await acceptDiscard(page);
   await expect(page.getByRole('textbox', { name: 'nameserver', exact: true })).toHaveValue(originalDns);
   await navigate(page, 'Hosts');
   await page.getByRole('button', { name: /新增/ }).click();
   const editor = page.getByRole('dialog', { name: '新增Host 映射' });
   await editor.getByLabel('Hostname / Wildcard').fill('unsaved.test');
-  page.once('dialog', (dialog) => dialog.dismiss());
   await editor.getByRole('button', { name: '关闭', exact: true }).click();
+  await dismissDiscard(page);
   await expect(editor).toBeVisible();
   await expect(editor.getByLabel('Hostname / Wildcard')).toHaveValue('unsaved.test');
-  page.once('dialog', (dialog) => dialog.accept());
   await editor.getByRole('button', { name: '取消', exact: true }).click();
+  await acceptDiscard(page);
   await expect(editor).toBeHidden();
   expect((await snapshot(request, initial.profile.id)).hosts).toHaveLength(0);
   await page.getByRole('button', { name: '新建配置', exact: true }).click();
   const creation = page.getByRole('dialog', { name: '新建配置', exact: true });
   await creation.getByLabel('配置名称').fill('unsaved-profile');
-  page.once('dialog', (dialog) => dialog.dismiss());
   await creation.getByRole('button', { name: '关闭', exact: true }).click();
+  await dismissDiscard(page);
   await expect(creation.getByLabel('配置名称')).toHaveValue('unsaved-profile');
-  page.once('dialog', (dialog) => dialog.accept());
   await creation.getByRole('button', { name: '取消', exact: true }).click();
+  await acceptDiscard(page);
   await expect(creation).toBeHidden();
   await page.getByRole('button', { name: '导入配置文件', exact: true }).click();
   const replacement = page.getByRole('dialog', { name: '导入并替换当前 Profile' });
   await replacement.getByRole('textbox').fill('rules: ["MATCH,DIRECT"]');
-  page.once('dialog', (dialog) => dialog.dismiss());
   await replacement.getByRole('button', { name: '关闭', exact: true }).click();
+  await dismissDiscard(page);
   await expect(replacement.getByRole('textbox')).toHaveValue('rules: ["MATCH,DIRECT"]');
-  page.once('dialog', (dialog) => dialog.accept());
   await replacement.getByRole('button', { name: '取消', exact: true }).click();
+  await acceptDiscard(page);
   await expect(replacement).toBeHidden();
 });
 
@@ -172,8 +184,8 @@ test('navigation stays blocked while a settings write is in flight', async ({ pa
   });
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await started;
-  page.once('dialog', (dialog) => dialog.accept());
   await navigate(page, '路由规则');
+  await expect(page.locator('.toast-bad')).toContainText('正在保存');
   await expect(page.getByRole('heading', { name: '全局设置与 DNS', exact: true })).toBeVisible();
   release();
   await expect(page.getByRole('button', { name: '保存设置', exact: true })).toBeEnabled();
@@ -370,10 +382,8 @@ test('viewing relationships cannot bypass the navigation guard during a rule mut
   const card = page.locator('.rule-card').filter({ hasText: 'busy-route.test' });
   await card.getByRole('switch').click();
   await started;
-  let message = '';
-  page.once('dialog', (dialog) => { message = dialog.message(); return dialog.accept(); });
   await card.getByRole('button', { name: '查看关联', exact: true }).click();
-  expect(message).toContain('正在保存');
+  await expect(page.locator('.toast-bad')).toContainText('正在保存');
   await expect(page.locator('.side-nav button.active')).toHaveText('路由规则');
   release();
   await expect(card.getByRole('switch')).toBeEnabled();

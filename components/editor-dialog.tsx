@@ -128,8 +128,8 @@ export function EditorDialog({
   const loadedIdentity = useRef('');
   const { confirmDiscard } = useUnsavedChanges(open && dirty, open && saving, resetDraft);
 
-  function changeOpen(next: boolean) {
-    if (next || confirmDiscard()) onOpenChange(next);
+  async function changeOpen(next: boolean) {
+    if (next || (await confirmDiscard())) onOpenChange(next);
   }
 
   const policyOptions = useMemo(
@@ -308,7 +308,7 @@ export function EditorDialog({
   const missingResource = Boolean(resource && existing && !snapshotResources(snapshot, resource).some((entry) => entry.id === existing.id));
 
   async function discardAndReload() {
-    if (saving || !window.confirm('放弃本次未保存输入，并读取最新配置后返回列表吗？')) return;
+    if (saving || !(await confirmDiscard())) return;
     setSaving(true);
     try {
       await onSaved('已读取最新快照，请重新打开资源后编辑。');
