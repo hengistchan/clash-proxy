@@ -24,6 +24,14 @@ const jsonValue = z.custom<JsonValue>(isJsonValue, {
 
 const name = z.string().trim().min(1).max(160);
 
+export const proxyRewriteRulesSchema = z.array(z.object({
+  matchName: z.string().max(256).default(''),
+  protocol: z.string().trim().regex(/^[a-z0-9-]{1,32}$/).optional(),
+  operation: z.enum(['fill', 'set']),
+  field: z.enum(['udp', 'udp-over-tcp', 'tfo']),
+  value: z.boolean()
+}).strict()).max(20);
+
 export const profileCreateSchema = z.object({
   name,
   importYaml: z.string().optional(),
@@ -58,13 +66,23 @@ export const proxyProviderSchema = z.object({
     .record(z.string(), z.union([z.string(), z.array(z.string())]))
     .optional(),
   clearSource: z.boolean().optional(),
-  clearHeaders: z.boolean().optional()
+  clearHeaders: z.boolean().optional(),
+  rewriteRules: proxyRewriteRulesSchema.optional()
 });
 
 export const proxyGroupSchema = z.object({
   name,
   type: z.enum(['select', 'url-test', 'fallback', 'load-balance', 'relay']),
-  config: jsonObject.default({})
+  config: jsonObject.default({}),
+  clientOptions: z.object({
+    shadowrocket: z.object({
+      'policy-regex-filter': z.string().max(512).optional(),
+      'policy-select-name': z.string().max(160).optional(),
+      select: z.number().int().min(0).max(4000).optional(),
+      use: z.boolean().optional(),
+      nativeMembers: z.array(name.refine((value) => !value.includes('://'), '请使用节点或订阅名称')).max(4000).optional()
+    }).strict().optional()
+  }).strict().optional()
 });
 
 export const ruleProviderSchema = z.object({
@@ -73,8 +91,15 @@ export const ruleProviderSchema = z.object({
   behavior: z.string().trim().min(1).max(64),
   providerType: z.enum(['inline', 'remote', 'local']),
   config: jsonObject.default({}),
+  clientOptions: z.object({
+    shadowrocket: z.object({
+      referenceType: z.enum(['RULE-SET', 'DOMAIN-SET']).optional()
+    }).strict().optional()
+  }).strict().optional(),
   entries: z.array(z.string()).default([]),
   sourceUrl: z.string().max(16384).optional(),
+  shadowrocketSourceUrl: z.string().max(16384).optional(),
+  clearShadowrocketSource: z.boolean().optional(),
   sourceHeaders: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional(),
   clearSource: z.boolean().optional(),
   clearHeaders: z.boolean().optional()

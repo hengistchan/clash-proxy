@@ -20,18 +20,25 @@ export function refreshStashConfig(
   if (current && (current.revision > snapshot.profile.revision || (current.revision === snapshot.profile.revision && decryptJson<ExportResult>(current.artifact_ciphertext).compilerVersion === CONFIG_COMPILER_VERSION))) return;
   try {
     const artifact = exportProfile(snapshot);
-    db.prepare(
-      `INSERT INTO compiled_configs (profile_id, revision, artifact_ciphertext, created_at)
-      VALUES (?, ?, ?, ?) ON CONFLICT(profile_id) DO UPDATE SET
-      revision = excluded.revision, artifact_ciphertext = excluded.artifact_ciphertext,
-      created_at = excluded.created_at
-      WHERE excluded.revision >= compiled_configs.revision`
-    ).run(
-      snapshot.profile.id,
-      snapshot.profile.revision,
-      encryptJson(artifact as unknown as JsonValue),
-      new Date().toISOString()
-    );
+    db.transaction(() => {
+      const saved = db.prepare(
+        `INSERT INTO compiled_configs (profile_id, revision, artifact_ciphertext, created_at)
+        VALUES (?, ?, ?, ?) ON CONFLICT(profile_id) DO UPDATE SET
+        revision = excluded.revision, artifact_ciphertext = excluded.artifact_ciphertext,
+        created_at = excluded.created_at
+        WHERE excluded.revision >= compiled_configs.revision`
+      ).run(
+        snapshot.profile.id,
+        snapshot.profile.revision,
+        encryptJson(artifact as unknown as JsonValue),
+        new Date().toISOString()
+      );
+      if (!saved.changes) return;
+      const ids = artifact.proxyRewrites?.sources.map(({ id }) => id) ?? [];
+      db.prepare(`DELETE FROM managed_proxy_source_cache WHERE profile_id = ?
+        ${ids.length ? `AND provider_id NOT IN (${ids.map(() => '?').join(',')})` : ''}`)
+        .run(snapshot.profile.id, ...ids);
+    }).immediate();
   } catch (error) {
     if (!(error instanceof HttpError && error.status === 409)) throw error;
   }

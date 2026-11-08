@@ -148,7 +148,7 @@ describe('seed and export', () => {
 describe('database and encrypted storage', () => {
   test('records the schema version and refuses to open a newer database', () => {
     const db = getDb();
-    assert.equal(Number(db.pragma('user_version', { simple: true })), 4);
+    assert.equal(Number(db.pragma('user_version', { simple: true })), 6);
     assert.ok(
       db
         .prepare('PRAGMA table_info(rule_providers)')
@@ -168,26 +168,21 @@ describe('database and encrypted storage', () => {
   test('migrates an existing version 1 database with an empty display name', () => {
     closeDbForTests();
     const legacyPath = path.join(tempRoot, `legacy-${sequence}.sqlite3`);
-    const legacyDb = new Database(legacyPath);
-    legacyDb.exec(`
-      CREATE TABLE profiles (id INTEGER PRIMARY KEY);
-      CREATE TABLE rule_providers (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        profile_id INTEGER NOT NULL,
-        name TEXT NOT NULL,
-        behavior TEXT NOT NULL,
-        provider_type TEXT NOT NULL,
-        config_ciphertext TEXT NOT NULL,
-        sort_order INTEGER NOT NULL
-      );
-      PRAGMA user_version = 1;
-    `);
-    legacyDb.close();
-
     const previousPath = process.env.STASH_DB_PATH;
     process.env.STASH_DB_PATH = legacyPath;
+    const legacyDb = getDb();
+    legacyDb.exec(`
+      DROP TABLE shadowrocket_download_links;
+      DROP TABLE shadowrocket_compilations;
+      DROP TABLE download_links;
+      DROP TABLE compiled_configs;
+      ALTER TABLE profiles DROP COLUMN target_platform;
+      ALTER TABLE rule_providers DROP COLUMN display_name;
+      PRAGMA user_version = 1;
+    `);
+    closeDbForTests();
     const migrated = getDb();
-    assert.equal(Number(migrated.pragma('user_version', { simple: true })), 4);
+    assert.equal(Number(migrated.pragma('user_version', { simple: true })), 6);
     assert.equal(
       (
         migrated.prepare('PRAGMA table_info(rule_providers)').all() as Array<{
@@ -198,6 +193,26 @@ describe('database and encrypted storage', () => {
     );
     closeDbForTests();
     process.env.STASH_DB_PATH = previousPath;
+  });
+
+  test('a bad legacy resource aborts the entire v5 storage conversion', () => {
+    const db = getDb();
+    const legacy = encryptJson({ dns: { nameserver: ['1.1.1.1'] } });
+    const insert = db.prepare(`INSERT INTO profiles
+      (name, settings_ciphertext, created_at, updated_at) VALUES (?, ?, ?, ?)`);
+    insert.run('legacy-valid', legacy, '2000-01-01', '2000-01-01');
+    insert.run('legacy-corrupt', 'unreadable', '2000-01-01', '2000-01-01');
+    db.pragma('user_version = 4');
+    closeDbForTests();
+    assert.throws(() => getDb(), /Unsupported encrypted value/);
+    const raw = new Database(currentDbPath(), { readonly: true });
+    try {
+      assert.equal(raw.pragma('user_version', { simple: true }), 4);
+      assert.equal(raw.prepare('SELECT settings_ciphertext FROM profiles WHERE name = ?').pluck()
+        .get('legacy-valid'), legacy);
+    } finally {
+      raw.close();
+    }
   });
 
   test('compresses new encrypted JSON and still reads legacy v1 ciphertext', () => {

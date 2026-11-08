@@ -1,14 +1,12 @@
 import type Database from 'better-sqlite3';
 
-import { decryptJson } from './crypto';
+import { decryptResource, decryptResourceObject, readClientOptions, readNodeSourceRewriteRules } from './config-storage-model';
 import { HttpError } from './http';
 import { mapRule } from './rule-repository';
 import { publicRuleProvider } from './rule-provider-source';
 import type {
   AdvancedSection,
   HostEntry,
-  JsonObject,
-  JsonValue,
   LogLevel,
   Profile,
   ProfileMode,
@@ -28,10 +26,6 @@ export function now(): string {
   return new Date().toISOString();
 }
 
-export function decryptObject(value: unknown): JsonObject {
-  return decryptJson<JsonObject>(String(value || ''));
-}
-
 export function mapProfile(row: DbRow): Profile {
   return {
     id: Number(row.id),
@@ -40,7 +34,8 @@ export function mapProfile(row: DbRow): Profile {
     logLevel: String(row.log_level) as LogLevel,
     ipv6:
       row.ipv6 === null || row.ipv6 === undefined ? null : Boolean(row.ipv6),
-    settings: decryptObject(row.settings_ciphertext),
+    settings: decryptResourceObject('settings', row.settings_ciphertext),
+    clientOptions: readClientOptions(row.settings_ciphertext),
     targetPlatform: String(
       row.target_platform || 'any'
     ) as Profile['targetPlatform'],
@@ -56,19 +51,21 @@ export function mapProxy(row: DbRow): ProxyNode {
     id: Number(row.id),
     name: String(row.name),
     type: String(row.type),
-    config: decryptObject(row.config_ciphertext),
+    config: decryptResourceObject('node', row.config_ciphertext),
     sortOrder: Number(row.sort_order)
   };
 }
 
 export function mapProxyProvider(row: DbRow): ProxyProvider {
-  const config = decryptObject(row.config_ciphertext);
+  const config = decryptResourceObject('nodeSource', row.config_ciphertext);
+  const rewriteRules = readNodeSourceRewriteRules(row.config_ciphertext);
   const sourceType =
     Boolean(row.requires_url) || config.url ? 'remote' : 'local';
   return {
     id: Number(row.id),
     name: String(row.name),
     config,
+    ...(rewriteRules?.length ? { rewriteRules } : {}),
     requiresUrl: sourceType === 'remote' && !config.url,
     sourceType,
     sourceConfigured:
@@ -85,7 +82,8 @@ export function mapProxyGroup(row: DbRow): ProxyGroup {
     id: Number(row.id),
     name: String(row.name),
     type: String(row.type) as ProxyGroupType,
-    config: decryptObject(row.config_ciphertext),
+    config: decryptResourceObject('policyGroup', row.config_ciphertext),
+    clientOptions: readClientOptions(row.config_ciphertext),
     sortOrder: Number(row.sort_order)
   };
 }
@@ -94,7 +92,7 @@ export function mapRuleProvider(
   row: DbRow,
   entries: RuleProviderEntry[]
 ): RuleProvider {
-  const config = decryptObject(row.config_ciphertext);
+  const config = decryptResourceObject('ruleSource', row.config_ciphertext);
   const providerType = String(row.provider_type) as RuleProviderType;
   return {
     id: Number(row.id),
@@ -111,6 +109,7 @@ export function mapRuleProvider(
       config.headers && Object.keys(config.headers).length
     ),
     config,
+    clientOptions: readClientOptions(row.config_ciphertext),
     entries,
     sortOrder: Number(row.sort_order)
   };
@@ -129,7 +128,7 @@ export function mapAdvanced(row: DbRow): AdvancedSection {
   return {
     id: Number(row.id),
     key: String(row.section_key),
-    value: decryptJson<JsonValue>(String(row.value_ciphertext)),
+    value: decryptResource('extension', row.value_ciphertext),
     sortOrder: Number(row.sort_order)
   };
 }
@@ -317,9 +316,18 @@ export function publicProvider(provider: ProxyProvider): ProxyProvider {
   return { ...provider, config };
 }
 
+export function publicProfile(profile: Profile): Profile {
+  // Native sections may contain authentication material or certificates.
+  const { clientOptions: _private, ...safe } = profile;
+  return _private?.shadowrocket?.native === true
+    ? { ...safe, clientOptions: { shadowrocket: { native: true } } }
+    : safe;
+}
+
 export function publicSnapshot(snapshot: Snapshot): Snapshot {
   return {
     ...snapshot,
+    profile: publicProfile(snapshot.profile),
     proxyProviders: snapshot.proxyProviders.map(publicProvider),
     ruleProviders: snapshot.ruleProviders.map(publicRuleProvider)
   };

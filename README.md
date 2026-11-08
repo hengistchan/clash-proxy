@@ -7,6 +7,7 @@
 
 技术栈：Next.js / React、Node.js、SQLite、Playwright。应用不依赖特定订阅品牌、
 节点名称或规则集名称；你可以从最小配置开始，也可以导入已有 YAML。
+导入也支持 Shadowrocket .conf，并在预览中区分通用配置和客户端专用字段。
 
 ## 功能
 
@@ -69,6 +70,7 @@ GET /api/config_download/{token}/config.yaml
 
 下载接口不接受私人订阅 URL 参数。订阅地址绑定到各自的代理源，并经加密后保存在
 SQLite 中。代理源和规则集的普通资源 API 均不回传 URL 或认证请求头；写入省略来源字段会保留既有凭据。
+远程代理源可在 Stash 导出时按名称或协议改写节点字段，详见[代理源节点改写](docs/proxy-source-rewrites.md)。
 
 ## 验证
 

@@ -5,11 +5,12 @@ export const dynamic = 'force-dynamic';
 type Context = { params: Promise<{ profileId: string }> };
 
 import { getLatestConfig } from '@/lib/delivery';
+import { materializeStashArtifact } from '@/lib/managed-proxy-source';
 import { zipFiles } from '@/lib/zip';
 export async function GET(request: Request, context: Context) {
   try {
     requireAdmin(request);
-    const artifact = getLatestConfig(parseId((await context.params).profileId));
+    const artifact = materializeStashArtifact(getLatestConfig(parseId((await context.params).profileId)), request);
     const bytes = zipFiles({
       'config.yaml': artifact.yaml,
       'manifest.json': JSON.stringify(
@@ -20,7 +21,7 @@ export async function GET(request: Request, context: Context) {
           generatedAt: artifact.generatedAt,
           format: 'stash-yaml',
           remoteDependencies:
-            'Provider URLs and local resource paths are retained. Resources are not fetched or bundled.'
+            'The configuration includes provider URLs and local resource paths. Resources are not fetched or bundled.'
         },
         null,
         2

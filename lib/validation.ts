@@ -2,6 +2,7 @@ import { ruleProviderConflict } from './rule-provider-source';
 import { analyzeOrder } from './routing-analysis';
 import { validateSubscriptionUrl } from './provider-source';
 import { isIP } from 'node:net';
+import { SHADOWROCKET_BUILTINS } from './types';
 
 import { isLogicalRuleType, ruleSetNames } from './rules';
 import type {
@@ -126,6 +127,7 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
   );
   const policyNames = new Set([
     ...BUILTIN_POLICIES,
+    ...(snapshot.profile.clientOptions?.shadowrocket?.native === true ? SHADOWROCKET_BUILTINS : []),
     ...proxyNames,
     ...groupNames
   ]);

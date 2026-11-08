@@ -3,11 +3,13 @@ import { useEffect, useRef, useState } from 'react';
 import type { ConfigDiff } from '@/lib/config-diff';
 import { apiRequest } from './api-client';
 import { ConfigDiffView } from './config-diff-view';
+import { ImportClassificationView, type ImportClassification } from './import-classification';
 
 interface Preview {
   currentRevision: number;
   changes: ConfigDiff;
   normalizationNotice: string;
+  classification?: ImportClassification;
 }
 
 export function ImportPreview({ profileId, token, yaml, onPreview }: {
@@ -47,9 +49,9 @@ export function ImportPreview({ profileId, token, yaml, onPreview }: {
     }
   }
   return <section className="import-preview" aria-label="导入变化预览">
-    <p className="delivery-note">导入会重新生成标准 YAML；注释、原始排版和锚点写法不会保留。请先预览语义变化，再确认替换。</p>
+    <p className="delivery-note">导入会先区分通用配置和客户端专用字段。注释、原始排版和锚点写法不会保留。请预览语义变化，再确认替换。</p>
     <button className="button secondary" disabled={busy || !yaml.trim()} onClick={() => void load()}>{busy ? '正在预览…' : '预览导入变化'}</button>
-    {preview ? <div><p className="delivery-note">基于当前版本 {preview.currentRevision} 的替换预览。修改导入文本后需要重新预览。</p><ConfigDiffView diff={preview.changes} /></div> : null}
+    {preview ? <div><p className="delivery-note">基于当前版本 {preview.currentRevision} 的替换预览。修改导入文本后需要重新预览。</p>{preview.classification ? <ImportClassificationView result={preview.classification} /> : null}<ConfigDiffView diff={preview.changes} /></div> : null}
     {error ? <pre className="inline-error" role="alert">{error}</pre> : null}
   </section>;
 }

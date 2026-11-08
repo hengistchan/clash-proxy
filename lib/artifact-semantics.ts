@@ -3,11 +3,11 @@ import { validateSubscriptionUrl } from './provider-source';
 import { parseYamlDocument } from './yaml-import';
 
 // Increment when publishing semantics change, independently from the app version.
-export const CONFIG_COMPILER_VERSION = 2;
+export const CONFIG_COMPILER_VERSION = 3;
 
 /** Old encrypted artifacts predate source-conflict validation. Never trust their old PASS flag. */
 export function assertArtifactSemantics(artifact: { yaml: string; compilerVersion?: number }): void {
-  if (artifact.compilerVersion === CONFIG_COMPILER_VERSION) return;
+  if (artifact.compilerVersion === CONFIG_COMPILER_VERSION || artifact.compilerVersion === 2) return;
   try {
     const document = parseYamlDocument(artifact.yaml);
     for (const provider of document.ruleProviders) {

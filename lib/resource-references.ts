@@ -1,11 +1,11 @@
 import type Database from 'better-sqlite3';
 
-import { decryptJson, encryptJson } from './crypto';
+import { decryptResource, decryptResourceObject, encryptResource, readClientOptions, storeMatchType } from './config-storage-model';
 import { HttpError } from './http';
 import { ruleSetNames } from './rules';
 import type { JsonObject, JsonValue, ProxyGroup, Snapshot } from './types';
 import { isJsonObject } from './types';
-import { decryptObject, getProfileRow } from './repository-shared';
+import { getProfileRow } from './repository-shared';
 
 function deepReplaceString(
   value: JsonValue,
@@ -54,7 +54,7 @@ export function rewriteRenamedResource(
       )
       .all(profileId) as Record<string, unknown>[];
     for (const group of groups) {
-      const config = decryptObject(group.config_ciphertext);
+      const config = decryptResourceObject('policyGroup', group.config_ciphertext);
       const use = Array.isArray(config.use)
         ? config.use.map((item) =>
             String(item) === oldName ? newName : String(item)
@@ -63,7 +63,7 @@ export function rewriteRenamedResource(
       if (Array.isArray(use) && use.some((item) => String(item) === newName)) {
         db.prepare(
           'UPDATE proxy_groups SET config_ciphertext = ? WHERE id = ?'
-        ).run(encryptJson({ ...config, use }), Number(group.id));
+        ).run(encryptResource('policyGroup', { ...config, use }, readClientOptions(group.config_ciphertext)), Number(group.id));
       }
     }
     return;
@@ -71,17 +71,15 @@ export function rewriteRenamedResource(
 
   if (kind === 'rule-providers') {
     db.prepare(
-      "UPDATE rules SET payload = ? WHERE profile_id = ? AND type = 'RULE-SET' AND payload = ?"
-    ).run(newName, profileId, oldName);
+      'UPDATE rules SET payload = ? WHERE profile_id = ? AND type = ? AND payload = ?'
+    ).run(newName, profileId, storeMatchType('RULE-SET'), oldName);
     const profile = getProfileRow(db, profileId);
-    const settings = decryptJson<JsonObject>(
-      String(profile.settings_ciphertext)
-    );
+    const settings = decryptResourceObject('settings', profile.settings_ciphertext);
     const changed = deepReplaceString(settings, (value) =>
       replaceRuleSetReference(value, oldName, newName)
     );
     db.prepare('UPDATE profiles SET settings_ciphertext = ? WHERE id = ?').run(
-      encryptJson(changed),
+      encryptResource('settings', changed, readClientOptions(profile.settings_ciphertext)),
       profileId
     );
     const advanced = db
@@ -90,13 +88,13 @@ export function rewriteRenamedResource(
       )
       .all(profileId) as Record<string, unknown>[];
     for (const section of advanced) {
-      const value = decryptJson<JsonValue>(String(section.value_ciphertext));
+      const value = decryptResource('extension', section.value_ciphertext);
       const next = deepReplaceString(value, (item) =>
         replaceRuleSetReference(item, oldName, newName)
       );
       db.prepare(
         'UPDATE advanced_sections SET value_ciphertext = ? WHERE id = ?'
-      ).run(encryptJson(next), Number(section.id));
+      ).run(encryptResource('extension', next), Number(section.id));
     }
     return;
   }
@@ -111,9 +109,19 @@ export function rewriteRenamedResource(
       )
       .all(profileId) as Record<string, unknown>[];
     for (const group of groups) {
-      const config = decryptObject(group.config_ciphertext);
+      const config = decryptResourceObject('policyGroup', group.config_ciphertext);
+      const options = readClientOptions(group.config_ciphertext);
+      const native = options?.shadowrocket;
       let changed = false;
       const updated = { ...config };
+      if (native && Array.isArray(native.nativeMembers) && native.nativeMembers.includes(oldName)) {
+        native.nativeMembers = native.nativeMembers.map((member) => member === oldName ? newName : member);
+        changed = true;
+      }
+      if (native?.['policy-select-name'] === oldName) {
+        native['policy-select-name'] = newName;
+        changed = true;
+      }
       if (Array.isArray(config.proxies)) {
         updated.proxies = config.proxies.map((item) => {
           if (String(item) === oldName) {
@@ -136,7 +144,7 @@ export function rewriteRenamedResource(
       if (changed) {
         db.prepare(
           'UPDATE proxy_groups SET config_ciphertext = ? WHERE id = ?'
-        ).run(encryptJson(updated), Number(group.id));
+        ).run(encryptResource('policyGroup', updated, options), Number(group.id));
       }
     }
   }
@@ -172,6 +180,11 @@ export function collectReferences(
     for (const group of snapshot.proxyGroups) {
       if (groupMembers(group).includes(name)) {
         references.add(`strategy group “${group.name}” contains “${name}”`);
+      }
+      const native = group.clientOptions?.shadowrocket;
+      if ((Array.isArray(native?.nativeMembers) && native.nativeMembers.includes(name)) ||
+        native?.['policy-select-name'] === name) {
+        references.add(`Shadowrocket strategy group “${group.name}” references “${name}”`);
       }
       for (const entry of ssidPolicyTargets(group)) {
         if (entry.target === name) {

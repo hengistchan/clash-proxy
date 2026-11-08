@@ -54,7 +54,7 @@ test('import previews are read-only and changing the YAML invalidates the confir
   await login(page, initial);
   await page.getByRole('button', { name: '导入配置文件', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '导入并替换当前 Profile' });
-  const confirm = dialog.getByRole('button', { name: '导入完整 YAML', exact: true });
+  const confirm = dialog.getByRole('button', { name: '导入完整配置', exact: true });
   await dialog.getByRole('textbox').fill('# private formatting will normalize\nhosts: { next.test: 192.0.2.2 }\nrules: ["MATCH,DIRECT"]');
   await expect(confirm).toBeDisabled();
   await expect(dialog.getByText(/注释、原始排版和锚点写法不会保留/)).toBeVisible();

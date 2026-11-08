@@ -2,6 +2,12 @@
 
 在同一个配置中编辑节点、策略组和规则。保存后，服务分别检查两种输出。到「下载配置」切换客户端即可下载文件或生成各自的更新链接。更换或撤销一端的链接不影响另一端。
 
+新建和替换配置均可导入 Stash YAML 或 Shadowrocket .conf。预览会分列通用内容、Stash 专用内容和 Shadowrocket 专用内容。策略组和规则集编辑器也按这三类显示选项。例子见 [Shadowrocket.conf](../examples/Shadowrocket.conf)。
+
+规则集可以有独立的 Shadowrocket 地址。例如通用地址提供 Stash YAML，Shadowrocket 地址提供原生文本列表。专用地址加密保存、不会回显；留空保存会保留已有地址，明确清除后才回退到通用地址。
+
+Shadowrocket 导入目前支持基础 SS、SOCKS5、HTTP、常用策略组、可识别的分流规则和原生 RULE-SET / DOMAIN-SET 引用。支持的重写、脚本和 MITM 区块按 Shadowrocket 专用内容保存，只写入对应交付文件。注释和排版不保留；原 `update-url` 由工作台交付链接取代。尚未支持的节点协议、选项和区块会报行号，避免静默丢失。原生规则集由客户端读取；通用规则集仍可在下载时由服务展开。
+
 Shadowrocket 支持范围：
 
 | 资源 | 首版可转换 |

@@ -1,6 +1,6 @@
 import { HttpError } from './http';
 import { validateSubscriptionUrl } from './provider-source';
-import type { JsonObject, RuleProvider, RuleProviderType } from './types';
+import type { ClientOptions, JsonObject, RuleProvider, RuleProviderType } from './types';
 
 export interface RuleProviderInput {
   name: string;
@@ -8,11 +8,29 @@ export interface RuleProviderInput {
   behavior: string;
   providerType: RuleProviderType;
   config: JsonObject;
+  clientOptions?: ClientOptions;
   entries: string[];
   sourceUrl?: string;
+  shadowrocketSourceUrl?: string;
+  clearShadowrocketSource?: boolean;
   sourceHeaders?: JsonObject;
   clearSource?: boolean;
   clearHeaders?: boolean;
+}
+
+export function ruleProviderClientOptions(input: RuleProviderInput, current?: ClientOptions): ClientOptions | undefined {
+  if (input.providerType === 'inline') {
+    if (input.shadowrocketSourceUrl !== undefined) throw new HttpError(400, '内联规则集不能配置独立来源。');
+    return undefined;
+  }
+  const options = { ...(input.clientOptions?.shadowrocket ?? current?.shadowrocket) };
+  if (input.clearShadowrocketSource || input.providerType !== 'remote') delete options.sourceUrl;
+  else if (input.shadowrocketSourceUrl !== undefined) options.sourceUrl = validateSubscriptionUrl(input.shadowrocketSourceUrl);
+  else if (current?.shadowrocket?.sourceUrl !== undefined) options.sourceUrl = current.shadowrocket.sourceUrl;
+  if (input.shadowrocketSourceUrl !== undefined && (input.providerType !== 'remote' || !options.referenceType)) {
+    throw new HttpError(400, '独立 Shadowrocket 地址需要远程来源和原生引用方式。');
+  }
+  return Object.keys(options).length ? { shadowrocket: options } : undefined;
 }
 
 const INLINE_IGNORED_FIELDS = ['url', 'path', 'format', 'interval', 'headers'];
@@ -76,7 +94,15 @@ export function publicRuleProvider(provider: RuleProvider): RuleProvider {
   const config = { ...provider.config };
   delete config.url;
   delete config.headers;
-  return { ...provider, config };
+  const native = provider.clientOptions?.shadowrocket;
+  if (!native) return { ...provider, config };
+  const { sourceUrl, ...visible } = native;
+  return {
+    ...provider,
+    config,
+    clientOptions: { shadowrocket: visible },
+    shadowrocketSourceConfigured: typeof sourceUrl === 'string' && Boolean(sourceUrl)
+  };
 }
 
 /** Produce Stash's canonical representation after successful validation. */

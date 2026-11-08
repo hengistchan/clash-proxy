@@ -1,9 +1,9 @@
 import type Database from 'better-sqlite3';
 
 import { getDb, transaction } from './db';
-import { encryptJson } from './crypto';
+import { encryptResource, readClientOptions } from './config-storage-model';
 import { HttpError } from './http';
-import { parseYamlDocument } from './yaml-import';
+import { parseConfigDocument } from './config-import';
 import type {
   JsonObject,
   LogLevel,
@@ -17,6 +17,7 @@ import {
   mapProfile,
   now,
   publicSnapshot,
+  publicProfile,
   snapshotFromDb
 } from './repository-shared';
 import { replaceProfileResources, seedTemplate } from './profile-content';
@@ -33,12 +34,12 @@ export function createProfileRepository({
     return getDb()
       .prepare('SELECT * FROM profiles ORDER BY active DESC, id')
       .all()
-      .map((row) => mapProfile(row as Record<string, unknown>));
+      .map((row) => publicProfile(mapProfile(row as Record<string, unknown>)));
   }
 
   function getProfile(profileId: number): Profile {
     ensureInitialized();
-    return mapProfile(getProfileRow(getDb(), profileId));
+    return publicProfile(mapProfile(getProfileRow(getDb(), profileId)));
   }
 
   function getActiveProfile(): Profile {
@@ -49,7 +50,7 @@ export function createProfileRepository({
     if (!row) {
       throw new HttpError(503, 'No active configuration profile');
     }
-    return mapProfile(row);
+    return publicProfile(mapProfile(row));
   }
 
   function createProfile(
@@ -66,11 +67,11 @@ export function createProfileRepository({
           (name, mode, log_level, ipv6, settings_ciphertext, active, revision, created_at, updated_at)
          VALUES (?, 'rule', 'silent', NULL, ?, 0, 0, ?, ?)`
         )
-        .run(name, encryptJson({ dns: {} }), now(), now());
+        .run(name, encryptResource('settings', { dns: {} }), now(), now());
       const profileId = Number(result.lastInsertRowid);
       const document =
         yamlText || example
-          ? parseYamlDocument(yamlText || seedTemplate())
+          ? parseConfigDocument(yamlText || seedTemplate())
           : {
               mode: 'rule' as const,
               logLevel: 'silent' as const,
@@ -125,7 +126,7 @@ export function createProfileRepository({
         profileId
       );
       recordRevision(db, profileId);
-      return mapProfile(getProfileRow(db, profileId));
+      return publicProfile(mapProfile(getProfileRow(db, profileId)));
     });
   }
 
@@ -164,7 +165,7 @@ export function createProfileRepository({
   ): Snapshot {
     ensureInitialized();
     return transaction((db) => {
-      getProfileRow(db, profileId);
+      const current = getProfileRow(db, profileId);
       db.prepare(
         `UPDATE profiles
        SET mode = ?, log_level = ?, ipv6 = ?, settings_ciphertext = ?, updated_at = ?, target_platform = COALESCE(?, target_platform)
@@ -175,7 +176,7 @@ export function createProfileRepository({
         input.ipv6 === undefined || input.ipv6 === null
           ? null
           : Number(input.ipv6),
-        encryptJson(input.settings),
+        encryptResource('settings', input.settings, readClientOptions(current.settings_ciphertext)),
         now(),
         input.targetPlatform ?? null,
         profileId

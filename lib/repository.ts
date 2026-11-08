@@ -1,7 +1,7 @@
 import { createRuleRepository } from './rule-repository';
 import { persistRevision } from './revision-store';
 import { getDb } from './db';
-import { encryptJson } from './crypto';
+import { encryptResource } from './config-storage-model';
 import { parseYamlDocument } from './yaml-import';
 import { snapshotFromDb } from './repository-shared';
 import { replaceProfileResources, seedTemplate } from './profile-content';
@@ -47,7 +47,7 @@ export function ensureInitialized(): void {
       )
       .run(
         process.env.STASH_SEED_EXAMPLE === '1' ? '示例配置' : '我的配置',
-        encryptJson({ dns: {} }),
+        encryptResource('settings', { dns: {} }),
         new Date().toISOString(),
         new Date().toISOString()
       );

@@ -1,5 +1,5 @@
-import { parseDocument } from 'yaml';
-import { isJsonObject, type JsonObject, type ProxyNode, type ValidationIssue } from './types';
+import { readRemoteNodes, readRemoteYamlMapping } from './remote-proxy-nodes';
+import { type JsonObject, type ProxyNode, type ValidationIssue } from './types';
 import { downloadSource, PrivateSourceAddressError, type SourceDownload } from './upstream-download';
 
 export type RemoteSource =
@@ -12,34 +12,11 @@ export interface RemoteResources {
 }
 
 const MAX_SOURCES = 24;
-const MAX_NODES = 2_000;
 const MAX_ENTRIES = 50_000;
 const MAX_LINE_LENGTH = 2_048;
 
-function yamlMapping(text: string) {
-  const doc = parseDocument(text, { strict: true, uniqueKeys: true });
-  if (doc.errors.length || doc.warnings.length) throw new Error('Invalid YAML');
-  const value: unknown = doc.toJS({ maxAliasCount: 0 });
-  if (!isJsonObject(value)) throw new Error('Expected a YAML mapping');
-  return value;
-}
-
-export function readRemoteNodes(text: string, sourceId: number): ProxyNode[] {
-  const { proxies } = yamlMapping(text);
-  if (!Array.isArray(proxies) || !proxies.length || proxies.length > MAX_NODES) throw new Error('Invalid proxy list');
-  const seen = new Set<string>();
-  return proxies.map((item, index) => {
-    if (!isJsonObject(item)) throw new Error('Invalid proxy');
-    const { name, type, ...config } = item;
-    if (typeof name !== 'string' || !name.trim() || name.length > 160 || seen.has(name) ||
-      typeof type !== 'string' || !type) throw new Error('Invalid proxy');
-    seen.add(name);
-    return { id: sourceId, name, type, config, sortOrder: index + 1 };
-  });
-}
-
 export function readRemoteRules(text: string, format: 'yaml' | 'text') {
-  const entries = format === 'yaml' ? yamlMapping(text).payload : text.split(/\r?\n/)
+  const entries = format === 'yaml' ? readRemoteYamlMapping(text).payload : text.split(/\r?\n/)
     .map((line) => line.trim()).filter((line) => line && !line.startsWith('#') && !line.startsWith('//'));
   if (!Array.isArray(entries) || !entries.length || entries.length > MAX_ENTRIES ||
     !entries.every((value) => typeof value === 'string' && value.trim() && value.length <= MAX_LINE_LENGTH)) {

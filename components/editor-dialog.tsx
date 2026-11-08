@@ -8,17 +8,20 @@ import type {
   ProxyGroup,
   ProxyNode,
   ProxyProvider,
+  ProxyRewriteRule,
   ResourceKind,
   RuleProvider,
   Snapshot,
   StashRule
 } from '@/lib/types';
-import { BUILTIN_POLICIES, RULE_OPTIONS, RULE_TYPES } from '@/lib/types';
+import { splitClientFields } from '@/lib/config-client-fields';
+import { BUILTIN_POLICIES, RULE_OPTIONS, RULE_TYPES, SHADOWROCKET_BUILTINS } from '@/lib/types';
 
 import { ApiError, apiRequest } from './api-client';
 import { Modal, SelectField, SwitchField } from './ui';
 import type { EditorPreset } from './relationships-view';
 import { ConfigFields } from './config-fields';
+import { ProxySourceRewrites } from './proxy-source-rewrites';
 import { useUnsavedChanges } from './unsaved-changes';
 import {
   PROXY_GROUP_TYPE_DESCRIPTIONS,
@@ -92,11 +95,16 @@ export function EditorDialog({
   const [displayName, setDisplayName] = useState('');
   const [type, setType] = useState('');
   const [configText, setConfigText] = useState('{}');
+  const [stashText, setStashText] = useState('{}');
+  const [shadowrocketText, setShadowrocketText] = useState('{}');
+  const [shadowrocketSourceUrl, setShadowrocketSourceUrl] = useState('');
+  const [clearShadowrocketSource, setClearShadowrocketSource] = useState(false);
   const [sourceType, setSourceType] = useState('remote');
   const [sourceUrl, setSourceUrl] = useState('');
   const [sourceHeaders, setSourceHeaders] = useState('');
   const [clearSource, setClearSource] = useState(false);
   const [clearHeaders, setClearHeaders] = useState(false);
+  const [rewriteRules, setRewriteRules] = useState<ProxyRewriteRule[]>([]);
   const [providerBehavior, setProviderBehavior] = useState('domain');
   const [providerType, setProviderType] = useState('inline');
   const [entriesText, setEntriesText] = useState('');
@@ -117,8 +125,8 @@ export function EditorDialog({
   const [baseline, setBaseline] = useState<string | null>(null);
   const [draftRevision, setDraftRevision] = useState(snapshot.profile.revision);
   const fingerprint = JSON.stringify({
-    name, displayName, type, configText, sourceType, sourceUrl, sourceHeaders,
-    clearSource, clearHeaders, providerBehavior, providerType, entriesText,
+    name, displayName, type, configText, stashText, shadowrocketText, shadowrocketSourceUrl, clearShadowrocketSource, sourceType, sourceUrl, sourceHeaders,
+    clearSource, clearHeaders, rewriteRules, providerBehavior, providerType, entriesText,
     groupProxies, groupUse, groupFilter, rulePayload, rulePolicy, ruleOptions,
     ruleEnabled, ruleNote, rulePriority, hostPattern, hostValue
   });
@@ -139,6 +147,10 @@ export function EditorDialog({
         label: item,
         description: builtinPolicyDescription(item)
       })),
+      ...(snapshot.profile.clientOptions?.shadowrocket?.native === true
+        ? SHADOWROCKET_BUILTINS.filter((name) => ![...snapshot.proxies, ...snapshot.proxyGroups].some((item) => item.name === name))
+            .map((name) => ({ value: name, label: name, description: 'Shadowrocket 内置策略' }))
+        : []),
       ...snapshot.proxies.map((item) => ({
         value: item.name,
         label: item.name,
@@ -155,6 +167,16 @@ export function EditorDialog({
     [snapshot]
   );
 
+  function proxySourceDraft() {
+    return {
+      config: parseObject(configText, '代理源配置'),
+      ...(sourceUrl.trim() ? { sourceUrl: sourceUrl.trim() } : {}),
+      ...(sourceHeaders.trim() ? { sourceHeaders: parseObject(sourceHeaders, '认证请求头') } : {}),
+      clearSource,
+      clearHeaders
+    };
+  }
+
   function resetDraft() {
     if (!resource) return;
     dirtyRef.current = false;
@@ -167,6 +189,9 @@ export function EditorDialog({
     if (existing && !latest) setError('该资源已被其他会话删除或由导入替换。请关闭编辑器并从最新列表重新打开资源。');
     const item = (latest || existing) as Record<string, unknown> | null;
     const config = (item?.config || {}) as JsonObject;
+    const scoped = resource === 'proxy-groups' || resource === 'rule-providers';
+    const separated = scoped ? splitClientFields(resource, config) : { common: config, stash: {} };
+    const clients = item?.clientOptions as { shadowrocket?: JsonObject } | undefined;
     const itemType = String(item?.type || '');
     const itemPayload = String(item?.payload || initialValues?.payload || '');
     const terminal = snapshot.rules.at(-1);
@@ -186,23 +211,19 @@ export function EditorDialog({
               : '')
       ),
       configText: JSON.stringify(
-        resource === 'proxy-groups'
-          ? configWithout((item?.config || {}) as JsonObject, [
-              'proxies',
-              'use',
-              'filter'
-            ])
-          : resource === 'rule-providers'
-            ? configWithout(config, ['type', 'payload', 'behavior'])
-            : item?.config || {},
-        null,
-        2
+        resource === 'proxy-groups' ? configWithout(separated.common, ['proxies', 'use', 'filter']) : separated.common,
+        null, 2
       ),
+      stashText: JSON.stringify(configWithout(separated.stash, resource === 'rule-providers' ? ['type', 'payload', 'behavior'] : []), null, 2),
+      shadowrocketText: JSON.stringify(scoped ? clients?.shadowrocket ?? {} : {}, null, 2),
+      shadowrocketSourceUrl: '',
+      clearShadowrocketSource: false,
       sourceType: String(item?.sourceType || 'remote'),
       sourceUrl: '',
       sourceHeaders: '',
       clearSource: false,
       clearHeaders: false,
+      rewriteRules: (item?.rewriteRules as ProxyRewriteRule[] | undefined) ?? [],
       providerBehavior: String(item?.behavior || 'domain'),
       providerType: String(item?.providerType || 'inline'),
       entriesText: Array.isArray(item?.entries)
@@ -228,11 +249,16 @@ export function EditorDialog({
     setDisplayName(draft.displayName);
     setType(draft.type);
     setConfigText(draft.configText);
+    setStashText(draft.stashText);
+    setShadowrocketText(draft.shadowrocketText);
+    setShadowrocketSourceUrl(draft.shadowrocketSourceUrl);
+    setClearShadowrocketSource(draft.clearShadowrocketSource);
     setSourceType(draft.sourceType);
     setSourceUrl(draft.sourceUrl);
     setSourceHeaders(draft.sourceHeaders);
     setClearSource(draft.clearSource);
     setClearHeaders(draft.clearHeaders);
+    setRewriteRules(draft.rewriteRules);
     setProviderBehavior(draft.providerBehavior);
     setProviderType(draft.providerType);
     setEntriesText(draft.entriesText);
@@ -354,14 +380,9 @@ export function EditorDialog({
       } else if (resource === 'proxy-providers') {
         body = {
           name: name.trim(),
-          config: parseObject(configText, '代理源配置'),
+          ...proxySourceDraft(),
           sourceType,
-          ...(sourceUrl.trim() ? { sourceUrl: sourceUrl.trim() } : {}),
-          ...(sourceHeaders.trim()
-            ? { sourceHeaders: parseObject(sourceHeaders, '认证请求头') }
-            : {}),
-          clearSource,
-          clearHeaders
+          ...(sourceType === 'remote' ? { rewriteRules } : {})
         };
       } else if (resource === 'proxy-groups') {
         const rest = configWithout(parseObject(configText, '策略组高级配置'), [
@@ -372,7 +393,9 @@ export function EditorDialog({
         body = {
           name: name.trim(),
           type,
+          clientOptions: { shadowrocket: parseObject(shadowrocketText, 'Shadowrocket 专用参数') },
           config: {
+            ...configWithout(parseObject(stashText, 'Stash 专用参数'), ['proxies', 'use', 'filter']),
             ...rest,
             proxies: groupProxies
               .split('\n')
@@ -386,12 +409,17 @@ export function EditorDialog({
           }
         };
       } else if (resource === 'rule-providers') {
+        const native = providerType === 'inline' ? {} : parseObject(shadowrocketText, 'Shadowrocket 专用参数');
         body = {
           name: name.trim(),
           displayName: displayName.trim(),
           behavior: providerBehavior.trim(),
           providerType,
-          config: parseObject(configText, '规则集配置'),
+          config: { ...parseObject(stashText, 'Stash 专用参数'), ...parseObject(configText, '规则集配置') },
+          clientOptions: { shadowrocket: native },
+          ...(providerType === 'remote' && native.referenceType && shadowrocketSourceUrl.trim() && !clearShadowrocketSource
+            ? { shadowrocketSourceUrl: shadowrocketSourceUrl.trim() } : {}),
+          clearShadowrocketSource,
           ...(providerType === 'remote' && sourceUrl.trim() ? { sourceUrl: sourceUrl.trim() } : {}),
           ...(providerType === 'remote' && sourceHeaders.trim() ? { sourceHeaders: parseObject(sourceHeaders, '认证请求头') } : {}),
           clearSource,
@@ -614,6 +642,14 @@ export function EditorDialog({
               onChange={setConfigText}
               suggestions={{ path: '', interval: 3600, filter: '' }}
             />
+            {sourceType === 'remote' && <ProxySourceRewrites
+              rules={rewriteRules} onChange={setRewriteRules}
+              sourceKey={JSON.stringify([profileId, existing?.id, draftRevision, configText, sourceUrl, sourceHeaders, clearSource, clearHeaders])}
+              onPreview={async (signal) => apiRequest(`/api/profiles/${profileId}/proxy-source-preview`, {
+                method: 'POST', token, signal,
+                body: JSON.stringify({ ...proxySourceDraft(), providerId: existing?.id, rewriteRules })
+              })}
+            />}
           </>
         ) : null}
 
@@ -788,16 +824,19 @@ export function EditorDialog({
             </label>
             <ConfigFields
               key={resource}
-              label="检查与高级策略参数"
+              label="通用测速与显示参数"
               text={configText}
               onChange={setConfigText}
               suggestions={{
                 interval: 600,
                 tolerance: 100,
-                lazy: true,
                 hidden: false
               }}
             />
+            <ConfigFields label="Stash 专用参数" text={stashText} onChange={setStashText}
+              suggestions={{ lazy: true, 'ssid-policy': {} }} />
+            <ConfigFields label="Shadowrocket 专用参数" text={shadowrocketText} onChange={setShadowrocketText}
+              suggestions={{ 'policy-regex-filter': '', 'policy-select-name': '', select: 0, use: false, nativeMembers: [] }} />
           </>
         ) : null}
 
@@ -870,9 +909,9 @@ export function EditorDialog({
               />
             </label>
             <p className="delivery-note wide">来源类型决定 Stash 如何加载规则；切换后不适用的来源字段会被移除，保存为本地或 inline 时会清除远程地址和认证。</p>
-            {providerType === 'inline' && configText.trim() !== '{}' ? <div className="wide">
+            {providerType === 'inline' && (configText.trim() !== '{}' || stashText.trim() !== '{}') ? <div className="wide">
               <p className="delivery-note">Inline 来源只使用上面的条目。旧配置中残留的来源参数需要清理后才能保存。</p>
-              <button className="button secondary small" onClick={() => { setConfigText('{}'); setSourceUrl(''); setSourceHeaders(''); }}>清理 inline 来源参数</button>
+              <button className="button secondary small" onClick={() => { setConfigText('{}'); setStashText('{}'); setSourceUrl(''); setSourceHeaders(''); }}>清理 inline 来源参数</button>
             </div> : null}
             {providerType === 'remote' ? <>
               <label className="field wide">
@@ -894,6 +933,27 @@ export function EditorDialog({
               onChange={setConfigText}
               suggestions={providerType === 'remote' ? { path: '', format: 'yaml', interval: 86400 } : { path: '', format: 'yaml' }}
             /> : null}
+            {providerType !== 'inline' ? <>
+              <ConfigFields label="Stash 专用参数" text={stashText} onChange={setStashText} />
+              <SelectField label="Shadowrocket 专用 · 规则集交付方式"
+                value={String(parseObject(shadowrocketText, 'Shadowrocket 专用参数').referenceType || 'shared')}
+                onValueChange={(value) => setShadowrocketText(value === 'shared' ? '{}' : JSON.stringify({ referenceType: value }))}
+                options={[
+                  { value: 'shared', label: '通用转换 · 服务展开规则' },
+                  { value: 'RULE-SET', label: '原生 RULE-SET · 设备读取引用' },
+                  { value: 'DOMAIN-SET', label: '原生 DOMAIN-SET · 设备读取域名列表' }
+                ]} wide />
+              {providerType === 'remote' && parseObject(shadowrocketText, 'Shadowrocket 专用参数').referenceType ? <>
+                <label className="field wide">
+                  <span>Shadowrocket 专用规则集地址（可选）</span>
+                  <input className="input mono" type="password" autoComplete="off" value={shadowrocketSourceUrl}
+                    disabled={clearShadowrocketSource} onChange={(event) => setShadowrocketSourceUrl(event.target.value)}
+                    placeholder={(existing as RuleProvider | null)?.shadowrocketSourceConfigured ? '已保存；留空保留' : '留空使用通用地址'} />
+                </label>
+                <SwitchField label="清除 Shadowrocket 专用地址" checked={clearShadowrocketSource}
+                  onCheckedChange={setClearShadowrocketSource} description="清除后改用通用规则集地址。" />
+              </> : null}
+            </> : null}
           </>
         ) : null}
 

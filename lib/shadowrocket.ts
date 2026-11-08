@@ -4,8 +4,10 @@ import { RE2JS } from 're2js';
 import { BUILTIN_POLICIES, isJsonObject, type JsonObject, type Snapshot, type ValidationIssue } from './types';
 import { validateSnapshot } from './validation';
 import type { RemoteResources, RemoteSource } from './shadowrocket-sources';
+import { SHADOWROCKET_BUILTINS } from './types';
+import { unsafeConfLine } from './shadowrocket-import';
 
-export const SHADOWROCKET_COMPILER_VERSION = 2;
+export const SHADOWROCKET_COMPILER_VERSION = 3;
 const MAX_RULES = 50_000;
 const MAX_MEMBERS = 50_000;
 const MAX_FILTER_EVALUATIONS = 250_000;
@@ -123,8 +125,9 @@ function groupBenchmark(group: Snapshot['proxyGroups'][number], providers: JsonO
   return config;
 }
 
-function groupLine(group: Snapshot['proxyGroups'][number], name: string, policies: (string | undefined)[]) {
+function groupLine(group: Snapshot['proxyGroups'][number], name: string, policies: (string | undefined)[], resolve: (value: string) => string | undefined) {
   const { type, config } = group;
+  const native = group.clientOptions?.shadowrocket;
   if (!['select', 'url-test', 'fallback', 'load-balance'].includes(type)) return null;
   const manual = type === 'select';
   const fields = ['proxies', 'use', 'hidden', 'icon', 'filter', ...(manual ? [] : ['interval', 'tolerance', 'url', 'benchmark-url', 'benchmark-timeout', 'lazy']), ...(type === 'load-balance' ? ['strategy'] : [])];
@@ -132,9 +135,27 @@ function groupLine(group: Snapshot['proxyGroups'][number], name: string, policie
     (config.hidden !== undefined && typeof config.hidden !== 'boolean') ||
     (config.lazy !== undefined && typeof config.lazy !== 'boolean') ||
     (type === 'load-balance' && config.strategy !== 'consistent-hashing')) return null;
-  if (!policies.length || policies.some((policy) => policy === undefined)) return null;
+  if ((!policies.length && typeof native?.['policy-regex-filter'] !== 'string') || policies.some((policy) => policy === undefined)) return null;
   const fieldsOut = [type, ...policies];
   if (config.hidden === true) fieldsOut.push('hidden=1');
+  if (native) {
+    if (!noExtra(native, ['policy-regex-filter', 'policy-select-name', 'select', 'use', 'nativeMembers'])) return null;
+    for (const key of ['policy-regex-filter', 'policy-select-name'] as const) {
+      const value = native[key];
+      if (value === undefined) continue;
+      if (typeof value !== 'string' || !value.trim() || unsafeConfLine.test(value) || /[,;#"']/.test(value) ||
+        (key === 'policy-select-name' && !policyName(value))) return null;
+      fieldsOut.push(`${key}=${key === 'policy-select-name' ? resolve(value) ?? value : value}`);
+    }
+    if (native.select !== undefined) {
+      if (typeof native.select !== 'number' || !Number.isInteger(native.select) || native.select < 0 || native.select > 4000) return null;
+      fieldsOut.push(`select=${native.select}`);
+    }
+    if (native.use !== undefined) {
+      if (typeof native.use !== 'boolean') return null;
+      fieldsOut.push(`use=${native.use}`);
+    }
+  }
   if (!manual) {
     if (config.url !== undefined && config['benchmark-url'] !== undefined) return null;
     const url = config['benchmark-url'] ?? config.url;
@@ -222,12 +243,30 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
     if (issues.length < MAX_ISSUES) issues.push({ code: `shadowrocket.${code}`, message, severity, resource, resourceId });
     else if (issues.length === MAX_ISSUES) issues.push({ code: 'shadowrocket.diagnostics-limit', message: '还有其他兼容问题，请先处理上面列出的问题。', severity: 'warning' });
   };
-  if (!validateSnapshot(snapshot).valid) {
+  const validation = validateSnapshot(snapshot);
+  const hasBlockingIssue = validation.issues.some((issue) => issue.severity === 'error' &&
+    !(issue.code === 'rule-provider.url-missing' && snapshot.ruleProviders.some((provider) =>
+      provider.id === issue.resourceId && typeof provider.clientOptions?.shadowrocket?.sourceUrl === 'string' &&
+      ['RULE-SET', 'DOMAIN-SET'].includes(String(provider.clientOptions.shadowrocket.referenceType)))));
+  if (hasBlockingIssue) {
     diagnose('base', '请先修复配置检查中的错误，再生成 Shadowrocket 配置。');
     return { artifact: null, issues, sources: [] };
   }
 
   const general = generalLines(snapshot, diagnose);
+  const native = snapshot.profile.clientOptions?.shadowrocket;
+  const nativeLines = (value: unknown): value is string[] => Array.isArray(value) &&
+    value.every((line) => typeof line === 'string' && !unsafeConfLine.test(line) && !line.trimStart().startsWith('['));
+  if (nativeLines(native?.general)) general.push(...native.general);
+  const extraSections: Array<[string, string[]]> = [];
+  if (Array.isArray(native?.sections)) {
+    for (const entry of native.sections) {
+      if (!isJsonObject(entry) || typeof entry.name !== 'string' ||
+        !/^(URL Rewrite|Header Rewrite|Body Rewrite|Script|MITM|Map Local)$/i.test(entry.name) || !nativeLines(entry.lines)) {
+        diagnose('native.section', 'Shadowrocket 专用区块无效。');
+      } else extraSections.push([entry.name, entry.lines]);
+    }
+  }
   for (const section of snapshot.advancedSections) {
     diagnose('advanced', '此高级区块可能影响运行，当前无法安全转换。', 'advanced', section.id);
   }
@@ -256,7 +295,7 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
   const resolve = (policy: string) => {
     if (policy === 'DIRECT' || policy === 'REJECT') return policy;
     if (policy === 'PASS' || policy === 'REJECT-DROP') return undefined;
-    return names.get(policy);
+    return names.get(policy) ?? (native?.native === true && SHADOWROCKET_BUILTINS.some((item) => item === policy) ? policy : undefined);
   };
   const proxies: string[] = [];
   for (const node of snapshot.proxies) {
@@ -268,6 +307,23 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
   const providerNodes = new Map<number, Map<string, string>>();
   const proxyProviders = new Map(snapshot.proxyProviders.map((provider) => [provider.name, provider]));
   const directNames = new Set(snapshot.proxies.map((node) => node.name));
+  const groupsByName = new Map(snapshot.proxyGroups.map((group) => [group.name, group]));
+  const checkedGroups = new Set<string>();
+  const checkingGroups = new Set<string>();
+  function cyclic(name: string): boolean {
+    if (checkingGroups.has(name)) return true;
+    const group = groupsByName.get(name);
+    if (!group || checkedGroups.has(name)) return false;
+    checkingGroups.add(name);
+    const members = group.clientOptions?.shadowrocket?.nativeMembers ?? group.config.proxies;
+    const found = Array.isArray(members) && members.some((member) => typeof member === 'string' && cyclic(member));
+    checkingGroups.delete(name);
+    checkedGroups.add(name);
+    return found;
+  }
+  if (snapshot.proxyGroups.some((group) => cyclic(group.name))) {
+    diagnose('group.native-cycle', 'Shadowrocket 的策略组成员中存在循环引用。');
+  }
   const filters = new Map<unknown, ReturnType<typeof nodeFilter>>();
   function filterFor(value: unknown) {
     if (!filters.has(value)) {
@@ -279,7 +335,19 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
   const groups: string[] = [];
   let remoteMemberCount = 0;
   let filterEvaluations = 0;
-  groupLoop: for (const group of snapshot.proxyGroups) {
+  groupLoop: for (const originalGroup of snapshot.proxyGroups) {
+    const override = originalGroup.clientOptions?.shadowrocket;
+    const explicitMembers = override?.nativeMembers;
+    const group = override ? { ...originalGroup, config: { ...originalGroup.config } } : originalGroup;
+    if (override) {
+      const replacement = Array.isArray(explicitMembers) || typeof override['policy-regex-filter'] === 'string';
+      const specific = ['ssid-policy', ...(replacement ? ['include-all', 'use-url'] : [])]
+        .filter((key) => group.config[key] !== undefined);
+      if (specific.length) {
+        for (const key of specific) delete group.config[key];
+        diagnose('group.client-options', '此策略组使用独立的 Shadowrocket 选项。', 'proxy-group', group.id, 'warning');
+      }
+    }
     if (group.config['include-all'] === true) {
       diagnose('group.provider', '暂不支持自动纳入全部来源。请在策略组中逐个选择要使用的代理源。', 'proxy-group', group.id);
       continue;
@@ -289,7 +357,7 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
       diagnose('group.filter', '策略组筛选须使用不超过 256 字符的 RE2 正则。', 'proxy-group', group.id);
       continue;
     }
-    const declared = group.config.proxies ?? [];
+    const declared = explicitMembers ?? group.config.proxies ?? [];
     if (!Array.isArray(declared)) {
       diagnose('group', '策略组成员必须是列表。', 'proxy-group', group.id);
       continue;
@@ -301,12 +369,12 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
     }
     // A name filter narrows nodes, not references to nested groups or built-in actions.
     const directMembers = declared
-      .filter((member) => typeof member !== 'string' || !directNames.has(member) || groupFilter(member))
-      .map((member) => typeof member === 'string' ? resolve(member) : undefined);
+      .filter((member) => explicitMembers !== undefined || typeof member !== 'string' || !directNames.has(member) || groupFilter(member))
+      .map((member) => typeof member === 'string' ? resolve(member) ?? (explicitMembers !== undefined && policyName(member) ? member : undefined) : undefined);
     const remoteMembers: string[] = [];
     const benchmarks: JsonObject[] = [];
     let unusable = false;
-    for (const name of Array.isArray(group.config.use) ? new Set(group.config.use) : []) {
+    for (const name of explicitMembers === undefined && Array.isArray(group.config.use) ? new Set(group.config.use) : []) {
       const provider = typeof name === 'string' ? proxyProviders.get(name) : undefined;
       const filter = filterFor(provider?.config.filter);
       if (!provider || provider.sourceType !== 'remote' ||
@@ -372,7 +440,7 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
       continue;
     }
     const name = names.get(group.name);
-    const line = name && groupLine({ ...group, config }, name, [...directMembers, ...remoteMembers]);
+    const line = name && groupLine({ ...group, config }, name, [...directMembers, ...remoteMembers], resolve);
     if (!line) {
       diagnose('group', '此策略组的成员、类型或参数无法转换；空组不会自动改为直连。', 'proxy-group', group.id);
       continue;
@@ -410,6 +478,18 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
       if (!provider) {
         diagnose('rule.provider', '找不到引用的规则集。', 'rule', rule.id);
       } else {
+        const reference = provider.clientOptions?.shadowrocket?.referenceType;
+        if (reference === 'RULE-SET' || reference === 'DOMAIN-SET') {
+          const alternative = provider.clientOptions?.shadowrocket?.sourceUrl;
+          const value = provider.providerType === 'remote' ? alternative ?? provider.config.url : provider.config.path;
+          if (provider.providerType === 'inline' || !atom(value) || (alternative === undefined && provider.headersConfigured) ||
+            (provider.providerType === 'remote' ? !/^https?:\/\//i.test(value) : !/^[\p{L}\p{N}_./ -]+$/u.test(value))) {
+            diagnose('rule.native-source', '原生引用必须使用有效的 HTTP/HTTPS 或本地路径，不能依赖自定义认证请求头。', 'rule-provider', provider.id);
+            continue;
+          }
+          rules.push(`${reference},${value},${policy}${suffix}`);
+          continue;
+        }
         let entries: string[] | undefined;
         if (provider.providerType === 'inline') {
           entries = provider.entries.map((entry) => entry.value);
@@ -440,6 +520,9 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
       }
     } else if (RULE_TYPES.has(type) && rulePayload(type, payload)) {
       rules.push(`${type},${payload},${policy}${suffix}`);
+    } else if (native?.native === true && ((type === 'DOMAIN-WILDCARD' && /^[a-z\d.*?-]+$/i.test(payload)) ||
+      (type === 'GEOIP' && payload.toUpperCase() === 'LAN'))) {
+      rules.push(`${type},${payload},${policy}${suffix}`);
     } else if ((type === 'NETWORK' || type === 'PROTOCOL') && /^(tcp|udp)$/i.test(payload)) {
       rules.push(`PROTOCOL,${payload.toUpperCase()},${policy}`);
     } else if (['PROCESS-NAME', 'PROCESS-PATH'].includes(type) &&
@@ -458,7 +541,7 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
 
   if (blocked) return { artifact: null, issues, sources: [] };
   if (sources.size && !remote) return { artifact: null, issues, sources: [...sources.values()] };
-  const sections = [['General', general], ['Proxy', proxies], ['Proxy Group', groups], ['Rule', rules], ['Host', hosts]] as const;
+  const sections = [['General', general], ['Proxy', proxies], ['Proxy Group', groups], ['Rule', rules], ['Host', hosts], ...extraSections] as const;
   const conf = sections.filter(([name, lines]) => name === 'General' || lines.length)
     .map(([name, lines]) => [`[${name}]`, ...lines].join('\n')).join('\n\n') + '\n';
   if (Buffer.byteLength(conf) > MAX_CONF_BYTES) {

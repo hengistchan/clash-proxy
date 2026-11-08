@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { transaction } from './db';
 import { HttpError } from './http';
+import { projectMatchType, storeMatchType } from './config-storage-model';
 import { normalizeRuleInput } from './rules';
 import type { Snapshot, StashRule } from './types';
 type DbRow = Record<string, unknown>;
@@ -16,7 +17,7 @@ export function mapRule(row: DbRow): StashRule {
   return {
     id: Number(row.id),
     priority: Number(row.priority),
-    type: String(row.type),
+    type: projectMatchType(String(row.type)),
     payload: String(row.payload || ''),
     policy: String(row.policy),
     options,
@@ -97,7 +98,7 @@ function createRule(
       .run(
         profileId,
         current.rules.length + 1,
-        rule.type,
+        storeMatchType(rule.type),
         rule.payload,
         rule.policy,
         JSON.stringify(rule.options),
@@ -172,7 +173,7 @@ function updateRule(
        SET type = ?, payload = ?, policy = ?, options_json = ?, enabled = ?, note = ?
        WHERE id = ?`
     ).run(
-      rule.type,
+      storeMatchType(rule.type),
       rule.payload,
       rule.policy,
       JSON.stringify(rule.options),
@@ -204,7 +205,7 @@ function deleteRule(profileId: number, itemId: number): void {
       .prepare('SELECT * FROM rules WHERE id = ? AND profile_id = ?')
       .get(itemId, profileId) as DbRow | undefined;
     if (!row) throw new HttpError(404, 'Rule not found');
-    if (String(row.type) === 'MATCH') {
+    if (mapRule(row).type === 'MATCH') {
       const rules = snapshotFromDb(db, profileId).rules;
       const matches = rules.filter((rule) => rule.type === 'MATCH');
       const lastEnabled = rules.filter((rule) => rule.enabled).at(-1);

@@ -1,9 +1,9 @@
 import type Database from 'better-sqlite3';
 
 import { getDb, transaction } from './db';
-import { decryptJson } from './crypto';
+import { decryptRevision } from './config-storage-model';
 import { HttpError } from './http';
-import { parseYamlDocument } from './yaml-import';
+import { parseConfigDocument } from './config-import';
 import type { Snapshot } from './types';
 import { revisionRetentionStatus } from './history-retention';
 import {
@@ -22,7 +22,7 @@ export function createRevisionRepository({
 }) {
   function importYaml(profileId: number, yamlText: string): Snapshot {
     ensureInitialized();
-    const document = parseYamlDocument(yamlText);
+    const document = parseConfigDocument(yamlText);
     return transaction((db) => {
       replaceProfileResources(db, profileId, document, {
         preserveExistingSources: true
@@ -87,13 +87,14 @@ export function createRevisionRepository({
         )
         .get(profileId, revision) as Record<string, unknown> | undefined;
       if (!row) throw new HttpError(404, 'Revision not found');
-      const snapshot = decryptJson<Snapshot>(String(row.config_ciphertext));
+      const snapshot = decryptRevision(String(row.config_ciphertext));
       replaceProfileResources(db, profileId, {
         mode: snapshot.profile.mode,
         targetPlatform: snapshot.profile.targetPlatform,
         logLevel: snapshot.profile.logLevel,
         ipv6: snapshot.profile.ipv6,
         settings: snapshot.profile.settings,
+        clientOptions: snapshot.profile.clientOptions,
         proxies: snapshot.proxies.map((item) => ({
           name: item.name,
           type: item.type,
@@ -102,14 +103,17 @@ export function createRevisionRepository({
         proxyProviders: snapshot.proxyProviders.map((item) => ({
           name: item.name,
           config: item.config,
-          requiresUrl: item.requiresUrl
+          requiresUrl: item.requiresUrl,
+          rewriteRules: item.rewriteRules
         })),
         proxyGroups: snapshot.proxyGroups.map((item) => ({
+          clientOptions: item.clientOptions,
           name: item.name,
           type: item.type,
           config: item.config
         })),
         ruleProviders: snapshot.ruleProviders.map((item) => ({
+          clientOptions: item.clientOptions,
           name: item.name,
           displayName: item.displayName,
           behavior: item.behavior,

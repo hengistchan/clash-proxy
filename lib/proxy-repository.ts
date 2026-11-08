@@ -1,20 +1,21 @@
 import type Database from 'better-sqlite3';
 
 import { transaction } from './db';
-import { encryptJson } from './crypto';
+import { encryptResource, decryptResourceObject, readClientOptions, encryptNodeSource, readNodeSourceRewriteRules } from './config-storage-model';
 import { HttpError } from './http';
 import { validateSubscriptionUrl } from './provider-source';
 import type {
+  ClientOptions,
   JsonObject,
   ProxyGroup,
   ProxyGroupType,
   ProxyNode,
-  ProxyProvider
+  ProxyProvider,
+  ProxyRewriteRule
 } from './types';
 import {
   assertPolicyNameAvailable,
   assertUniqueName,
-  decryptObject,
   getProfileRow,
   mapProxy,
   mapProxyGroup,
@@ -23,9 +24,11 @@ import {
   publicProvider,
   snapshotFromDb
 } from './repository-shared';
+import { validateProxyRewrites } from './proxy-source-transform';
 import { assertNoReferences, rewriteRenamedResource } from './resource-references';
 
 interface ProxyProviderInput {
+  rewriteRules?: ProxyRewriteRule[];
   name: string;
   config: JsonObject;
   sourceType?: 'remote' | 'local';
@@ -35,8 +38,8 @@ interface ProxyProviderInput {
   clearHeaders?: boolean;
 }
 
-function providerConfig(
-  input: ProxyProviderInput,
+export function providerConfig(
+  input: Omit<ProxyProviderInput, 'name' | 'rewriteRules'>,
   current: JsonObject = {}
 ): JsonObject {
   const config = { ...input.config };
@@ -77,7 +80,7 @@ export function createProxyRepository({
           `INSERT INTO proxies (profile_id, name, type, config_ciphertext, sort_order)
          VALUES (?, ?, ?, ?, ?)`
         )
-        .run(profileId, input.name, input.type, encryptJson(input.config), order);
+        .run(profileId, input.name, input.type, encryptResource('node', input.config), order);
       recordRevision(db, profileId);
       return mapProxy(
         db
@@ -103,7 +106,7 @@ export function createProxyRepository({
       const oldName = String(current.name);
       db.prepare(
         'UPDATE proxies SET name = ?, type = ?, config_ciphertext = ? WHERE id = ?'
-      ).run(input.name, input.type, encryptJson(input.config), itemId);
+      ).run(input.name, input.type, encryptResource('node', input.config), itemId);
       if (oldName !== input.name) {
         rewriteRenamedResource(db, profileId, 'proxies', oldName, input.name);
       }
@@ -144,6 +147,8 @@ export function createProxyRepository({
       const requiresUrl = input.sourceType
         ? input.sourceType === 'remote'
         : Boolean(config.url) || !config.path;
+      const rules = requiresUrl ? input.rewriteRules ?? [] : [];
+      validateProxyRewrites(rules);
       const result = db
         .prepare(
           `INSERT INTO proxy_providers
@@ -153,7 +158,7 @@ export function createProxyRepository({
         .run(
           profileId,
           input.name,
-          encryptJson(config),
+          encryptNodeSource(config, rules),
           Number(requiresUrl),
           order
         );
@@ -183,15 +188,17 @@ export function createProxyRepository({
       const oldName = String(current.name);
       const config = providerConfig(
         input,
-        decryptObject(current.config_ciphertext)
+        decryptResourceObject('nodeSource', current.config_ciphertext)
       );
       const requiresUrl = input.sourceType
         ? input.sourceType === 'remote'
         : mapProxyProvider(current).sourceType === 'remote';
+      const rules = requiresUrl ? input.rewriteRules ?? readNodeSourceRewriteRules(current.config_ciphertext) ?? [] : [];
+      validateProxyRewrites(rules);
       db.prepare(
         `UPDATE proxy_providers
        SET name = ?, config_ciphertext = ?, requires_url = ? WHERE id = ?`
-      ).run(input.name, encryptJson(config), Number(requiresUrl), itemId);
+      ).run(input.name, encryptNodeSource(config, rules), Number(requiresUrl), itemId);
       if (oldName !== input.name) {
         rewriteRenamedResource(
           db,
@@ -231,7 +238,7 @@ export function createProxyRepository({
 
   function createProxyGroup(
     profileId: number,
-    input: { name: string; type: ProxyGroupType; config: JsonObject }
+    input: { name: string; type: ProxyGroupType; config: JsonObject; clientOptions?: ClientOptions }
   ): ProxyGroup {
     ensureInitialized();
     return transaction((db) => {
@@ -244,7 +251,7 @@ export function createProxyRepository({
           `INSERT INTO proxy_groups (profile_id, name, type, config_ciphertext, sort_order)
        VALUES (?, ?, ?, ?, ?)`
         )
-        .run(profileId, input.name, input.type, encryptJson(input.config), order);
+        .run(profileId, input.name, input.type, encryptResource('policyGroup', input.config, input.clientOptions), order);
       recordRevision(db, profileId);
       return mapProxyGroup(
         db
@@ -257,7 +264,7 @@ export function createProxyRepository({
   function updateProxyGroup(
     profileId: number,
     itemId: number,
-    input: { name: string; type: ProxyGroupType; config: JsonObject }
+    input: { name: string; type: ProxyGroupType; config: JsonObject; clientOptions?: ClientOptions }
   ): ProxyGroup {
     ensureInitialized();
     return transaction((db) => {
@@ -270,7 +277,7 @@ export function createProxyRepository({
       const oldName = String(current.name);
       db.prepare(
         'UPDATE proxy_groups SET name = ?, type = ?, config_ciphertext = ? WHERE id = ?'
-      ).run(input.name, input.type, encryptJson(input.config), itemId);
+      ).run(input.name, input.type, encryptResource('policyGroup', input.config, input.clientOptions ?? readClientOptions(current.config_ciphertext)), itemId);
       if (oldName !== input.name) {
         rewriteRenamedResource(db, profileId, 'proxy-groups', oldName, input.name);
       }

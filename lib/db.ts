@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 
 import { databasePath } from './crypto';
+import { migrateConfigStorageModel } from './config-storage-migration';
 
 let connection: Database.Database | null = null;
 
@@ -174,6 +175,28 @@ const MIGRATIONS = [
           token_hash TEXT NOT NULL UNIQUE,
           token_ciphertext TEXT NOT NULL,
           created_at TEXT NOT NULL
+        );
+      `);
+    }
+  },
+  {
+    version: 5,
+    apply: migrateConfigStorageModel
+  },
+  {
+    version: 6,
+    apply(db: Database.Database) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS managed_proxy_source_cache (
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          provider_id INTEGER NOT NULL,
+          source_fingerprint TEXT NOT NULL,
+          attempt_fingerprint TEXT NOT NULL,
+          attempted_at INTEGER NOT NULL,
+          successful_fingerprint TEXT,
+          successful_at INTEGER,
+          yaml_ciphertext TEXT,
+          PRIMARY KEY (profile_id, provider_id)
         );
       `);
     }

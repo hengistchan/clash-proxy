@@ -8,6 +8,8 @@ import {
   RESERVED_TOP_LEVEL_KEYS,
   isJsonObject,
   type JsonObject,
+  type ClientOptions,
+  type ProxyRewriteRule,
   type JsonValue,
   type LogLevel,
   type Profile,
@@ -22,9 +24,10 @@ export interface ImportedDocument {
   logLevel: LogLevel;
   ipv6: boolean | null;
   settings: JsonObject;
+  clientOptions?: ClientOptions;
   proxies: Array<{ name: string; type: string; config: JsonObject }>;
-  proxyProviders: Array<{ name: string; config: JsonObject; requiresUrl: boolean }>;
-  proxyGroups: Array<{ name: string; type: ProxyGroupType; config: JsonObject }>;
+  proxyProviders: Array<{ name: string; config: JsonObject; requiresUrl: boolean; rewriteRules?: ProxyRewriteRule[] }>;
+  proxyGroups: Array<{ name: string; type: ProxyGroupType; config: JsonObject; clientOptions?: ClientOptions }>;
   ruleProviders: Array<{
     name: string;
     displayName?: string;
@@ -32,6 +35,7 @@ export interface ImportedDocument {
     providerType: RuleProviderType;
     config: JsonObject;
     entries: string[];
+    clientOptions?: ClientOptions;
   }>;
   rules: Array<{
     type: string;

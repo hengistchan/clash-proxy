@@ -11,6 +11,8 @@ export type ProxyGroupType =
   | 'load-balance'
   | 'relay';
 export type RuleProviderType = 'inline' | 'remote' | 'local';
+export type ClientOptions = { shadowrocket?: JsonObject };
+export const SHADOWROCKET_BUILTINS = ['PROXY', 'REJECT-NO-DROP', 'REJECT-TINYGIF', 'REJECT-DICT', 'REJECT-ARRAY', 'REJECT-200'] as const;
 
 export interface Profile {
   id: number;
@@ -19,6 +21,7 @@ export interface Profile {
   logLevel: LogLevel;
   ipv6: boolean | null;
   settings: JsonObject;
+  clientOptions?: ClientOptions;
   targetPlatform: 'any' | 'ios' | 'tvos' | 'macos';
   active: boolean;
   revision: number;
@@ -43,6 +46,15 @@ export interface ProxyProvider {
   sourceConfigured: boolean;
   headersConfigured: boolean;
   sortOrder: number;
+  rewriteRules?: ProxyRewriteRule[];
+}
+
+export interface ProxyRewriteRule {
+  matchName: string;
+  protocol?: string;
+  operation: 'fill' | 'set';
+  field: 'udp' | 'udp-over-tcp' | 'tfo';
+  value: boolean;
 }
 
 export interface ProxyGroup {
@@ -50,6 +62,7 @@ export interface ProxyGroup {
   name: string;
   type: ProxyGroupType;
   config: JsonObject;
+  clientOptions?: ClientOptions;
   sortOrder: number;
 }
 
@@ -67,12 +80,14 @@ export interface RuleProvider {
   providerType: RuleProviderType;
   sourceConfigured?: boolean;
   headersConfigured?: boolean;
+  shadowrocketSourceConfigured?: boolean;
   config: JsonObject;
+  clientOptions?: ClientOptions;
   entries: RuleProviderEntry[];
   sortOrder: number;
 }
 
-export interface StashRule {
+export interface RoutingRule {
   id: number;
   priority: number;
   type: string;
@@ -82,6 +97,7 @@ export interface StashRule {
   enabled: boolean;
   note: string;
 }
+export type StashRule = RoutingRule;
 
 export interface HostEntry {
   id: number;
@@ -103,7 +119,7 @@ export interface Snapshot {
   proxyProviders: ProxyProvider[];
   proxyGroups: ProxyGroup[];
   ruleProviders: RuleProvider[];
-  rules: StashRule[];
+  rules: RoutingRule[];
   hosts: HostEntry[];
   advancedSections: AdvancedSection[];
 }

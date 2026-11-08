@@ -98,7 +98,7 @@ export function OverviewView({
 
       <section className="workflow-guide" aria-label="配置与交付流程">
         <article>
-          <span className="workflow-number">1</span><div><h3>准备配置资源</h3><p>导入已有 YAML，或按需添加来源、策略和路由。</p>
+          <span className="workflow-number">1</span><div><h3>准备配置资源</h3><p>导入 Stash YAML 或 Shadowrocket .conf，或按需添加来源、策略和路由。</p>
           <div className="delivery-actions"><button className="button secondary small" onClick={onImport}>导入已有配置</button><button className="text-action" onClick={() => onNavigate('relationships')}>管理资源关系</button></div></div>
         </article>
         <article>

@@ -31,6 +31,7 @@ export interface ConfigDeliveryStatus {
   configDownloadUrl?: string;
   issues?: ValidationIssue[];
   remoteSources?: boolean;
+  managedProxySources?: boolean;
 }
 
 export function configTargetApi(profileId: number, target: ConfigTarget) {

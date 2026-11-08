@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { parse } from 'yaml';
 import { closeDbForTests, getDb } from '../lib/db';
-import { resetEncryptionCacheForTests } from '../lib/crypto';
+import { decryptJson, encryptJson, resetEncryptionCacheForTests } from '../lib/crypto';
 import {
   createProfile,
   getActiveProfile,
@@ -20,7 +20,9 @@ import {
   resetRepositoryForTests,
   restoreRevision,
   saveSettings,
-  createRuleProvider
+  createRuleProvider,
+  updateRuleProvider,
+  updateProxyGroup
 } from '../lib/repository';
 import {
   getDeliveryStatus,
@@ -35,6 +37,8 @@ import { GET as download } from '../app/api/profiles/[profileId]/config_download
 import { GET as legacy } from '../app/api/route';
 import { GET as subscribe } from '../app/api/config_download/[token]/config.yaml/route';
 import { getLatestShadowrocketConfig, getShadowrocketStatus, revokeShadowrocketLink, rotateShadowrocketLink, shadowrocketConfigForToken } from '../lib/shadowrocket-delivery';
+import { classifyConfig } from '../lib/config-import';
+import { previewImport } from '../lib/revision-comparison';
 import { compileShadowrocket } from '../lib/shadowrocket';
 import { downloadSource, isPublicSourceAddress } from '../lib/upstream-download';
 import type { SourceDownload } from '../lib/upstream-download';
@@ -76,6 +80,82 @@ test('upgrading a version 3 database preserves the original Stash artifact and t
   assert.match((await getLatestShadowrocketConfig(profile.id)).conf, /^\[Rule\]\nFINAL,DIRECT$/m);
   assert.notEqual(tokenFrom((await rotateShadowrocketLink(profile.id)).subscriptionPath!), stashToken);
   assert.equal(getSnapshot(profile.id).profile.revision, original.revision);
+});
+
+test('v4 data migrates into common fields and dialect extensions without changing links, history or references', async () => {
+  const { profile } = createProfile('Storage upgrade', [
+    'dns:',
+    '  nameserver: [1.1.1.1]',
+    '  fake-ip-filter: ["+.example.net"]',
+    'proxy-providers:',
+    '  source:',
+    `    url: ${secretA}`,
+    '    headers: { X-Test: fixture-header }',
+    '    interval: 300',
+    'proxy-groups:',
+    '  - name: Outlet',
+    '    type: select',
+    '    proxies: [DIRECT]',
+    '    use: [source]',
+    '    ssid-policy: { office: DIRECT }',
+    'rule-providers:',
+    '  original:',
+    '    type: inline',
+    '    behavior: domain',
+    '    payload: ["+.blocked.example"]',
+    'script: { shortcuts: {} }',
+    'rules: ["RULE-SET,original,REJECT", "MATCH,Outlet"]'
+  ].join('\n'));
+  const staticProfile = createProfile('Storage link fixture').profile;
+  const stashToken = tokenFrom(rotateDownloadLink(profile.id).subscriptionPath!);
+  const shadowToken = tokenFrom((await rotateShadowrocketLink(staticProfile.id)).subscriptionPath!);
+  const before = getCompilationSnapshot(profile.id);
+  const originalYaml = configForToken(stashToken).yaml;
+  const originalConf = await shadowrocketConfigForToken(shadowToken);
+  const db = getDb();
+  db.prepare('UPDATE profiles SET settings_ciphertext = ? WHERE id = ?')
+    .run(encryptJson(before.profile.settings), profile.id);
+  db.prepare('UPDATE proxy_providers SET config_ciphertext = ? WHERE id = ?')
+    .run(encryptJson(before.proxyProviders[0].config), before.proxyProviders[0].id);
+  db.prepare('UPDATE proxy_groups SET config_ciphertext = ? WHERE id = ?')
+    .run(encryptJson(before.proxyGroups[0].config), before.proxyGroups[0].id);
+  db.prepare('UPDATE advanced_sections SET value_ciphertext = ? WHERE id = ?')
+    .run(encryptJson(before.advancedSections[0].value), before.advancedSections[0].id);
+  for (const rule of before.rules) db.prepare('UPDATE rules SET type = ? WHERE id = ?').run(rule.type, rule.id);
+  const legacyRevision = encryptJson(before as unknown as JsonValue);
+  db.prepare('UPDATE revisions SET config_ciphertext = ? WHERE profile_id = ? AND revision = ?')
+    .run(legacyRevision, profile.id, profile.revision);
+  db.pragma('user_version = 4');
+  closeDbForTests();
+  resetRepositoryForTests();
+
+  assert.deepEqual(getCompilationSnapshot(profile.id), before);
+  assert.equal(configForToken(stashToken).yaml, originalYaml);
+  assert.deepEqual(await shadowrocketConfigForToken(shadowToken), originalConf);
+  assert.equal(getDb().pragma('user_version', { simple: true }), 6);
+  const stored = getDb().prepare('SELECT config_ciphertext FROM proxy_groups WHERE id = ?').pluck()
+    .get(before.proxyGroups[0].id) as string;
+  assert.match(stored, /^model1:v2\./);
+  assert.deepEqual(decryptJson(stored.slice('model1:'.length)), {
+    common: { policies: ['DIRECT'], nodeSources: ['source'] },
+    extensions: { stash: { 'ssid-policy': { office: 'DIRECT' } } }
+  });
+  const rawTypes = getDb().prepare('SELECT type FROM rules WHERE profile_id = ? ORDER BY priority').pluck().all(profile.id);
+  assert.deepEqual(rawTypes, ['rule-set', 'fallback']);
+  assert.ok(!JSON.stringify(getSnapshot(profile.id)).includes(secretA));
+  const { id, behavior, providerType, config, entries } = before.ruleProviders[0];
+  updateRuleProvider(profile.id, id, {
+    name: 'renamed', behavior, providerType, config, entries: entries.map((item) => item.value)
+  });
+  assert.equal(getSnapshot(profile.id).rules[0].payload, 'renamed');
+  const revised = getSnapshot(profile.id);
+  assert.match(getDb().prepare('SELECT config_ciphertext FROM revisions WHERE profile_id = ? AND revision = ?')
+    .pluck().get(profile.id, revised.profile.revision) as string, /^model1:v2\./);
+  restoreRevision(profile.id, profile.revision);
+  assert.equal(getSnapshot(profile.id).rules[0].payload, 'original');
+  assert.equal(getCompilationSnapshot(profile.id).proxyProviders[0].config.url, secretA);
+  restoreRevision(profile.id, revised.profile.revision);
+  assert.equal(getSnapshot(profile.id).rules[0].payload, 'renamed');
 });
 
 test('Shadowrocket blocks syntax injection without fetching upstream or leaking source values', async () => {
@@ -575,7 +655,7 @@ test('platform-aware rules and direct-only configurations do not require demo gr
   assert.equal(getDeliveryStatus(p.id).current, true);
   assert.equal(simulateRouting(getSnapshot(p.id), {}).mode, 'direct');
   assert.equal(getCompilationSnapshot(p.id).profile.targetPlatform, 'ios');
-  assert.equal(getDb().pragma('user_version', { simple: true }), 4);
+  assert.equal(getDb().pragma('user_version', { simple: true }), 6);
 });
 
 test('supported HTTP and URL authentication sources are preserved while warnings stay redacted', () => {
@@ -837,4 +917,77 @@ test('extension field edits retain arbitrary nested types and expose actual scri
         e.to === resourceKey('advanced', scripts.id)
     )
   );
+});
+
+test('Shadowrocket import classifies fields, preserves native sections privately and restores target options with history', async () => {
+  const text = [
+    '[General]', 'dns-server = 1.1.1.1', 'skip-proxy = localhost',
+    '[Proxy]', 'Node = socks5, node.example, 1080',
+    '[Proxy Group]', 'Outlet = select, Node, PROXY, policy-select-name=Node',
+    '[Rule]', 'DOMAIN,example.org,Outlet', `DOMAIN-SET,${secretA},REJECT`, 'FINAL,PROXY',
+    '[MITM]', 'ca-passphrase = fixture-only-sensitive-option'
+  ].join('\n');
+  const classification = classifyConfig(text);
+  assert.equal(classification.format, 'shadowrocket');
+  assert.ok(classification.common.includes('节点与协议'));
+  assert.ok(classification.shadowrocket.includes('原生 RULE-SET / DOMAIN-SET 引用'));
+  assert.deepEqual(classification.stash, []);
+  assert.ok(!JSON.stringify(classification).includes(secretA));
+  const base = createProfile('Imported native configuration').profile;
+  const preview = previewImport(base.id, text);
+  assert.deepEqual(preview.classification, classification);
+  assert.equal(getSnapshot(base.id).profile.revision, base.revision);
+  const imported = importYaml(base.id, text);
+  assert.ok(!JSON.stringify(imported).includes(secretA));
+  assert.ok(!JSON.stringify(imported).includes('fixture-only-sensitive-option'));
+  assert.equal(getDeliveryStatus(base.id).current, false);
+  assert.equal(getShadowrocketStatus(base.id).current, true);
+  const file = await getLatestShadowrocketConfig(base.id);
+  assert.match(file.conf, /Outlet = select, Node, PROXY, policy-select-name=Node/);
+  assert.ok(file.conf.includes(`DOMAIN-SET,${secretA},REJECT`));
+  assert.match(file.conf, /FINAL,PROXY\n\n\[MITM\]/);
+  const group = imported.proxyGroups[0];
+  updateProxyGroup(base.id, group.id, { ...group, clientOptions: { shadowrocket: { nativeMembers: ['DIRECT'] } } });
+  assert.match((await getLatestShadowrocketConfig(base.id)).conf, /Outlet = select, DIRECT/);
+  restoreRevision(base.id, imported.profile.revision);
+  assert.equal((await getLatestShadowrocketConfig(base.id)).conf, file.conf);
+});
+
+test('a shared group and rule source can have independent Stash and Shadowrocket options', async () => {
+  const { profile } = createProfile('Independent extensions', [
+    'proxy-groups:',
+    '  - name: Outlet',
+    '    type: select',
+    '    proxies: [DIRECT, REJECT]',
+    '    ssid-policy: { office: DIRECT }',
+    'rule-providers:',
+    '  shared:',
+    '    behavior: classical',
+    '    format: text',
+    `    url: ${secretB}`,
+    'rules: ["RULE-SET,shared,REJECT", "MATCH,Outlet"]'
+  ].join('\n'));
+  const current = getSnapshot(profile.id);
+  updateProxyGroup(profile.id, current.proxyGroups[0].id, {
+    ...current.proxyGroups[0], clientOptions: { shadowrocket: { select: 1 } }
+  });
+  const source = current.ruleProviders[0];
+  updateRuleProvider(profile.id, source.id, {
+    ...source, entries: [], clientOptions: { shadowrocket: { referenceType: 'RULE-SET' } }, shadowrocketSourceUrl: secretA
+  });
+  const conf = await getLatestShadowrocketConfig(profile.id);
+  assert.match(conf.conf, /Outlet = select, DIRECT, REJECT, select=1/);
+  assert.doesNotMatch(conf.conf, /ssid-policy/);
+  assert.ok(conf.conf.includes(`RULE-SET,${secretA},REJECT`));
+  assert.ok(!conf.conf.includes(secretB));
+  const publicSource = getSnapshot(profile.id).ruleProviders[0];
+  assert.equal(publicSource.shadowrocketSourceConfigured, true);
+  assert.ok(!JSON.stringify(publicSource).includes(secretA));
+  updateRuleProvider(profile.id, source.id, { ...publicSource, entries: [] });
+  assert.ok((await getLatestShadowrocketConfig(profile.id)).conf.includes(`RULE-SET,${secretA},REJECT`));
+  const yaml = getLatestConfig(profile.id).yaml;
+  assert.match(yaml, /ssid-policy/);
+  assert.doesNotMatch(yaml, /referenceType|select=1|clientOptions/);
+  assert.ok(yaml.includes('RULE-SET,shared,REJECT'));
+  assert.ok(yaml.includes(secretB) && !yaml.includes(secretA));
 });

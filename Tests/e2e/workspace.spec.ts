@@ -80,15 +80,15 @@ test('new YAML profiles validate before creation and valid imports open their re
   const profileName = name('created-in-browser');
   await dialog.getByLabel('配置名称').fill(profileName);
   await dialog.getByRole('combobox').click();
-  await page.getByRole('option', { name: '导入已有 YAML', exact: true }).click();
+  await page.getByRole('option', { name: '导入已有配置', exact: true }).click();
   await expect(dialog.getByRole('button', { name: '创建配置', exact: true })).toBeDisabled();
-  await dialog.getByLabel('完整 YAML').fill('proxies: invalid\nrules: ["MATCH,DIRECT"]');
+  await dialog.getByLabel('完整配置').fill('proxies: invalid\nrules: ["MATCH,DIRECT"]');
   await dialog.getByRole('button', { name: '创建配置', exact: true }).click();
   await expect(page.locator('.toast[role=alert]')).toContainText(/proxies/);
   await expect(dialog).toBeVisible();
   const profiles = await (await request.get('/api/profiles', { headers })).json();
   expect(profiles.items.some((item: { name: string }) => item.name === profileName)).toBeFalsy();
-  await dialog.getByLabel('完整 YAML').fill('hosts:\n  browser-created.test: 192.0.2.9\nrules: ["MATCH,DIRECT"]\n');
+  await dialog.getByLabel('完整配置').fill('hosts:\n  browser-created.test: 192.0.2.9\nrules: ["MATCH,DIRECT"]\n');
   await dialog.getByRole('button', { name: '创建配置', exact: true }).click();
   await expect(dialog).toBeHidden();
   await expect(page.locator('.side-nav button.active')).toHaveText('关联关系');
@@ -102,10 +102,10 @@ test('a malformed replacement import preserves the complete current profile and 
   await page.getByRole('button', { name: '导入配置文件', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '导入并替换当前 Profile' });
   await dialog.getByRole('textbox').fill('rules: {invalid: true}');
-  await expect(dialog.getByRole('button', { name: '导入完整 YAML', exact: true })).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: '导入完整配置', exact: true })).toBeDisabled();
   await dialog.getByRole('button', { name: '预览导入变化', exact: true }).click();
   await expect(dialog.getByRole('alert')).toContainText(/rules/);
-  await expect(dialog.getByRole('button', { name: '导入完整 YAML', exact: true })).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: '导入完整配置', exact: true })).toBeDisabled();
   await expect(dialog).toBeVisible();
   const unchanged = await snapshot(request, initial.profile.id);
   expect(unchanged.profile.revision).toBe(initial.profile.revision);
@@ -115,7 +115,7 @@ test('a malformed replacement import preserves the complete current profile and 
   await expect(dialog.locator('.config-diff')).toContainText('original.test');
   await expect(dialog.locator('.config-diff')).toContainText('replacement.test');
   await expect(dialog.getByText(/注释、原始排版和锚点写法不会保留/)).toBeVisible();
-  await dialog.getByRole('button', { name: '导入完整 YAML', exact: true }).click();
+  await dialog.getByRole('button', { name: '导入完整配置', exact: true }).click();
   await expect(dialog).toBeHidden();
   await expect.poll(async () => (await snapshot(request, initial.profile.id)).hosts[0]?.pattern).toBe('replacement.test');
 });
@@ -477,4 +477,71 @@ test('Shadowrocket offers first download for remote rules and explains blocked u
   await expect(page.getByRole('textbox', { name: '固定配置订阅链接' })).toBeHidden();
   await page.getByRole('button', { name: 'Stash', exact: true }).click();
   await expect(page.getByRole('button', { name: '下载 YAML', exact: true })).toBeEnabled();
+});
+
+test('Shadowrocket file import previews common and native fields before offering the native download', async ({ page, request }) => {
+  const initial = await create(request, 'shadowrocket-import-start');
+  await login(page, initial);
+  await page.getByRole('button', { name: '导入配置文件', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '导入并替换当前 Profile' });
+  await dialog.getByRole('textbox').fill(readFileSync('examples/Shadowrocket.conf', 'utf8'));
+  await dialog.getByRole('button', { name: '预览导入变化', exact: true }).click();
+  const classification = dialog.getByLabel('字段分类');
+  await expect(classification).toContainText('Shadowrocket .conf');
+  await expect(classification).toContainText('通用配置');
+  await expect(classification).toContainText('原生 RULE-SET / DOMAIN-SET 引用');
+  await dialog.getByRole('button', { name: '导入完整配置', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await navigate(page, '下载配置');
+  await page.getByRole('button', { name: 'Shadowrocket', exact: true }).click();
+  const downloadEvent = page.waitForEvent('download');
+  await page.getByRole('button', { name: '下载 .conf', exact: true }).click();
+  const download = await downloadEvent;
+  const conf = readFileSync((await download.path())!, 'utf8');
+  expect(conf).toContain('policy-select-name=Example node');
+  expect(conf).toContain('DOMAIN-SET,https://example.org/domains.list,REJECT');
+});
+
+test('edits remote proxy rewrites, previews the draft, and downloads a managed Stash provider', async ({ page, request }) => {
+  const initial = await create(request, 'rewrite-browser', [
+    'proxy-providers:',
+    '  fixture-source:',
+    '    type: http',
+    '    url: https://subscription.example.test/private-rewrite-fixture',
+    'rules: ["MATCH,DIRECT"]'
+  ].join('\n'));
+  const { id } = initial.profile;
+  await login(page, initial);
+  await navigate(page, '代理源');
+  await page.getByRole('button', { name: '编辑 fixture-source', exact: true }).click();
+  const editor = page.getByRole('dialog', { name: '编辑代理源' });
+  await editor.getByText('节点改写 · Stash', { exact: true }).click();
+  await editor.getByRole('button', { name: '添加改写规则', exact: true }).click();
+  await editor.getByLabel('节点名称正则').fill('^HK-');
+  await editor.getByLabel('协议类型（可选）').fill('ss');
+  const previewPath = `/api/profiles/${id}/proxy-source-preview`;
+  await page.route('**' + previewPath, async (route) => {
+    const draft = route.request().postDataJSON();
+    expect(draft.providerId).toBe(initial.proxyProviders[0].id);
+    expect(draft.sourceUrl).toBeUndefined();
+    expect(draft.rewriteRules).toEqual([{ matchName: '^HK-', protocol: 'ss', operation: 'fill', field: 'udp', value: true }]);
+    await route.fulfill({ json: { totalNodes: 3, matchedNodes: 2, changedNodes: 1, examples: [{ node: 1, field: 'udp', before: 'missing', after: true }] } });
+  });
+  await editor.getByRole('button', { name: '预览改写结果', exact: true }).click();
+  await expect(editor.getByText('共 3 个节点，匹配 2 个，实际改写 1 个。')).toBeVisible();
+  expect((await snapshot(request, id)).profile.revision).toBe(initial.profile.revision);
+  await editor.getByLabel('节点名称正则').fill('^HK-1');
+  await expect(editor.getByText('共 3 个节点，匹配 2 个，实际改写 1 个。')).toBeHidden();
+  await editor.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(editor).toBeHidden();
+  expect((await snapshot(request, id)).proxyProviders[0].rewriteRules?.[0].matchName).toBe('^HK-1');
+
+  await navigate(page, '下载配置');
+  await expect(page.getByText(/这份配置中的改写代理源由工作台提供/)).toBeVisible();
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: '下载 YAML', exact: true }).click();
+  const content = readFileSync((await (await download).path())!, 'utf8');
+  expect(content).toMatch(/\/api\/proxy-source\/\d+\.\d+\.[a-f0-9]{64}\/proxies.yaml/);
+  expect(content).not.toContain('private-rewrite-fixture');
+  await expect(page.getByLabel('固定配置订阅链接')).toBeVisible();
 });

@@ -36,8 +36,8 @@ function refresh(profileId: number) {
 }
 
 function isDeliverable(row: ArtifactRow | undefined): row is ArtifactRow & { revision: number; artifact_ciphertext: string } {
-  // Version 2 adds mappings without invalidating the semantics of v1 output.
-  return (row?.artifact_version === 1 || row?.artifact_version === SHADOWROCKET_COMPILER_VERSION) &&
+  // These revisions extend mappings without invalidating earlier complete output.
+  return row?.artifact_version != null && row.artifact_version >= 1 && row.artifact_version <= SHADOWROCKET_COMPILER_VERSION &&
     row.revision !== null && row.artifact_ciphertext !== null;
 }
 

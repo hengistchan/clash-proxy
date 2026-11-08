@@ -589,3 +589,11 @@ details > summary { padding: 12px 0; color: var(--forest); cursor: pointer; font
   .rule-select-target { min-width: 44px; min-height: 44px; }
   .rule-select-target input { margin: 0; }
 }
+
+.proxy-rewrite-rule {
+  min-width: 0;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}

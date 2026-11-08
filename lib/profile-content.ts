@@ -2,11 +2,10 @@ import type Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { encryptJson } from './crypto';
+import { encryptResource, decryptResourceObject, encryptNodeSource, readNodeSourceRewriteRules, storeMatchType } from './config-storage-model';
 import type { ImportedDocument } from './yaml-import';
-import type { JsonObject } from './types';
+import type { JsonObject, ProxyRewriteRule } from './types';
 import {
-  decryptObject,
   getProfileRow,
   now
 } from './repository-shared';
@@ -21,13 +20,13 @@ export function replaceProfileResources(
   const touched = now();
   // Template imports may reuse existing source bindings. History restoration
   // must reproduce the snapshot, including intentionally missing credentials.
-  const existingSources = new Map<string, JsonObject>(
+  const existingSources = new Map<string, { config: JsonObject; rules?: ProxyRewriteRule[] }>(
     options.preserveExistingSources
       ? (
           db
             .prepare('SELECT * FROM proxy_providers WHERE profile_id = ?')
             .all(profileId) as Record<string, unknown>[]
-        ).map((row) => [String(row.name), decryptObject(row.config_ciphertext)])
+        ).map((row) => [String(row.name), { config: decryptResourceObject('nodeSource', row.config_ciphertext), rules: readNodeSourceRewriteRules(row.config_ciphertext) }])
       : []
   );
   const existingRuleSetNames = new Map(
@@ -57,7 +56,7 @@ export function replaceProfileResources(
     document.ipv6 === null || document.ipv6 === undefined
       ? null
       : Number(document.ipv6),
-    encryptJson(document.settings),
+    encryptResource('settings', document.settings, document.clientOptions),
     touched,
     document.targetPlatform ?? null,
     profileId
@@ -72,7 +71,7 @@ export function replaceProfileResources(
       profileId,
       item.name,
       item.type,
-      encryptJson(item.config),
+      encryptResource('node', item.config),
       index + 1
     );
   });
@@ -83,21 +82,15 @@ export function replaceProfileResources(
      VALUES (?, ?, ?, ?, ?)`
   );
   document.proxyProviders.forEach((item, index) => {
+    const existing = item.requiresUrl ? existingSources.get(item.name) : undefined;
+    const config = existing ? {
+      ...item.config,
+      ...Object.fromEntries(Object.entries(existing.config).filter(([key]) => key === 'url' || key === 'headers'))
+    } : item.config;
     providerInsert.run(
       profileId,
       item.name,
-      encryptJson(
-        item.requiresUrl && existingSources.has(item.name)
-          ? {
-              ...item.config,
-              ...Object.fromEntries(
-                Object.entries(existingSources.get(item.name)!).filter(
-                  ([key]) => key === 'url' || key === 'headers'
-                )
-              )
-            }
-          : item.config
-      ),
+      encryptNodeSource(config, item.rewriteRules ?? (config.url === existing?.config.url ? existing?.rules : undefined)),
       Number(item.requiresUrl),
       index + 1
     );
@@ -112,7 +105,7 @@ export function replaceProfileResources(
       profileId,
       item.name,
       item.type,
-      encryptJson(item.config),
+      encryptResource('policyGroup', item.config, item.clientOptions),
       index + 1
     );
   });
@@ -132,7 +125,7 @@ export function replaceProfileResources(
       item.displayName ?? existingRuleSetNames.get(item.name) ?? '',
       item.behavior,
       item.providerType,
-      encryptJson(item.config),
+      encryptResource('ruleSource', item.config, item.clientOptions),
       index + 1
     );
     item.entries.forEach((entry, entryIndex) => {
@@ -149,7 +142,7 @@ export function replaceProfileResources(
     ruleInsert.run(
       profileId,
       index + 1,
-      item.type,
+      storeMatchType(item.type),
       item.payload,
       item.policy,
       JSON.stringify(item.options),
@@ -170,7 +163,7 @@ export function replaceProfileResources(
      VALUES (?, ?, ?, ?)`
   );
   document.advancedSections.forEach((item, index) => {
-    advancedInsert.run(profileId, item.key, encryptJson(item.value), index + 1);
+    advancedInsert.run(profileId, item.key, encryptResource('extension', item.value), index + 1);
   });
 }
 

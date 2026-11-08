@@ -51,7 +51,7 @@ function named(items: Array<{ name: string } & Record<string, unknown>>, fields:
 }
 
 const FIELD_LABELS: Record<string, string> = {
-  type: '类型', config: '配置参数', source: '私人来源或认证信息', members: '成员与顺序', sources: '关联代理源', filter: '筛选条件', displayName: '显示名称', behavior: '匹配格式',
+  rewriteRules: '代理源改写规则', clientOptions: '客户端专用参数', type: '类型', config: '配置参数', source: '私人来源或认证信息', members: '成员与顺序', sources: '关联代理源', filter: '筛选条件', displayName: '显示名称', behavior: '匹配格式',
   providerType: '来源类型', entries: '规则条目', payload: '匹配条件', policy: '目标策略',
   options: '规则选项', enabled: '启用状态', note: '备注', value: '内容', mode: '运行模式',
   targetPlatform: '设备平台', logLevel: '日志级别', ipv6: 'IPv6', settings: 'DNS与全局参数'
@@ -100,19 +100,19 @@ export function compareConfigurations(before: Snapshot, after: Snapshot): Config
   };
   compare('全局与 DNS', [{ key: 'profile', label: '全局与 DNS', values: profileValues(before) }], [{ key: 'profile', label: '全局与 DNS', values: profileValues(after) }]);
   compare('直接节点', named(before.proxies as unknown as Parameters<typeof named>[0], ['type', 'config']), named(after.proxies as unknown as Parameters<typeof named>[0], ['type', 'config']), true);
-  const withSource = (items: Array<{ name: string; config: Record<string, unknown> }>) => items.map((item) => ({
+  const withSource = <T extends { name: string; config: Record<string, unknown> }>(items: T[]) => items.map((item): { name: string } & Record<string, unknown> => ({
     ...item,
     source: { url: item.config.url, headers: item.config.headers },
     config: Object.fromEntries(Object.entries(item.config).filter(([key]) => key !== 'url' && key !== 'headers'))
   }));
-  compare('代理源', named(withSource(before.proxyProviders), ['config', 'source']), named(withSource(after.proxyProviders), ['config', 'source']), true);
+  compare('代理源', named(withSource(before.proxyProviders), ['config', 'source', 'rewriteRules']), named(withSource(after.proxyProviders), ['config', 'source', 'rewriteRules']), true);
   const groups = (snapshot: Snapshot) => snapshot.proxyGroups.map((item) => ({
     ...item, members: item.config.proxies, sources: item.config.use, filter: item.config.filter,
     config: Object.fromEntries(Object.entries(item.config).filter(([key]) => !['proxies', 'use', 'filter'].includes(key)))
   }));
-  compare('策略组', named(groups(before), ['type', 'members', 'sources', 'filter', 'config']), named(groups(after), ['type', 'members', 'sources', 'filter', 'config']), true);
+  compare('策略组', named(groups(before), ['type', 'members', 'sources', 'filter', 'config', 'clientOptions']), named(groups(after), ['type', 'members', 'sources', 'filter', 'config', 'clientOptions']), true);
   const providers = (snapshot: Snapshot) => snapshot.ruleProviders.map((item) => ({ ...item, entries: item.entries.map((entry) => entry.value) }));
-  compare('规则集', named(withSource(providers(before)), ['displayName', 'behavior', 'providerType', 'config', 'source', 'entries']), named(withSource(providers(after)), ['displayName', 'behavior', 'providerType', 'config', 'source', 'entries']), true);
+  compare('规则集', named(withSource(providers(before)), ['displayName', 'behavior', 'providerType', 'config', 'source', 'entries', 'clientOptions']), named(withSource(providers(after)), ['displayName', 'behavior', 'providerType', 'config', 'source', 'entries', 'clientOptions']), true);
   compare('路由规则', rules(before), rules(after), true);
   const hosts = (snapshot: Snapshot) => snapshot.hosts.map((item) => ({ key: item.pattern, label: safeChangeLabel(item.pattern), values: { value: item.value } }));
   compare('Hosts', hosts(before), hosts(after));
@@ -123,5 +123,5 @@ export function compareConfigurations(before: Snapshot, after: Snapshot): Config
 
 function profileValues(snapshot: Snapshot): Record<string, JsonValue | undefined> {
   const profile = snapshot.profile;
-  return { mode: profile.mode, targetPlatform: profile.targetPlatform, logLevel: profile.logLevel, ipv6: profile.ipv6, settings: profile.settings };
+  return { mode: profile.mode, targetPlatform: profile.targetPlatform, logLevel: profile.logLevel, ipv6: profile.ipv6, settings: profile.settings, clientOptions: profile.clientOptions };
 }

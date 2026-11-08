@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 
 import { transaction } from './db';
-import { encryptJson } from './crypto';
+import { encryptResource } from './config-storage-model';
 import { HttpError } from './http';
 import type { AdvancedSection, JsonValue } from './types';
 import { RESERVED_TOP_LEVEL_KEYS } from './types';
@@ -43,7 +43,7 @@ export function createAdvancedRepository({
        VALUES (?, ?, ?, ?)`
       );
       sections.forEach((section, index) => {
-        insert.run(profileId, section.key, encryptJson(section.value), index + 1);
+        insert.run(profileId, section.key, encryptResource('extension', section.value), index + 1);
       });
       recordRevision(db, profileId);
       return snapshotFromDb(db, profileId).advancedSections;

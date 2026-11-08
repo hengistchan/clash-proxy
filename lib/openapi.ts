@@ -89,11 +89,29 @@ const paths: Record<string, object> = {
   },
   '/api/profiles/{profileId}/import': {
     parameters: [id],
-    post: operation('导入完整 YAML；同名 provider 的占位 URL 保留已有来源', {
+    post: operation('导入 Stash YAML 或 Shadowrocket .conf；保留现有请求字段 yaml', {
       type: 'object',
       required: ['yaml'],
       properties: { yaml: { type: 'string' } }
     })
+  },
+  '/api/profiles/{profileId}/proxy-source-preview': {
+    parameters: [id],
+    post: operation('预览远程代理源改写，不保存；仅返回计数和字段差异', ref('ProxySourcePreview'))
+  },
+  '/api/proxy-source/{capability}/proxies.yaml': {
+    parameters: [{ ...configToken, name: 'capability' }],
+    get: {
+      security: [],
+      summary: '用仅限该代理源的签名链接读取改写后的 Stash 节点',
+      responses: {
+        '200': { description: '代理节点 YAML；X-Proxy-Source-Status 标明 fresh 或 stale',
+          content: { 'application/yaml': { schema: { type: 'string' } } } },
+        '404': { description: '链接无效或来源已移除' },
+        '502': { description: '来源失败且没有可用缓存' },
+        '503': { description: '来源正在变更或刷新繁忙' }
+      }
+    }
   },
   '/api/profiles/{profileId}/validate': {
     parameters: [id],
@@ -128,7 +146,7 @@ const paths: Record<string, object> = {
       responses: {
         '200': {
           description:
-            'YAML 附件，含私人来源地址；X-Config-Revision 表示实际下载版本',
+            'YAML 附件，可能含私人地址；改写源使用工作台链接。X-Config-Revision 表示实际下载版本',
           content: { 'application/yaml': { schema: { type: 'string' } } }
         },
         ...errors
@@ -239,6 +257,11 @@ const paths: Record<string, object> = {
     get: { ...operation('可用规则类型和策略组类型'), security: [] }
   }
 };
+paths['/api/profiles/import-inspect'] = {
+  post: operation('识别导入格式并分类共有和客户端专用字段；不保存配置', {
+    type: 'object', required: ['content'], properties: { content: { type: 'string' } }
+  })
+};
 for (const [resource, schema] of Object.entries({
   proxies: 'Proxy',
   'proxy-providers': 'ProxyProvider',
@@ -348,7 +371,8 @@ export const openapi = {
             type: ['string', 'null'],
             description: '完整设备订阅链接，未启用时为 null'
           },
-          subscriptionPath: { type: ['string', 'null'] }
+          subscriptionPath: { type: ['string', 'null'] },
+          managedProxySources: { type: 'boolean', description: 'Stash 最近成功的配置包含工作台改写来源' }
         }
       },
       ShadowrocketDelivery: {
@@ -377,7 +401,7 @@ export const openapi = {
         required: ['name'],
         properties: {
           name,
-          importYaml: { type: 'string', description: '可选完整 YAML' },
+          importYaml: { type: 'string', description: '可选的完整 Stash YAML 或 Shadowrocket .conf 文本' },
           example: { type: 'boolean', default: false }
         }
       },
@@ -397,6 +421,33 @@ export const openapi = {
         required: ['name', 'type'],
         properties: { name, type: { type: 'string' }, config: object }
       },
+      ProxyRewriteRules: {
+        type: 'array', maxItems: 20,
+        items: {
+          type: 'object', additionalProperties: false,
+          required: ['operation', 'field', 'value'],
+          properties: {
+            matchName: { type: 'string', maxLength: 256, description: 'RE2 正则；空值匹配所有名称' },
+            protocol: { type: 'string', pattern: '^[a-z0-9-]{1,32}$' },
+            operation: { enum: ['fill', 'set'] },
+            field: { enum: ['udp', 'udp-over-tcp', 'tfo'] },
+            value: { type: 'boolean' }
+          }
+        }
+      },
+      ProxySourcePreview: {
+        type: 'object',
+        required: ['rewriteRules'],
+        properties: {
+          providerId: { type: 'integer', minimum: 1 },
+          config: object,
+          sourceUrl: { type: 'string', writeOnly: true },
+          sourceHeaders: { ...object, writeOnly: true },
+          clearSource: { type: 'boolean' },
+          clearHeaders: { type: 'boolean' },
+          rewriteRules: { allOf: [ref('ProxyRewriteRules'), { minItems: 1 }] }
+        }
+      },
       ProxyProvider: {
         type: 'object',
         required: ['name'],
@@ -413,6 +464,7 @@ export const openapi = {
           sourceHeaders: { ...object, writeOnly: true },
           clearSource: { type: 'boolean', description: '明确清除 URL' },
           clearHeaders: { type: 'boolean' },
+          rewriteRules: ref('ProxyRewriteRules'),
           config: {
             ...object,
             description:
@@ -425,6 +477,7 @@ export const openapi = {
         required: ['name', 'type'],
         properties: {
           name,
+          clientOptions: { ...object, description: '可选 Shadowrocket 专用策略组参数' },
           type: {
             enum: ['select', 'url-test', 'fallback', 'load-balance', 'relay']
           },
@@ -444,6 +497,10 @@ export const openapi = {
           behavior: { enum: ['domain', 'ipcidr', 'classical'] },
           providerType: { enum: ['inline', 'remote', 'local'] },
           sourceUrl: { type: 'string', format: 'uri', writeOnly: true },
+          shadowrocketSourceUrl: { type: 'string', format: 'uri', writeOnly: true },
+          clearShadowrocketSource: { type: 'boolean' },
+          shadowrocketSourceConfigured: { type: 'boolean', readOnly: true },
+          clientOptions: { ...object, description: 'Shadowrocket 原生规则集引用类型' },
           sourceHeaders: { ...object, writeOnly: true },
           clearSource: { type: 'boolean' }, clearHeaders: { type: 'boolean' },
           sourceConfigured: { type: 'boolean', readOnly: true }, headersConfigured: { type: 'boolean', readOnly: true },

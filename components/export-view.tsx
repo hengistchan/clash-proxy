@@ -67,7 +67,7 @@ export function ExportView({
     };
   }, [profileId, snapshot.profile.revision, token, statusAttempt, target, isDefault]);
   async function readRemoteDiagnostics() {
-    if (!status?.remoteSources) return;
+    if (!status?.remoteSources && !status?.managedProxySources) return;
     try {
       const data = await apiRequest<ProfileDeliveryStatus>(`/api/profiles/${profileId}/delivery`, { token });
       setStatus(data.targets[target]);
@@ -205,6 +205,9 @@ export function ExportView({
           <ValidationIssues issues={compatibility} onFix={onFixIssue} />
         </div>
       ) : null}
+      {isDefault && status?.managedProxySources && <p className="delivery-note">
+        这份配置中的改写代理源由工作台提供。下载时会启用设备订阅链接；更换或撤销链接后，请重新下载并导入配置。
+      </p>}
       <div className="delivery-actions">
         <button
           className="button primary"

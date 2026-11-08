@@ -1,17 +1,17 @@
 import type Database from 'better-sqlite3';
 
 import { transaction } from './db';
-import { encryptJson } from './crypto';
+import { encryptResource, decryptResourceObject, readClientOptions } from './config-storage-model';
 import { HttpError } from './http';
 import {
   publicRuleProvider,
+  ruleProviderClientOptions,
   ruleProviderConfig,
   type RuleProviderInput
 } from './rule-provider-source';
 import type { RuleProvider, RuleProviderEntry } from './types';
 import {
   assertUniqueName,
-  decryptObject,
   getProfileRow,
   listRuleEntries,
   mapRuleProvider,
@@ -75,7 +75,7 @@ export function createRuleProviderRepository({
           input.displayName?.trim() || '',
           input.behavior,
           input.providerType,
-          encryptJson(config),
+          encryptResource('ruleSource', config, ruleProviderClientOptions(input)),
           order
         );
       const providerId = Number(result.lastInsertRowid);
@@ -112,7 +112,7 @@ export function createRuleProviderRepository({
       const config = ruleProviderConfig(
         input,
         input.providerType === String(current.provider_type)
-          ? decryptObject(current.config_ciphertext)
+          ? decryptResourceObject('ruleSource', current.config_ciphertext)
           : {}
       );
       db.prepare(
@@ -123,7 +123,7 @@ export function createRuleProviderRepository({
         input.displayName === undefined ? null : input.displayName.trim(),
         input.behavior,
         input.providerType,
-        encryptJson(config),
+        encryptResource('ruleSource', config, ruleProviderClientOptions(input, readClientOptions(current.config_ciphertext))),
         itemId
       );
       db.prepare('DELETE FROM rule_provider_entries WHERE provider_id = ?').run(

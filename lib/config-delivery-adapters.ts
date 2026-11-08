@@ -4,6 +4,7 @@ import {
   getLatestShadowrocketConfig, getShadowrocketStatus, revokeShadowrocketLink,
   rotateShadowrocketLink, shadowrocketConfigForToken
 } from './shadowrocket-delivery';
+import { materializeStashArtifact } from './managed-proxy-source';
 import { requireAdmin } from './auth';
 import { jsonError, parseId } from './http';
 import { configTargetIds, type ConfigDeliveryStatus, type ConfigTarget } from './config-targets';
@@ -12,7 +13,7 @@ type MaybePromise<T> = T | Promise<T>;
 
 interface ConfigDeliveryAdapter {
   status(profileId: number): ConfigDeliveryStatus;
-  adminFile(profileId: number): MaybePromise<Response>;
+  adminFile(profileId: number, request: Request): MaybePromise<Response>;
   deviceFile(token: string, request: Request): MaybePromise<Response>;
   rotate(profileId: number): MaybePromise<ConfigDeliveryStatus>;
   revoke(profileId: number): MaybePromise<void>;
@@ -21,9 +22,9 @@ interface ConfigDeliveryAdapter {
 const adapters = {
   stash: {
     status: getDeliveryStatus,
-    adminFile: (profileId) => yamlDownload(getLatestConfig(profileId)),
+    adminFile: (profileId, request) => yamlDownload(materializeStashArtifact(getLatestConfig(profileId), request)),
     deviceFile: (token, request) => yamlDownload(
-      configForToken(token),
+      materializeStashArtifact(configForToken(token), request, token),
       absoluteDownloadUrl(request, new URL(request.url).pathname)
     ),
     rotate: rotateDownloadLink,
@@ -54,7 +55,7 @@ export function configTargetHandlers(target: ConfigTarget) {
       try {
         requireAdmin(request);
         rejectLegacyParameters(request);
-        return await adapter.adminFile(parseId((await context.params).profileId));
+        return await adapter.adminFile(parseId((await context.params).profileId), request);
       } catch (error) {
         return jsonError(error);
       }

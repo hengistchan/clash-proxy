@@ -114,13 +114,13 @@ test('an import preview cannot authorize replacement after another client writes
   const yaml = 'hosts: { replacement.test: 192.0.2.2 }\nrules: ["MATCH,DIRECT"]';
   await dialog.getByRole('textbox').fill(yaml);
   await dialog.getByRole('button', { name: '预览导入变化', exact: true }).click();
-  await expect(dialog.getByRole('button', { name: '导入完整 YAML', exact: true })).toBeEnabled();
+  await expect(dialog.getByRole('button', { name: '导入完整配置', exact: true })).toBeEnabled();
   const otherWrite = await request.post(`/api/profiles/${initial.profile.id}/hosts`, {
     headers: { ...headers, 'If-Match': `"${initial.profile.revision}"` }, data: { pattern: 'other-client.test', value: '192.0.2.3' }
   });
   expect(otherWrite.status()).toBe(201);
   const rejected = page.waitForResponse((response) => response.url().endsWith(`/api/profiles/${initial.profile.id}/import`) && response.request().method() === 'POST');
-  await dialog.getByRole('button', { name: '导入完整 YAML', exact: true }).click();
+  await dialog.getByRole('button', { name: '导入完整配置', exact: true }).click();
   expect((await rejected).status()).toBe(409);
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole('textbox')).toHaveValue(yaml);
@@ -129,7 +129,7 @@ test('an import preview cannot authorize replacement after another client writes
   expect(stored.hosts.map((entry) => entry.pattern)).not.toContain('replacement.test');
   await dialog.getByRole('button', { name: '预览导入变化', exact: true }).click();
   await expect(dialog.getByText(`基于当前版本 ${stored.profile.revision} 的替换预览。修改导入文本后需要重新预览。`)).toBeVisible();
-  await dialog.getByRole('button', { name: '导入完整 YAML', exact: true }).click();
+  await dialog.getByRole('button', { name: '导入完整配置', exact: true }).click();
   await expect(dialog).toBeHidden();
   stored = await snapshot(request, initial.profile.id);
   expect(stored.hosts.map((entry) => entry.pattern)).toEqual(['replacement.test']);

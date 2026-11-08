@@ -44,6 +44,7 @@ import { EditorDialog } from './editor-dialog';
 import { ExportView } from './export-view';
 import { HistoryView } from './history-view';
 import { ImportPreview } from './import-preview';
+import { InspectNewImport } from './import-classification';
 import { OverviewView } from './overview-view';
 import { ResourceList } from './resource-list';
 import { RulesView } from './rules-view';
@@ -868,7 +869,7 @@ function Workspace() {
         open={profileDialog}
         onOpenChange={closeProfileDialog}
         title="新建配置"
-        description="可以从空配置开始，或直接导入完整 Stash YAML。"
+        description="可以从空配置开始，或导入 Stash YAML / Shadowrocket .conf。"
         wide
         footer={
           <>
@@ -904,27 +905,28 @@ function Workspace() {
             onValueChange={setNewProfileSource}
             options={[
               { value: 'empty', label: '最小配置 · 自己添加需要的资源' },
-              { value: 'import', label: '导入已有 YAML' },
+              { value: 'import', label: '导入已有配置' },
               { value: 'example', label: '可选示例 · 用于了解各项功能' }
             ]}
             wide
           />
           {newProfileSource === 'import' ? (
             <>
-              <p className="delivery-note wide">将创建独立配置。导入会规范化 YAML，注释、排版与锚点写法不会保留；字段含义和嵌套类型按支持范围保留。</p>
+              <p className="delivery-note wide">将创建独立配置。粘贴或选择文件后会识别格式，并列出共有和客户端专用内容。</p>
               <label className="field wide">
-                <span>完整 YAML</span>
+                <span>完整配置</span>
                 <textarea
                   className="code-input"
                   rows={13}
                   value={newProfileYaml}
                   onChange={(event) => setNewProfileYaml(event.target.value)}
-                  placeholder="粘贴完整 Stash YAML"
+                  placeholder="粘贴 Stash YAML 或 Shadowrocket .conf"
                 />
               </label>
+              <InspectNewImport content={newProfileYaml} token={token} />
               <label className="file-drop wide">
                 <Upload size={18} />
-                <span>选择 YAML 文件</span>
+                <span>选择配置文件</span>
                 <input
                   type="file"
                   accept=".yaml,.yml,.conf,.config,text/yaml,application/yaml,text/plain,application/json"
@@ -958,14 +960,14 @@ function Workspace() {
               disabled={profileBusy || !importYamlText.trim() || importPreviewRevision === null}
               onClick={importCurrent}
             >
-              {profileBusy ? '导入中…' : '导入完整 YAML'}
+              {profileBusy ? '导入中…' : '导入完整配置'}
             </button>
           </>
         }
       >
         <label className="file-drop">
           <Upload size={18} />
-          <span>读取 YAML 文件</span>
+          <span>读取配置文件</span>
           <input
             type="file"
             accept=".yaml,.yml,.conf,.config,text/yaml,application/yaml,text/plain,application/json"
@@ -980,7 +982,7 @@ function Workspace() {
           rows={18}
           value={importYamlText}
           onChange={(event) => { setImportPreviewRevision(null); setImportYamlText(event.target.value); }}
-          placeholder="粘贴完整 Stash YAML"
+          placeholder="粘贴 Stash YAML 或 Shadowrocket .conf"
         />
         {profileId ? <ImportPreview profileId={profileId} token={token} yaml={importYamlText} onPreview={setImportPreviewRevision} /> : null}
       </Modal>
