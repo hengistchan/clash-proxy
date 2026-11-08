@@ -24,7 +24,7 @@ import { HostEditorFields, NodeEditorFields, RuleEditorFields } from './resource
 import { ProxyProviderFields } from './proxy-provider-fields';
 import { ProxyGroupFields } from './proxy-group-fields';
 import { RuleProviderFields } from './rule-provider-fields';
-import { ProxySourceRewrites } from './proxy-source-rewrites';
+import { ProxySourceRewrites, serializeProxyRewrites, type ProxyRewriteDraft } from './proxy-source-rewrites';
 import { useUnsavedChanges } from './unsaved-changes';
 import {
   PROXY_GROUP_TYPE_DESCRIPTIONS,
@@ -106,7 +106,7 @@ export function EditorDialog({
   const [sourceHeaders, setSourceHeaders] = useState('');
   const [clearSource, setClearSource] = useState(false);
   const [clearHeaders, setClearHeaders] = useState(false);
-  const [rewriteRules, setRewriteRules] = useState<ProxyRewriteRule[]>([]);
+  const [rewriteRules, setRewriteRules] = useState<ProxyRewriteDraft[]>([]);
   const [providerBehavior, setProviderBehavior] = useState('domain');
   const [providerType, setProviderType] = useState('inline');
   const [entriesText, setEntriesText] = useState('');
@@ -397,7 +397,7 @@ export function EditorDialog({
           name: name.trim(),
           ...proxySourceDraft(),
           sourceType,
-          ...(sourceType === 'remote' ? { rewriteRules } : {})
+          ...(sourceType === 'remote' ? { rewriteRules: serializeProxyRewrites(rewriteRules) } : {})
         };
       } else if (resource === 'proxy-groups') {
         const rest = configWithout(parseObject(configText, '策略组高级配置'), [
@@ -536,7 +536,7 @@ export function EditorDialog({
                 sourceKey={JSON.stringify([profileId, existing?.id, draftRevision, configText, sourceUrl, sourceHeaders, clearSource, clearHeaders])}
                 onPreview={signal => apiRequest(`/api/profiles/${profileId}/proxy-source-preview`, {
                   method: 'POST', token, signal,
-                  body: JSON.stringify({ ...proxySourceDraft(), providerId: existing?.id, rewriteRules })
+                  body: JSON.stringify({ ...proxySourceDraft(), providerId: existing?.id, rewriteRules: serializeProxyRewrites(rewriteRules) })
                 })}
               />}
           />

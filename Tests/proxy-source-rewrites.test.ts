@@ -238,3 +238,48 @@ test('managed YAML round-trips only in its own profile and restores the same del
   assert.equal((await readExport(profile.id)).capability, capability);
   assert.equal((await managedProxySource(capability, async () => body)).stale, false);
 });
+
+test('custom scalar rules reach managed YAML, retain types, and hide original values in previews', async () => {
+  const { profile } = createProfile('Custom fields');
+  const custom: ProxyRewriteRule[] = [
+    { ...rules[0], field: 'port', operation: 'set', value: 8443 },
+    { ...rules[0], field: 'sni', operation: 'set', value: 'false' },
+    { ...rules[0], field: 'tls', value: true }
+  ];
+  const provider = createProxyProvider(profile.id, fixtureSource(custom));
+  const upstream = stringify({ proxies: [
+    { name: 'HK-fixture', type: 'ss', port: 443, sni: 'original.example.test', tls: false },
+    { name: 'JP-fixture', type: 'ss', port: 443 }
+  ] });
+  const fetchSource = async () => upstream;
+  const preview = await previewProxySource(profile.id, { providerId: provider.id, config: {}, rewriteRules: custom }, fetchSource);
+  assert.deepEqual(preview, {
+    totalNodes: 2, matchedNodes: 1, changedNodes: 1,
+    examples: [
+      { node: 1, field: 'port', before: 'other', after: 8443 },
+      { node: 1, field: 'sni', before: 'other', after: 'false' }
+    ]
+  });
+  const { text, capability } = await readExport(profile.id);
+  importYaml(profile.id, text);
+  assert.deepEqual(getSnapshot(profile.id).proxyProviders[0].rewriteRules, custom);
+  const output = parse((await managedProxySource(capability, fetchSource)).yaml).proxies;
+  assert.deepEqual(output, [
+    { name: 'HK-fixture', type: 'ss', port: 8443, sni: 'false', tls: false },
+    { name: 'JP-fixture', type: 'ss', port: 443 }
+  ]);
+});
+
+test('reserved fields, nested paths, non-scalar values and oversized expansions are rejected', () => {
+  for (const field of ['name', 'type', '__proto__', 'constructor', 'prototype', 'tls.sni']) {
+    assert.throws(() => transformProxySource(body, [{ ...rules[0], field }]));
+  }
+  for (const value of [Infinity, null, { nested: true }]) {
+    assert.throws(() => transformProxySource(body, [{ ...rules[0], field: 'custom', value: value as never }]));
+  }
+  assert.throws(() => transformProxySource(body, [{ ...rules[0], value: 'true' }]));
+  const largeInput = stringify({ proxies: Array.from({ length: 1200 }, (_, i) => ({ name: 'node-' + i, type: 'ss' })) });
+  assert.throws(() => transformProxySource(largeInput, ['alpha', 'beta'].map(field => ({
+    field, matchName: '', operation: 'set', value: 'x'.repeat(4096)
+  }))), /too large/);
+});

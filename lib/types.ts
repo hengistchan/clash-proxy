@@ -49,12 +49,14 @@ export interface ProxyProvider {
   rewriteRules?: ProxyRewriteRule[];
 }
 
+export type ProxyRewriteValue = string | number | boolean;
+
 export interface ProxyRewriteRule {
   matchName: string;
   protocol?: string;
   operation: 'fill' | 'set';
-  field: 'udp' | 'udp-over-tcp' | 'tfo';
-  value: boolean;
+  field: string;
+  value: ProxyRewriteValue;
 }
 
 export interface ProxyGroup {

@@ -478,8 +478,8 @@ export const openapi = {
             matchName: { type: 'string', maxLength: 256, description: 'RE2 正则；空值匹配所有名称' },
             protocol: { type: 'string', pattern: '^[a-z0-9-]{1,32}$' },
             operation: { enum: ['fill', 'set'] },
-            field: { enum: ['udp', 'udp-over-tcp', 'tfo'] },
-            value: { type: 'boolean' }
+            field: { type: 'string', pattern: '^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$', description: '节点顶层字段；name、type 和对象保留字段不可改写' },
+            value: { type: ['boolean', 'number', 'string'], maxLength: 4096, description: '快捷字段 udp、udp-over-tcp、tfo 只接受布尔值' }
           }
         }
       },

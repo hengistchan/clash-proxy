@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { isProxyRewriteField, isRewriteShortcut, PROXY_REWRITE_FIELD_ERROR, PROXY_REWRITE_VALUE_MAX } from './proxy-rewrite-fields';
 import { type JsonObject, type JsonValue, isJsonObject } from './types';
 
 function isJsonValue(value: unknown): value is JsonValue {
@@ -28,9 +29,11 @@ export const proxyRewriteRulesSchema = z.array(z.object({
   matchName: z.string().max(256).default(''),
   protocol: z.string().trim().regex(/^[a-z0-9-]{1,32}$/).optional(),
   operation: z.enum(['fill', 'set']),
-  field: z.enum(['udp', 'udp-over-tcp', 'tfo']),
-  value: z.boolean()
-}).strict()).max(20);
+  field: z.string().trim().refine(isProxyRewriteField, PROXY_REWRITE_FIELD_ERROR),
+  value: z.union([z.boolean(), z.number().finite(), z.string().max(PROXY_REWRITE_VALUE_MAX)])
+}).strict().refine(rule => !isRewriteShortcut(rule.field) || typeof rule.value === 'boolean', {
+  path: ['value'], message: 'udp、udp-over-tcp 和 tfo 只接受布尔值。'
+})).max(20);
 
 export const profileCreateSchema = z.object({
   name,

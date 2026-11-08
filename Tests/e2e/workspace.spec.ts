@@ -525,22 +525,37 @@ test('edits remote proxy rewrites, previews the draft, and downloads a managed S
   await editor.getByRole('button', { name: '添加改写规则', exact: true }).click();
   await editor.getByLabel('节点名称正则').fill('^HK-');
   await editor.getByLabel('协议类型（可选）').fill('ss');
+  await editor.getByRole('button', { name: '添加改写规则', exact: true }).click();
+  const custom = editor.getByRole('group', { name: '改写规则 2' });
+  await custom.getByRole('combobox').filter({ hasText: 'udp' }).click();
+  await page.getByRole('option', { name: '自定义字段', exact: true }).click();
+  await expect(editor.getByRole('button', { name: '预览改写结果', exact: true })).toBeDisabled();
+  await custom.getByLabel('自定义字段名').fill('port');
+  await custom.getByRole('combobox').filter({ hasText: '布尔值' }).click();
+  await page.getByRole('option', { name: '数字', exact: true }).click();
+  await custom.getByRole('spinbutton', { name: '字段值' }).fill('8443');
   const previewPath = `/api/profiles/${id}/proxy-source-preview`;
   await page.route('**' + previewPath, async (route) => {
     const draft = route.request().postDataJSON();
     expect(draft.providerId).toBe(initial.proxyProviders[0].id);
     expect(draft.sourceUrl).toBeUndefined();
-    expect(draft.rewriteRules).toEqual([{ matchName: '^HK-', protocol: 'ss', operation: 'fill', field: 'udp', value: true }]);
-    await route.fulfill({ json: { totalNodes: 3, matchedNodes: 2, changedNodes: 1, examples: [{ node: 1, field: 'udp', before: 'missing', after: true }] } });
+    expect(draft.rewriteRules).toEqual([
+      { matchName: '^HK-', protocol: 'ss', operation: 'fill', field: 'udp', value: true },
+      { matchName: '', operation: 'fill', field: 'port', value: 8443 }
+    ]);
+    await route.fulfill({ json: { totalNodes: 3, matchedNodes: 2, changedNodes: 1, examples: [{ node: 1, field: 'port', before: 'other', after: 8443 }] } });
   });
   await editor.getByRole('button', { name: '预览改写结果', exact: true }).click();
   await expect(editor.getByText('共 3 个节点，匹配 2 个，实际改写 1 个。')).toBeVisible();
+  await expect(editor.getByText('节点 #1 · port：原值已隐藏 → 8443')).toBeVisible();
   expect((await snapshot(request, id)).profile.revision).toBe(initial.profile.revision);
-  await editor.getByLabel('节点名称正则').fill('^HK-1');
+  await editor.getByRole('group', { name: '改写规则 1' }).getByLabel('节点名称正则').fill('^HK-1');
   await expect(editor.getByText('共 3 个节点，匹配 2 个，实际改写 1 个。')).toBeHidden();
   await editor.getByRole('button', { name: '保存', exact: true }).click();
   await expect(editor).toBeHidden();
-  expect((await snapshot(request, id)).proxyProviders[0].rewriteRules?.[0].matchName).toBe('^HK-1');
+  const saved = (await snapshot(request, id)).proxyProviders[0].rewriteRules!;
+  expect(saved[0].matchName).toBe('^HK-1');
+  expect(saved[1]).toEqual({ matchName: '', operation: 'fill', field: 'port', value: 8443 });
 
   await navigate(page, '下载配置');
   await expect(page.getByText(/这份配置中的改写代理源由工作台提供/)).toBeVisible();

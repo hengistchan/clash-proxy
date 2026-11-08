@@ -12,7 +12,6 @@ import { transformProxySource } from './proxy-source-transform';
 import { downloadSource, type SourceDownload } from './upstream-download';
 
 const RETRY_MS = 60_000;
-const MAX_BYTES = 8 * 1024 * 1024;
 export function materializeStashArtifact<T extends ExportResult>(artifact: T, request: Request): T {
   const rewrites = artifact.proxyRewrites;
   if (!rewrites) return artifact;
@@ -71,8 +70,7 @@ export async function managedProxySource(capability: string, fetchSource: Source
         let yaml: string | undefined;
         try {
           const text = await fetchSource(source.upstream, AbortSignal.timeout(12_000));
-          const result = transformProxySource(text, source.rules);
-          if (Buffer.byteLength(result.yaml) <= MAX_BYTES) yaml = result.yaml;
+          yaml = transformProxySource(text, source.rules).yaml;
         } catch {
           // Neither parser errors nor upstream errors are safe to expose.
         }
