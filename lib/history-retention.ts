@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { protectedCompiledRevisions } from './compilation';
 
 export function revisionRetentionLimit(): number {
   const text = process.env.STASH_REVISION_LIMIT?.trim();
@@ -20,10 +21,9 @@ export function pruneRevisionHistory(db: Database.Database, profileId: number): 
   const limit = revisionRetentionLimit();
   const profile = db.prepare('SELECT revision FROM profiles WHERE id = ?').get(profileId) as { revision: number } | undefined;
   if (!profile) return 0;
-  const compiled = db.prepare('SELECT revision FROM compiled_configs WHERE profile_id = ?').get(profileId) as { revision: number } | undefined;
-  const shadowrocket = db.prepare('SELECT revision FROM shadowrocket_compilations WHERE profile_id = ?').get(profileId) as { revision: number | null } | undefined;
+  const protectedRevisions = [...new Set([profile.revision, ...protectedCompiledRevisions(db, profileId)])];
   return db.prepare(`DELETE FROM revisions
-    WHERE profile_id = ? AND revision NOT IN (?, ?, ?)
+    WHERE profile_id = ? AND revision NOT IN (${protectedRevisions.map(() => '?').join(', ')})
       AND revision NOT IN (SELECT revision FROM revisions WHERE profile_id = ? ORDER BY revision DESC LIMIT ?)`)
-    .run(profileId, profile.revision, compiled?.revision ?? -1, shadowrocket?.revision ?? -1, profileId, limit).changes;
+    .run(profileId, ...protectedRevisions, profileId, limit).changes;
 }

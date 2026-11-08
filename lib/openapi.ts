@@ -115,7 +115,10 @@ const paths: Record<string, object> = {
     get: operation(
       '读取 Stash 与 Shadowrocket 的交付状态、最近成功版本及链接',
       undefined,
-      { allOf: [ref('Delivery'), { type: 'object', properties: { shadowrocket: ref('ShadowrocketDelivery') } }] }
+      { allOf: [ref('Delivery'), { type: 'object', properties: {
+        shadowrocket: ref('ShadowrocketDelivery'),
+        targets: { type: 'object', additionalProperties: ref('ShadowrocketDelivery') }
+      } }] }
     )
   },
   '/api/profiles/{profileId}/config_download': {

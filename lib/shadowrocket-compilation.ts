@@ -3,6 +3,11 @@ import { encryptJson } from './crypto';
 import { compileShadowrocket, SHADOWROCKET_COMPILER_VERSION, type ShadowrocketArtifact } from './shadowrocket';
 import type { Snapshot, ValidationIssue } from './types';
 
+export function shadowrocketCompiledRevision(db: Database.Database, profileId: number) {
+  const row = db.prepare('SELECT revision FROM shadowrocket_compilations WHERE profile_id = ?').get(profileId) as { revision: number | null } | undefined;
+  return row?.revision ?? null;
+}
+
 export function refreshShadowrocketConfig(db: Database.Database, snapshot: Snapshot) {
   const { id, revision } = snapshot.profile;
   const previous = db.prepare('SELECT checked_revision, compiler_version FROM shadowrocket_compilations WHERE profile_id = ?')

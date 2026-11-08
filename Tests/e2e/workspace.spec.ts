@@ -395,6 +395,9 @@ test('viewing relationships cannot bypass the navigation guard during a rule mut
 test('Shadowrocket downloads and updates independently from Stash', async ({ page, request }) => {
   const initial = await create(request, 'shadowrocket', readFileSync('examples/DualClient.yaml', 'utf8'));
   const profileApi = `/api/profiles/${initial.profile.id}`;
+  const deliveryStatus = await (await request.get(`${profileApi}/delivery`, { headers })).json();
+  expect(deliveryStatus.targets.stash.compiledRevision).toBe(deliveryStatus.compiledRevision);
+  expect(deliveryStatus.targets.shadowrocket).toEqual(deliveryStatus.shadowrocket);
   const stale = await request.post(`${profileApi}/download-link`, { headers });
   expect(stale.status()).toBe(200);
   const stashLink: string = (await stale.json()).subscriptionUrl;
@@ -424,16 +427,16 @@ test('Shadowrocket downloads and updates independently from Stash', async ({ pag
 
   const revisionHeaders = async () => ({ ...headers, 'If-Match': `"${(await snapshot(request, initial.profile.id)).profile.revision}"` });
   const incompatible = await request.post(`${profileApi}/rules`, {
-    headers: await revisionHeaders(), data: { type: 'DST-PORT', payload: '443', policy: 'DIRECT' }
+    headers: await revisionHeaders(), data: { type: 'GEOSITE', payload: 'CN', policy: 'DIRECT' }
   });
   expect(incompatible.status()).toBe(201);
   await page.getByRole('button', { name: '刷新快照', exact: true }).click();
-  await expect(page.getByText('此分流规则的类型或匹配条件无法转换。')).toBeVisible();
+  await expect(page.getByText('GEOSITE 依赖客户端使用的域名数据版本及匹配类型。请用已核对内容的规则集替代。')).toBeVisible();
   const latestStash = await request.get(stashLink);
-  expect(await latestStash.text()).toContain('DST-PORT,443,DIRECT');
+  expect(await latestStash.text()).toContain('GEOSITE,CN,DIRECT');
   expect(await (await request.get(confLink)).text()).toBe(await conf.text());
 
-  const newRule = (await snapshot(request, initial.profile.id)).rules.find((rule) => rule.type === 'DST-PORT')!;
+  const newRule = (await snapshot(request, initial.profile.id)).rules.find((rule) => rule.type === 'GEOSITE')!;
   const repaired = await request.put(`${profileApi}/rules/${newRule.id}`, {
     headers: await revisionHeaders(), data: { type: 'DOMAIN', payload: 'new.example', policy: 'REJECT' }
   });

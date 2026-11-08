@@ -36,7 +36,8 @@ function refresh(profileId: number) {
 }
 
 function isDeliverable(row: ArtifactRow | undefined): row is ArtifactRow & { revision: number; artifact_ciphertext: string } {
-  return row?.artifact_version === SHADOWROCKET_COMPILER_VERSION &&
+  // Version 2 adds mappings without invalidating the semantics of v1 output.
+  return (row?.artifact_version === 1 || row?.artifact_version === SHADOWROCKET_COMPILER_VERSION) &&
     row.revision !== null && row.artifact_ciphertext !== null;
 }
 
@@ -91,7 +92,8 @@ export function getShadowrocketStatus(profileId: number) {
   return {
     currentRevision,
     compiledRevision,
-    current: compiledRevision === currentRevision && !issues.some((issue) => issue.severity === 'error'),
+    current: compiledRevision === currentRevision && row?.artifact_version === SHADOWROCKET_COMPILER_VERSION &&
+      !issues.some((issue) => issue.severity === 'error'),
     generatedAt: compiledRevision === null ? null : row?.created_at ?? null,
     issues,
     remoteSources,

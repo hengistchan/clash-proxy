@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { getDb } from './db';
 import { decryptJson, encryptJson } from './crypto';
-import { refreshStashConfig } from './compilation';
+import { refreshStashConfig } from './stash-compilation';
 import type { ExportResult } from './exporter';
 import { getCompilationSnapshot } from './repository';
 import { HttpError } from './http';

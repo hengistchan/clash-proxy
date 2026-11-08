@@ -1,17 +1,20 @@
 import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
+import { RE2JS } from 're2js';
 import { BUILTIN_POLICIES, isJsonObject, type JsonObject, type Snapshot, type ValidationIssue } from './types';
 import { validateSnapshot } from './validation';
 import type { RemoteResources, RemoteSource } from './shadowrocket-sources';
 
-export const SHADOWROCKET_COMPILER_VERSION = 1;
+export const SHADOWROCKET_COMPILER_VERSION = 2;
 const MAX_RULES = 50_000;
 const MAX_MEMBERS = 50_000;
+const MAX_FILTER_EVALUATIONS = 250_000;
 const MAX_CONF_BYTES = 8 * 1024 * 1024;
 const MAX_ISSUES = 100;
 const DOMAIN = /^(?=.{1,253}$)(?:[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?\.)*[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?$/i;
 const RESERVED_POLICIES = new Set([...BUILTIN_POLICIES, 'PROXY', 'REJECT-TINYGIF', 'REJECT-DICT', 'REJECT-ARRAY', 'REJECT-200', 'REJECT-IMG', 'REJECT-NO-DROP']);
-const RULE_TYPES = new Set(['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'IP-CIDR', 'IP-CIDR6', 'GEOIP']);
+const RULE_TYPES = new Set(['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'IP-CIDR', 'IP-CIDR6', 'GEOIP', 'IP-ASN', 'DST-PORT', 'SRC-PORT']);
+const NO_RESOLVE_TYPES = new Set(['IP-CIDR', 'IP-CIDR6', 'GEOIP', 'IP-ASN']);
 const CIPHERS = new Set(['aes-128-gcm', 'aes-192-gcm', 'aes-256-gcm', 'chacha20-ietf-poly1305']);
 
 export interface ShadowrocketArtifact {
@@ -57,6 +60,8 @@ function rulePayload(type: string, payload: string) {
   if (type === 'DOMAIN' || type === 'DOMAIN-SUFFIX') return DOMAIN.test(payload);
   if (type === 'DOMAIN-KEYWORD') return /^[a-z\d.-]+$/i.test(payload);
   if (type === 'GEOIP') return /^[a-z]{2}$/i.test(payload);
+  if (type === 'IP-ASN') return /^[1-9]\d{0,9}$/.test(payload) && Number(payload) <= 4_294_967_295;
+  if (type === 'DST-PORT' || type === 'SRC-PORT') return /^[1-9]\d{0,4}$/.test(payload) && Number(payload) <= 65_535;
   return cidrType(payload) === type;
 }
 
@@ -80,10 +85,19 @@ function nodeLine(node: Snapshot['proxies'][number], name: string) {
   const common = ['server', 'port'];
   if (type === 'ss') {
     const cipher = shadowsocksCipher(config.cipher);
-    if (!noExtra(config, [...common, 'cipher', 'password', 'udp']) ||
+    if (!noExtra(config, [...common, 'cipher', 'password', 'udp', 'plugin', 'plugin-opts', 'udp-over-tcp']) ||
+      (config['udp-over-tcp'] !== undefined && config['udp-over-tcp'] !== false) ||
       !cipher || !atom(password) || /\s/.test(password)) return null;
     parts.push(`encrypt-method=${cipher}`, `password=${password}`);
     if (udp !== undefined) parts.push(`udp-relay=${udp}`);
+    if (config.plugin !== undefined || config['plugin-opts'] !== undefined) {
+      const options = config['plugin-opts'];
+      if (config.plugin !== 'obfs' || !isJsonObject(options) || !noExtra(options, ['mode', 'host']) ||
+        (options.mode !== 'http' && options.mode !== 'tls') ||
+        (options.host !== undefined && (!atom(options.host) || !DOMAIN.test(options.host)))) return null;
+      parts.push(`obfs=${options.mode}`);
+      if (options.host !== undefined) parts.push(`obfs-host=${options.host}`);
+    }
   } else if (type === 'http' || type === 'socks5') {
     if (!noExtra(config, [...common, 'username', 'password']) ||
       ((username !== undefined || password !== undefined) &&
@@ -95,16 +109,29 @@ function nodeLine(node: Snapshot['proxies'][number], name: string) {
   return `${name} = ${parts.join(', ')}`;
 }
 
-function groupLine(group: Snapshot['proxyGroups'][number], name: string, resolve: (value: string) => string | undefined, remoteMembers: string[]) {
+function groupBenchmark(group: Snapshot['proxyGroups'][number], providers: JsonObject[], hasDirectMembers: boolean): JsonObject | null {
+  const config = { ...group.config };
+  if (group.type === 'select' || !providers.length) return config;
+  for (const field of ['benchmark-url', 'benchmark-timeout'] as const) {
+    const configured = config[field] ?? (field === 'benchmark-url' ? config.url : undefined);
+    const values = new Set(providers.map((provider) => provider[field] ?? configured));
+    if (hasDirectMembers || configured !== undefined) values.add(configured);
+    if (values.size > 1) return null;
+    const [value] = values;
+    if (configured === undefined && value !== undefined) config[field] = value;
+  }
+  return config;
+}
+
+function groupLine(group: Snapshot['proxyGroups'][number], name: string, policies: (string | undefined)[]) {
   const { type, config } = group;
-  if (!['select', 'url-test', 'fallback'].includes(type)) return null;
+  if (!['select', 'url-test', 'fallback', 'load-balance'].includes(type)) return null;
   const manual = type === 'select';
-  const fields = ['proxies', 'use', 'hidden', 'icon', ...(manual ? [] : ['interval', 'tolerance', 'url', 'benchmark-url', 'benchmark-timeout'])];
+  const fields = ['proxies', 'use', 'hidden', 'icon', 'filter', ...(manual ? [] : ['interval', 'tolerance', 'url', 'benchmark-url', 'benchmark-timeout', 'lazy']), ...(type === 'load-balance' ? ['strategy'] : [])];
   if (!noExtra(config, fields) || (config.use !== undefined && !Array.isArray(config.use)) ||
-    (config.hidden !== undefined && typeof config.hidden !== 'boolean')) return null;
-  const members = config.proxies ?? [];
-  if (!Array.isArray(members)) return null;
-  const policies = [...members.map((member) => typeof member === 'string' ? resolve(member) : undefined), ...remoteMembers];
+    (config.hidden !== undefined && typeof config.hidden !== 'boolean') ||
+    (config.lazy !== undefined && typeof config.lazy !== 'boolean') ||
+    (type === 'load-balance' && config.strategy !== 'consistent-hashing')) return null;
   if (!policies.length || policies.some((policy) => policy === undefined)) return null;
   const fieldsOut = [type, ...policies];
   if (config.hidden === true) fieldsOut.push('hidden=1');
@@ -132,17 +159,26 @@ function generalLines(snapshot: Snapshot, diagnose: Diagnose) {
   if (snapshot.profile.ipv6 !== null) lines.push(`ipv6 = ${snapshot.profile.ipv6}`);
   const dns = snapshot.profile.settings.dns;
   if (dns === undefined) return lines;
-  if (!isJsonObject(dns) || !noExtra(dns, ['nameserver'])) {
-    diagnose('dns', '自定义 DNS 策略无法等价转换。目前仅支持基础 nameserver。', 'dns');
+  if (!isJsonObject(dns)) {
+    diagnose('dns', 'DNS 设置必须是一个映射。', 'dns');
     return lines;
   }
-  const nameservers = dns.nameserver;
-  if (nameservers === undefined) return lines;
-  if (!Array.isArray(nameservers) || !nameservers.length || !nameservers.every((value) => atom(value) && ((isIP(value) !== 0 && !value.includes('%')) || (httpUrl(value) && value.startsWith('https://'))))) {
-    diagnose('dns.nameserver', 'DNS 服务器仅支持 IP 地址或 HTTPS DNS 地址。', 'dns');
-  } else {
-    lines.push(`dns-server = ${nameservers.join(', ')}`);
-    diagnose('dns.runtime', '已转换 DNS 服务器地址。Shadowrocket 的 DNS 解析路径由客户端决定，请在设备上验证。', 'dns', undefined, 'warning');
+  if (dns['fake-ip-range'] !== undefined || dns['fake-ip-filter'] !== undefined) {
+    diagnose('dns.fake-ip', 'Stash 的 Fake IP 地址池和过滤规则没有已验证的等价写法，不能自动转换。', 'dns');
+  }
+  if (!noExtra(dns, ['nameserver', 'proxy-server-nameserver', 'fake-ip-range', 'fake-ip-filter'])) {
+    diagnose('dns', '配置包含无法自动转换的 DNS 策略。', 'dns');
+  }
+  for (const [key, target] of [['nameserver', 'dns-server'], ['proxy-server-nameserver', 'proxy-dns-server']] as const) {
+    const nameservers = dns[key];
+    if (nameservers === undefined) continue;
+    if (!Array.isArray(nameservers) || !nameservers.length || !nameservers.every((value) => atom(value) && (
+      value === 'system' || (isIP(value) !== 0 && !value.includes('%')) || (httpUrl(value) && value.startsWith('https://'))
+    ))) diagnose('dns.nameserver', `${key} 仅支持 system、IP 地址或 HTTPS DNS 地址。`, 'dns');
+    else lines.push(`${target} = ${nameservers.join(', ')}`);
+  }
+  if (dns.nameserver !== undefined || dns['proxy-server-nameserver'] !== undefined) {
+    diagnose('dns.runtime', '已分别转换普通 DNS 和节点域名解析设置。客户端的 DNS 回退和缓存行为可能不同，请在设备上验证。', 'dns', undefined, 'warning');
   }
   return lines;
 }
@@ -153,7 +189,7 @@ function ruleSetEntry(behavior: string, entry: string, outerNoResolve: boolean) 
     const noResolve = outerNoResolve || option === 'no-resolve';
     if (!RULE_TYPES.has(type) || !rulePayload(type, payload ?? '') || extra.length ||
       (option !== undefined && option !== 'no-resolve') ||
-      (noResolve && !['IP-CIDR', 'IP-CIDR6', 'GEOIP'].includes(type))) return null;
+      (noResolve && !NO_RESOLVE_TYPES.has(type))) return null;
     return { type, payload, noResolve };
   }
   const domainSet = behavior === 'domain';
@@ -164,16 +200,17 @@ function ruleSetEntry(behavior: string, entry: string, outerNoResolve: boolean) 
   return { type, payload, noResolve: outerNoResolve };
 }
 
-// A bounded subset of Stash's source filter syntax. No repetitions or nested
-// expressions are executed on the server.
-function providerFilter(value: unknown): ((name: string) => boolean) | null {
+// Stash uses Go-style regexes. Match against original node names, before any
+// aliasing for the target format, with a non-backtracking engine.
+function nodeFilter(value: unknown): ((name: string) => boolean) | null {
   if (value === undefined || value === '') return () => true;
   if (typeof value !== 'string' || value.length > 256) return null;
-  const ignoreCase = value.startsWith('(?i)');
-  const patterns = (ignoreCase ? value.slice(4) : value).split('|');
-  if (patterns.length > 16 || !patterns.every((pattern) => /^\^?[\p{L}\p{N} _-]+\$?$/u.test(pattern))) return null;
-  const expression = new RegExp(patterns.join('|'), ignoreCase ? 'iu' : 'u');
-  return (name) => expression.test(name);
+  try {
+    const expression = RE2JS.compile(value);
+    return (name) => expression.test(name);
+  } catch {
+    return null;
+  }
 }
 
 export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources): Report {
@@ -228,74 +265,121 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
     if (line) proxies.push(line);
     else diagnose('proxy', '此节点协议或参数无法转换。首版支持基础 Shadowsocks、HTTP 和 SOCKS5 节点。', 'proxy', node.id);
   }
-  const providerNodes = new Map<number, string[]>();
+  const providerNodes = new Map<number, Map<string, string>>();
   const proxyProviders = new Map(snapshot.proxyProviders.map((provider) => [provider.name, provider]));
+  const directNames = new Set(snapshot.proxies.map((node) => node.name));
+  const filters = new Map<unknown, ReturnType<typeof nodeFilter>>();
+  function filterFor(value: unknown) {
+    if (!filters.has(value)) {
+      if (filters.size >= 128) return null;
+      filters.set(value, nodeFilter(value));
+    }
+    return filters.get(value)!;
+  }
   const groups: string[] = [];
   let remoteMemberCount = 0;
-  for (const group of snapshot.proxyGroups) {
+  let filterEvaluations = 0;
+  groupLoop: for (const group of snapshot.proxyGroups) {
     if (group.config['include-all'] === true) {
       diagnose('group.provider', '暂不支持自动纳入全部来源。请在策略组中逐个选择要使用的代理源。', 'proxy-group', group.id);
       continue;
     }
+    const groupFilter = filterFor(group.config.filter);
+    if (!groupFilter) {
+      diagnose('group.filter', '策略组筛选须使用不超过 256 字符的 RE2 正则。', 'proxy-group', group.id);
+      continue;
+    }
+    const declared = group.config.proxies ?? [];
+    if (!Array.isArray(declared)) {
+      diagnose('group', '策略组成员必须是列表。', 'proxy-group', group.id);
+      continue;
+    }
+    filterEvaluations += declared.length;
+    if (filterEvaluations > MAX_FILTER_EVALUATIONS) {
+      diagnose('group.filter-limit', '筛选的候选节点总数过多，请缩小策略组范围。', 'proxy-group', group.id);
+      break;
+    }
+    // A name filter narrows nodes, not references to nested groups or built-in actions.
+    const directMembers = declared
+      .filter((member) => typeof member !== 'string' || !directNames.has(member) || groupFilter(member))
+      .map((member) => typeof member === 'string' ? resolve(member) : undefined);
     const remoteMembers: string[] = [];
+    const benchmarks: JsonObject[] = [];
+    let unusable = false;
     for (const name of Array.isArray(group.config.use) ? new Set(group.config.use) : []) {
       const provider = typeof name === 'string' ? proxyProviders.get(name) : undefined;
-      const filter = providerFilter(provider?.config.filter);
+      const filter = filterFor(provider?.config.filter);
       if (!provider || provider.sourceType !== 'remote' ||
         (provider.config.type !== undefined && provider.config.type !== 'http') ||
-        !filter || !noExtra(provider.config, ['type', 'url', 'headers', 'interval', 'path', 'filter'])) {
-        diagnose('group.provider', '代理源须为远程 YAML 节点列表。筛选仅支持文字关键词、竖线、首尾匹配及 (?i)。', provider ? 'proxy-provider' : 'proxy-group', provider?.id ?? group.id);
+        !filter || !noExtra(provider.config, ['type', 'url', 'headers', 'interval', 'path', 'filter', 'benchmark-url', 'benchmark-timeout'])) {
+        diagnose('group.provider', '仅支持远程 YAML 节点列表和合法的 RE2 筛选。请检查代理源类型和参数。', provider ? 'proxy-provider' : 'proxy-group', provider?.id ?? group.id);
+        unusable = true;
         continue;
       }
       sources.set(`proxy-${provider.id}`, { kind: 'proxy-provider', id: provider.id, config: provider.config });
       if (!remote) {
-        // Validate group options before doing any network I/O. This placeholder cannot reach an artifact.
+        // Validate group options before I/O; this placeholder never reaches an artifact.
         remoteMembers.push('DIRECT');
+        benchmarks.push(provider.config);
         continue;
       }
-      if (!providerNodes.has(provider.id)) {
-        const members: string[] = [];
-        for (const node of remote.nodes.get(provider.id) ?? []) {
-          if (!filter(node.name)) continue;
+      const candidates = remote.nodes.get(provider.id) ?? [];
+      filterEvaluations += candidates.length;
+      if (filterEvaluations > MAX_FILTER_EVALUATIONS) {
+        diagnose('group.filter-limit', '筛选的候选节点总数过多，请缩小来源和策略组范围。', 'proxy-group', group.id);
+        break groupLoop;
+      }
+      const selected = candidates.filter((node) => filter(node.name) && groupFilter(node.name));
+      if (!selected.length) continue;
+      benchmarks.push(provider.config);
+      let emitted = providerNodes.get(provider.id);
+      if (!emitted) {
+        emitted = new Map();
+        providerNodes.set(provider.id, emitted);
+      }
+      if (remoteMembers.length + selected.length > 4_000 || remoteMemberCount + selected.length > MAX_MEMBERS) {
+        diagnose('source.member-limit', '展开的远程节点超过单组或整份配置的成员数量限制。', 'proxy-group', group.id);
+        unusable = true;
+        break;
+      }
+      remoteMemberCount += selected.length;
+      for (const node of selected) {
+        let alias = emitted.get(node.name);
+        if (!alias) {
           const label = policyName(node.name) ? node.name : '节点';
-          let alias = `来源 ${provider.id} · ${label}`;
+          alias = `来源 ${provider.id} · ${label}`;
           if (label !== node.name || reserved.has(alias.toUpperCase())) {
-            const hash = createHash('sha256').update(node.name).digest('hex').slice(0, 12);
-            alias += ` ${hash}`;
+            alias += ` ${createHash('sha256').update(node.name).digest('hex').slice(0, 12)}`;
             while (reserved.has(alias.toUpperCase())) alias += ' ·';
           }
-          reserved.add(alias.toUpperCase());
           const line = nodeLine(node, alias);
-          if (!line) {
-            diagnose('source.node', '远程代理源包含无法转换的节点协议或参数。', 'proxy-provider', provider.id);
+          if (!line || proxies.length >= 4_000) {
+            diagnose('source.node', '所选来源包含未支持的节点协议或参数，或合并节点超过 4,000。', 'proxy-provider', provider.id);
+            unusable = true;
             break;
           }
-          if (proxies.length >= 4_000) {
-            diagnose('source.node-limit', '合并后的节点数量超过 4,000。', 'proxy-provider', provider.id);
-            break;
-          }
+          reserved.add(alias.toUpperCase());
+          emitted.set(node.name, alias);
           proxies.push(line);
-          members.push(alias);
         }
-        providerNodes.set(provider.id, members);
+        remoteMembers.push(alias);
       }
-      const members = providerNodes.get(provider.id)!;
-      if (!members.length) diagnose('source.node-empty', '远程代理源没有可用节点。', 'proxy-provider', provider.id);
-      if (remoteMembers.length + members.length > 4_000) {
-        diagnose('source.member-limit', '单个策略组展开后最多支持 4,000 个远程节点。', 'proxy-group', group.id);
-        break;
-      }
-      remoteMemberCount += members.length;
-      if (remoteMemberCount > MAX_MEMBERS) {
-        diagnose('source.member-limit', '所有策略组展开后的远程成员总数超过 50,000。');
-        break;
-      }
-      remoteMembers.push(...members);
+    }
+    if (unusable) continue;
+    const config = groupBenchmark(group, benchmarks, directMembers.length > 0);
+    if (!config) {
+      diagnose('group.benchmark', '组内节点的测速地址或超时不一致，无法合并成 Shadowrocket 的组级设置。', 'proxy-group', group.id);
+      continue;
     }
     const name = names.get(group.name);
-    const line = name && groupLine(group, name, resolve, remoteMembers);
-    if (line) groups.push(line);
-    else diagnose('group', '此策略组的类型、成员或参数无法转换。首版支持非空的手动选择、自动测速和故障转移组。', 'proxy-group', group.id);
+    const line = name && groupLine({ ...group, config }, name, [...directMembers, ...remoteMembers]);
+    if (!line) {
+      diagnose('group', '此策略组的成员、类型或参数无法转换；空组不会自动改为直连。', 'proxy-group', group.id);
+      continue;
+    }
+    if (config.lazy === true) diagnose('group.lazy', '保留测速间隔，但 Shadowrocket 未验证支持按需测速；自动切换时机可能不同。', 'proxy-group', group.id, 'warning');
+    if (group.type === 'load-balance') diagnose('group.balance', '保留负载均衡与同域名节点复用；两个客户端的哈希算法可能选到不同节点。', 'proxy-group', group.id, 'warning');
+    groups.push(line);
   }
 
   const hosts: string[] = [];
@@ -314,7 +398,7 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
     const policy = resolve(rule.policy);
     const { type, payload, options } = rule;
     if (!policy || options.some((option) => option !== 'no-resolve') ||
-      (options.length > 0 && !['IP-CIDR', 'IP-CIDR6', 'GEOIP', 'RULE-SET'].includes(type))) {
+      (options.length > 0 && type !== 'RULE-SET' && !NO_RESOLVE_TYPES.has(type))) {
       diagnose('rule.policy', '此规则的策略或选项无法转换。', 'rule', rule.id);
       continue;
     }
@@ -331,7 +415,8 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
           entries = provider.entries.map((entry) => entry.value);
         } else if (provider.providerType === 'remote' &&
           (provider.config.format === undefined || provider.config.format === 'yaml' || provider.config.format === 'text') &&
-          noExtra(provider.config, ['format', 'url', 'headers', 'interval', 'path'])) {
+          (provider.config.behavior === undefined || provider.config.behavior === provider.behavior) &&
+          noExtra(provider.config, ['format', 'url', 'headers', 'interval', 'path', 'behavior'])) {
           sources.set(`rule-${provider.id}`, { kind: 'rule-provider', id: provider.id, config: provider.config });
           if (!remote) continue;
           entries = remote.rules.get(provider.id);
@@ -355,6 +440,17 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
       }
     } else if (RULE_TYPES.has(type) && rulePayload(type, payload)) {
       rules.push(`${type},${payload},${policy}${suffix}`);
+    } else if ((type === 'NETWORK' || type === 'PROTOCOL') && /^(tcp|udp)$/i.test(payload)) {
+      rules.push(`PROTOCOL,${payload.toUpperCase()},${policy}`);
+    } else if (['PROCESS-NAME', 'PROCESS-PATH'].includes(type) &&
+      ['ios', 'tvos'].includes(snapshot.profile.targetPlatform)) {
+      diagnose('rule.process-inactive', 'Stash 在当前目标平台已忽略这条进程规则；导出时同样不应用。', 'rule', rule.id, 'warning');
+    } else if (type === 'GEOSITE') {
+      diagnose('rule.geosite', 'GEOSITE 依赖客户端使用的域名数据版本及匹配类型。请用已核对内容的规则集替代。', 'rule', rule.id);
+    } else if (type === 'PROTOCOL' && payload.toUpperCase() === 'MTPROTO') {
+      diagnose('rule.mtproto', '此规则匹配 Stash 内置 MTProto 服务接收的连接，未找到 Shadowrocket 的等价规则。', 'rule', rule.id);
+    } else if (['PROCESS-NAME', 'PROCESS-PATH'].includes(type)) {
+      diagnose('rule.process', '当前目标平台可能执行进程匹配，未验证 Shadowrocket 可保留相同匹配行为。', 'rule', rule.id);
     } else {
       diagnose('rule.type', '此分流规则的类型或匹配条件无法转换。', 'rule', rule.id);
     }

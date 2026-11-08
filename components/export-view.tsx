@@ -11,17 +11,11 @@ import {
 import { useUnsavedChanges } from './unsaved-changes';
 import { ValidationIssues } from './validation-issues';
 import { Modal, StatusBadge } from './ui';
+import {
+  CONFIG_TARGETS, DEFAULT_CONFIG_TARGET, configTargetApi, configTargetIds,
+  type ConfigTarget, type ConfigDeliveryStatus, type ProfileDeliveryStatus
+} from '@/lib/config-targets';
 
-interface DeliveryStatus {
-  currentRevision: number | null;
-  compiledRevision: number | null;
-  current: boolean;
-  generatedAt: string | null;
-  subscriptionPath: string | null;
-  subscriptionUrl?: string | null;
-  issues?: ValidationIssue[];
-  remoteSources?: boolean;
-}
 export function ExportView({
   snapshot,
   validation,
@@ -37,8 +31,8 @@ export function ExportView({
   compact?: boolean;
   onFixIssue?: (issue: ValidationIssue) => void;
 }) {
-  const [status, setStatus] = useState<DeliveryStatus | null>(null);
-  const [target, setTarget] = useState<'stash' | 'shadowrocket'>('stash');
+  const [status, setStatus] = useState<ConfigDeliveryStatus | null>(null);
+  const [target, setTarget] = useState<ConfigTarget>(DEFAULT_CONFIG_TARGET);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
@@ -47,9 +41,10 @@ export function ExportView({
   const [changingLink, setChangingLink] = useState(false);
   const [pendingLinkChange, setPendingLinkChange] = useState<'rotate' | 'revoke' | null>(null);
   const actionLock = useRef(false);
-  const shadowrocket = !compact && target === 'shadowrocket';
-  const client = shadowrocket ? 'Shadowrocket' : 'Stash';
-  const targetApi = `/api/profiles/${profileId}${shadowrocket ? '/shadowrocket' : ''}`;
+  const targetConfig = CONFIG_TARGETS[target];
+  const isDefault = target === DEFAULT_CONFIG_TARGET;
+  const client = targetConfig.label;
+  const targetApi = configTargetApi(profileId, target);
   useUnsavedChanges(false, changingLink);
   useEffect(() => {
     let active = true;
@@ -57,9 +52,9 @@ export function ExportView({
     setError('');
     setNotice('');
     setOrigin(window.location.origin);
-    apiRequest<DeliveryStatus & { shadowrocket: DeliveryStatus }>(`/api/profiles/${profileId}/delivery`, { token })
+    apiRequest<ProfileDeliveryStatus>(`/api/profiles/${profileId}/delivery`, { token })
       .then((data) => {
-        if (active) setStatus(shadowrocket ? data.shadowrocket : data);
+        if (active) setStatus(data.targets?.[target] ?? (isDefault ? data : null));
       })
       .catch((caught) => {
         if (active)
@@ -70,12 +65,12 @@ export function ExportView({
     return () => {
       active = false;
     };
-  }, [profileId, snapshot.profile.revision, token, statusAttempt, shadowrocket]);
+  }, [profileId, snapshot.profile.revision, token, statusAttempt, target, isDefault]);
   async function readRemoteDiagnostics() {
-    if (!shadowrocket || !status?.remoteSources) return;
+    if (!status?.remoteSources) return;
     try {
-      const data = await apiRequest<{ shadowrocket: DeliveryStatus }>(`/api/profiles/${profileId}/delivery`, { token });
-      setStatus(data.shadowrocket);
+      const data = await apiRequest<ProfileDeliveryStatus>(`/api/profiles/${profileId}/delivery`, { token });
+      setStatus(data.targets[target]);
     } catch {
       // Keep the download result visible; the user can retry reading status.
     }
@@ -134,7 +129,7 @@ export function ExportView({
         await apiRequest(`${targetApi}/download-link`, { method: 'DELETE', token });
         if (previous) setStatus({ ...previous, subscriptionPath: null, subscriptionUrl: null });
       } else {
-        const next = await apiRequest<DeliveryStatus>(`${targetApi}/download-link`, { method: 'POST', token });
+        const next = await apiRequest<ConfigDeliveryStatus>(`${targetApi}/download-link`, { method: 'POST', token });
         setStatus(next);
       }
       setNotice(revoke ? '订阅链接已撤销。' : '新订阅链接已生成，之前的链接已失效。');
@@ -150,9 +145,9 @@ export function ExportView({
 
   const errors = validation.issues.filter((i) => i.severity === 'error');
   const missing = snapshot.proxyProviders.filter((p) => !p.sourceConfigured);
-  const compatibility = shadowrocket ? status?.issues ?? [] : [];
-  const canDownload = status?.compiledRevision != null || Boolean(shadowrocket && status?.remoteSources);
-  const sourceFailed = shadowrocket && status?.remoteSources && compatibility.some((issue) => issue.severity === 'error');
+  const compatibility = status?.issues ?? [];
+  const canDownload = status?.compiledRevision != null || Boolean(status?.remoteSources);
+  const sourceFailed = status?.remoteSources && compatibility.some((issue) => issue.severity === 'error');
   return (
     <section className="panel export-panel">
       <div className="panel-heading">
@@ -167,12 +162,12 @@ export function ExportView({
             : status?.compiledRevision
               ? `继续提供版本 ${status.compiledRevision}`
               : sourceFailed ? '远程来源检查未通过'
-                : shadowrocket && status?.remoteSources ? '等待拉取远程来源' : '等待配置完成'}
+                : status?.remoteSources ? '等待拉取远程来源' : '等待配置完成'}
         </StatusBadge>
       </div>
       {!compact ? (
         <div className="delivery-actions" role="group" aria-label="配置客户端">
-          {(['stash', 'shadowrocket'] as const).map((option) => (
+          {configTargetIds.map((option) => (
             <button
               key={option}
               className={`button small ${target === option ? 'primary' : 'secondary'}`}
@@ -184,12 +179,12 @@ export function ExportView({
                 setTarget(option);
               }}
             >
-              {option === 'stash' ? 'Stash' : 'Shadowrocket'}
+              {CONFIG_TARGETS[option].label}
             </button>
           ))}
         </div>
       ) : null}
-      {!shadowrocket && missing.length ? (
+      {isDefault && missing.length ? (
         <p className="inline-error">
           待配置来源：{missing.map((p) => p.name).join('、')}
           。请打开“代理源”填写各自的订阅地址或本地文件路径。
@@ -197,16 +192,16 @@ export function ExportView({
       ) : null}
       {status && !status.current && status.compiledRevision !== null ? (
         <p className="delivery-note">
-          {shadowrocket && status.currentRevision === status.compiledRevision
+          {status.remoteSources && status.currentRevision === status.compiledRevision
             ? '最近一次远程来源更新未通过检查。'
-            : <>最新修改（版本 {status.currentRevision}）尚未通过{shadowrocket ? ' Shadowrocket ' : ''}检查。</>}
+            : <>最新修改（版本 {status.currentRevision}）尚未通过{isDefault ? '' : ` ${client} `}检查。</>}
           下载和设备订阅仍使用最近成功的版本{' '}
           {status.compiledRevision}。
         </p>
       ) : null}
       {compatibility.length ? (
         <div className="validation-block">
-          <strong>Shadowrocket 兼容性检查</strong>
+          <strong>{client} 兼容性检查</strong>
           <ValidationIssues issues={compatibility} onFix={onFixIssue} />
         </div>
       ) : null}
@@ -217,9 +212,9 @@ export function ExportView({
           onClick={() => void download()}
         >
           <Download size={16} />
-          {shadowrocket ? (busy && status?.remoteSources ? '正在处理…' : '下载 .conf') : '下载 YAML'}
+          {busy && status?.remoteSources ? '正在处理…' : `下载 ${targetConfig.downloadLabel}`}
         </button>
-        {!shadowrocket ? <button
+        {targetConfig.bundle ? <button
           className="button secondary"
           disabled={busy || status?.compiledRevision == null}
           onClick={() => void download(true)}
@@ -238,9 +233,7 @@ export function ExportView({
       {!compact ? (
         <>
           <p className="delivery-note">
-            {shadowrocket
-              ? '在 Shadowrocket 的「配置」页导入 .conf 或添加下方的远程配置链接，然后将全局路由设为「配置」。下载文件可能含私人凭据。'
-              : 'YAML 可直接导入 Stash。ZIP 包含配置、诊断和版本清单；远程订阅仍需联网，本地资源文件需另行准备。下载文件可能含私人凭据。'}
+            {targetConfig.importGuide} 下载文件可能含私人凭据。
           </p>
           <div className="section-rule">
             <span>设备订阅链接</span>

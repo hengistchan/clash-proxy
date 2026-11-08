@@ -6,11 +6,11 @@ Shadowrocket 支持范围：
 
 | 资源 | 首版可转换 |
 | --- | --- |
-| 节点 | 基础 Shadowsocks（常用 AEAD 加密、无插件）、HTTP（无 TLS）、SOCKS5（无 TLS） |
-| 策略组 | 手动选择、自动测速、故障转移组。支持引用其他组，也支持通过 `use` 引用远程 Stash/Clash YAML 节点列表（`proxies:`）。来源筛选支持文字关键词、`|`、首尾匹配和 `(?i)`；组级筛选及自动纳入全部来源暂不支持。 |
-| 路由 | 域名、后缀、关键词、IPv4/IPv6 CIDR、GeoIP，以及 DIRECT / REJECT 和自定义策略。保留启用规则的顺序，把 MATCH 转为 FINAL。 |
+| 节点 | 基础 Shadowsocks（常用 AEAD 加密，可带 simple-obfs 的 HTTP/TLS 模式）、HTTP（无 TLS）、SOCKS5（无 TLS）。Shadowrocket .conf 的 Shadowsocks UoT 参数仍待验证。 |
+| 策略组 | 手动选择、自动测速、故障转移，以及一致性哈希负载均衡。支持引用其他组或通过 `use` 引用远程 YAML 节点列表。来源与策略组正则均按原节点名筛选，保留成员顺序。测速地址和超时一致时合并为组级设置。按需测速和实际哈希结果可能不同，下载页会提示；暂不自动纳入全部来源。 |
+| 路由 | 域名、后缀、关键词、IPv4/IPv6 CIDR、GeoIP、ASN、单端口和 TCP/UDP，以及 DIRECT / REJECT 和自定义策略。保留规则顺序，把 MATCH 转为 FINAL。明确目标是 iOS/tvOS 时，Stash 本来就不生效的进程规则会带提示省略；跨平台配置继续拦截。 |
 | 规则集 | 展开引用的内联或远程规则集，保留其位置、顺序与策略。远程支持 YAML `payload:` 或文本列表，按 `domain`、`ipcidr`、`classical` 解析。展开后最多 50,000 条规则。 |
-| 网络 | 规则模式、IPv6 开关、基础 DNS 服务器与单个域名到 IP 的 Hosts 映射。两端使用各自的 DNS 解析和 GeoIP 数据。 |
+| 网络 | 规则模式、IPv6 开关、基础 DNS、独立节点域名 DNS 与单个域名到 IP 的 Hosts 映射。Fake IP 地址池及过滤规则仍需单独处理。两端使用各自的 DNS 解析和 GeoIP 数据。 |
 
 下载 .conf、首次创建链接和设备更新时，服务读取配置中已保存且被引用的远程来源，按需发送来源配置中的认证请求头。每个配置在 60 秒内复用上次刷新结果；保存新修订后，下次下载可立即刷新。远程文件限 2 MiB，单次刷新最多 24 个来源、12 秒网络预算。服务只请求公网 HTTP(S)，校验每次跳转的地址，不向不同域名转发认证头。来源 URL 和请求头不会写入 .conf。
 
@@ -42,3 +42,5 @@ rules:
 [Stash 规则集](https://stash.wiki/en/rules/rule-set) · [Shadowrocket 客户端说明及更新记录](https://apps.apple.com/us/app/shadowrocket/id932747118)
 
 实现参考：[ios_rule_script 的 Clash GitHub.yaml](https://github.com/blackmatrix7/ios_rule_script/blob/master/rule/Clash/GitHub/GitHub.yaml)和[同一规则集的 Shadowrocket .list](https://github.com/blackmatrix7/ios_rule_script/blob/master/rule/Shadowrocket/GitHub/GitHub.list)展示了同一规则内容如何按客户端发布；[subconverter 的规则转换器](https://github.com/tindy2013/subconverter/blob/master/src/generator/config/ruleconvert.cpp)展示了按规则类型解析、添加策略及把 MATCH 映射到 FINAL 的方式。
+
+[subconverter-ng 的 Shadowrocket 导出器](https://github.com/Jungley8/subconverter-ng/blob/main/internal/generator/surge.go)同样先展开节点和规则，再为目标客户端输出。它可以跳过不支持的条目并把空组改为 DIRECT；本项目会报告差异，可能改变规则去向时保留旧产物。GEOSITE 应先用核对过版本和条目类型的规则集替换；不能用 GeoIP 或宽泛的域名后缀近似。

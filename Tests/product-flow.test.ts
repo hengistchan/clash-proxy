@@ -162,7 +162,7 @@ test('device downloads refresh declared sources, cache repeated reads and keep t
       assert.deepEqual(config.headers, { 'X-Fixture-Auth': 'test-only-marker' });
       return 'proxies: [{name: hk One, type: socks5, server: node.example, port: 1080}, {name: Ignored, type: unknown}]';
     }
-    if (config.url === secretB) return invalidRule ? 'payload: ["DST-PORT,443"]' : `payload: ["DOMAIN-SUFFIX,${rule}", "IP-CIDR,192.0.2.0/24,no-resolve"]`;
+    if (config.url === secretB) return invalidRule ? 'payload: ["GEOSITE,CN"]' : `payload: ["DOMAIN-SUFFIX,${rule}", "IP-CIDR,192.0.2.0/24,no-resolve"]`;
     if (config.url === 'https://provider.test/cidrs') return '# ipv6 example\n2001:db8::/32\n';
     throw new Error('Unreferenced source');
   };
@@ -221,6 +221,71 @@ test('a revoked device link and a superseded revision cannot publish a slow upst
   assert.equal(artifact.revision, next.profile.revision);
   assert.match(artifact.conf, /FINAL,REJECT/);
   assert.ok(!artifact.conf.includes('first.example'));
+});
+
+test('Shadowrocket preserves intersecting source and group filters, common benchmark parameters and legacy rule behavior', () => {
+  const { profile } = createProfile('Parity fixture', [
+    'dns:',
+    '  nameserver: [1.1.1.1]',
+    '  proxy-server-nameserver: [9.9.9.9]',
+    'proxy-providers:',
+    '  Source:',
+    `    url: ${secretA}`,
+    '    filter: "(?i)^(HK|US)-"',
+    '    benchmark-url: https://example.com/generate_204',
+    '    benchmark-timeout: 5',
+    'proxy-groups:',
+    '  - name: Outlet',
+    '    type: fallback',
+    '    interval: 120',
+    '    lazy: true',
+    '    filter: "^HK-(Fixed|Fast)-[0-9]+$"',
+    '    use: [Source]',
+    'rule-providers:',
+    '  legacy:',
+    '    behavior: classical',
+    '    format: text',
+    `    url: ${secretB}`,
+    'rules: ["NETWORK,UDP,Outlet", "RULE-SET,legacy,REJECT", "MATCH,DIRECT"]'
+  ].join('\n'));
+  const snapshot = getCompilationSnapshot(profile.id);
+  const source = snapshot.proxyProviders[0];
+  const rules = snapshot.ruleProviders[0];
+  rules.config.behavior = 'classical';
+  const makeNode = (name: string, port: number) => ({
+    id: port, sortOrder: port, name, type: 'socks5', config: { server: 'node.example', port }
+  });
+  const remote = {
+    nodes: new Map([[source.id, [
+      makeNode('HK-Fixed-2', 1080),
+      makeNode('HK-Fast-1', 1081),
+      makeNode('US-Fixed-1', 1082),
+      makeNode('HK-Random-1', 1083)
+    ]]]),
+    rules: new Map([[rules.id, ['DST-PORT,443', 'IP-ASN,64500,no-resolve']]])
+  };
+  assert.equal(compileShadowrocket(snapshot).sources.length, 2);
+  const report = compileShadowrocket(snapshot, remote);
+  const conf = report.artifact?.conf ?? '';
+  assert.match(conf, /^dns-server = 1\.1\.1\.1\nproxy-dns-server = 9\.9\.9\.9$/m);
+  assert.ok(conf.includes(`Outlet = fallback, 来源 ${source.id} · HK-Fixed-2, 来源 ${source.id} · HK-Fast-1, url=https://example.com/generate_204, interval=120, timeout=5`));
+  assert.doesNotMatch(conf, /US-Fixed|HK-Random/);
+  assert.match(conf, /PROTOCOL,UDP,Outlet\nDST-PORT,443,REJECT\nIP-ASN,64500,REJECT,no-resolve\nFINAL,DIRECT/);
+  assert.ok(report.issues.some((item) => item.code === 'shadowrocket.group.lazy' && item.severity === 'warning'));
+  snapshot.proxyGroups[0].config.url = 'https://different.example/generate_204';
+  const conflict = compileShadowrocket(snapshot, remote);
+  assert.equal(conflict.artifact, null);
+  assert.ok(conflict.issues.some((item) => item.code === 'shadowrocket.group.benchmark'));
+});
+
+test('Shadowrocket retains a compatible v1 artifact during an unsuccessful compiler upgrade', async () => {
+  const { profile } = createProfile('Versioned output', 'rules: ["MATCH,REJECT"]');
+  const old = await getLatestShadowrocketConfig(profile.id);
+  getDb().prepare('UPDATE shadowrocket_compilations SET compiler_version = 1, artifact_version = 1 WHERE profile_id = ?')
+    .run(profile.id);
+  importYaml(profile.id, 'rules: ["GEOSITE,CN,REJECT", "MATCH,DIRECT"]');
+  assert.equal(getShadowrocketStatus(profile.id).current, false);
+  assert.deepEqual(await getLatestShadowrocketConfig(profile.id), old);
 });
 
 test('source requests reject private, mapped, and metadata addresses before opening a socket', async () => {

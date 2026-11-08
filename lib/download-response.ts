@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { ExportResult } from './exporter';
 import type { ShadowrocketArtifact } from './shadowrocket';
+import { configTargetApi, type ConfigTarget } from './config-targets';
 import { HttpError } from './http';
 
 export function rejectLegacyParameters(request: Request) {
@@ -65,28 +66,12 @@ export function absoluteDownloadUrl(
 export function deliveryLinks<T extends { subscriptionPath: string | null }>(
   request: Request,
   profileId: number,
+  target: ConfigTarget,
   status: T
 ) {
   return {
     ...status,
-    configDownloadUrl: absoluteDownloadUrl(
-      request,
-      `/api/profiles/${profileId}/config_download`
-    ),
-    subscriptionUrl: status.subscriptionPath
-      ? absoluteDownloadUrl(request, status.subscriptionPath)
-      : null
-  };
-}
-
-export function shadowrocketDeliveryLinks<T extends { subscriptionPath: string | null }>(
-  request: Request,
-  profileId: number,
-  status: T
-) {
-  return {
-    ...status,
-    configDownloadUrl: absoluteDownloadUrl(request, `/api/profiles/${profileId}/shadowrocket/config_download`),
+    configDownloadUrl: absoluteDownloadUrl(request, `${configTargetApi(profileId, target)}/config_download`),
     subscriptionUrl: status.subscriptionPath ? absoluteDownloadUrl(request, status.subscriptionPath) : null
   };
 }
