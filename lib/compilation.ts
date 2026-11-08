@@ -1,34 +1,25 @@
 import type Database from 'better-sqlite3';
-import { decryptJson, encryptJson } from './crypto';
-import { exportProfile, type ExportResult } from './exporter';
-import { CONFIG_COMPILER_VERSION } from './artifact-semantics';
-import { HttpError } from './http';
-import type { JsonValue, Snapshot } from './types';
+import type { Snapshot } from './types';
+import { configTargetIds, type ConfigTarget } from './config-targets';
+import { refreshStashConfig, stashCompiledRevision } from './stash-compilation';
+import { refreshShadowrocketConfig, shadowrocketCompiledRevision } from './shadowrocket-compilation';
 
-// A failed draft never replaces the last successfully compiled artifact.
-export function refreshCompiledConfig(
-  db: Database.Database,
-  snapshot: Snapshot
-): void {
-  const current = db
-    .prepare('SELECT revision, artifact_ciphertext FROM compiled_configs WHERE profile_id = ?')
-    .get(snapshot.profile.id) as { revision: number; artifact_ciphertext: string } | undefined;
-  if (current && (current.revision > snapshot.profile.revision || (current.revision === snapshot.profile.revision && decryptJson<ExportResult>(current.artifact_ciphertext).compilerVersion === CONFIG_COMPILER_VERSION))) return;
-  try {
-    const artifact = exportProfile(snapshot);
-    db.prepare(
-      `INSERT INTO compiled_configs (profile_id, revision, artifact_ciphertext, created_at)
-      VALUES (?, ?, ?, ?) ON CONFLICT(profile_id) DO UPDATE SET
-      revision = excluded.revision, artifact_ciphertext = excluded.artifact_ciphertext,
-      created_at = excluded.created_at
-      WHERE excluded.revision >= compiled_configs.revision`
-    ).run(
-      snapshot.profile.id,
-      snapshot.profile.revision,
-      encryptJson(artifact as unknown as JsonValue),
-      new Date().toISOString()
-    );
-  } catch (error) {
-    if (!(error instanceof HttpError && error.status === 409)) throw error;
-  }
+interface CompileAdapter {
+  refresh(db: Database.Database, snapshot: Snapshot): void;
+  protectedRevision(db: Database.Database, profileId: number): number | null;
+}
+
+const compilers = {
+  stash: { refresh: refreshStashConfig, protectedRevision: stashCompiledRevision },
+  shadowrocket: { refresh: refreshShadowrocketConfig, protectedRevision: shadowrocketCompiledRevision }
+} satisfies Record<ConfigTarget, CompileAdapter>;
+
+/** Each adapter owns its validation and publishes only a successful artifact. */
+export function refreshCompiledConfig(db: Database.Database, snapshot: Snapshot) {
+  for (const target of configTargetIds) compilers[target].refresh(db, snapshot);
+}
+
+export function protectedCompiledRevisions(db: Database.Database, profileId: number) {
+  return configTargetIds.map((target) => compilers[target].protectedRevision(db, profileId))
+    .filter((revision): revision is number => revision !== null);
 }

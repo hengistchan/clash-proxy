@@ -1,0 +1,28 @@
+# 双客户端示例。节点地址和认证值都是占位值。
+mode: rule
+dns:
+  nameserver:
+    - 223.5.5.5
+
+proxies:
+  - name: 示例节点
+    type: socks5
+    server: 192.0.2.10
+    port: 1080
+
+proxy-groups:
+  - name: 节点选择
+    type: select
+    proxies: [示例节点, DIRECT]
+
+rule-providers:
+  example-domains:
+    type: inline
+    behavior: domain
+    payload: [blocked.example, +.ads.example]
+
+rules:
+  - DOMAIN,allow.ads.example,DIRECT
+  - RULE-SET,example-domains,REJECT
+  - DOMAIN-SUFFIX,example.org,节点选择
+  - MATCH,DIRECT

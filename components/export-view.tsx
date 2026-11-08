@@ -11,15 +11,11 @@ import {
 import { useUnsavedChanges } from './unsaved-changes';
 import { ValidationIssues } from './validation-issues';
 import { Modal, StatusBadge } from './ui';
+import {
+  CONFIG_TARGETS, DEFAULT_CONFIG_TARGET, configTargetApi, configTargetIds,
+  type ConfigTarget, type ConfigDeliveryStatus, type ProfileDeliveryStatus
+} from '@/lib/config-targets';
 
-interface DeliveryStatus {
-  currentRevision: number;
-  compiledRevision: number | null;
-  current: boolean;
-  generatedAt: string | null;
-  subscriptionPath: string | null;
-  subscriptionUrl?: string | null;
-}
 export function ExportView({
   snapshot,
   validation,
@@ -35,7 +31,8 @@ export function ExportView({
   compact?: boolean;
   onFixIssue?: (issue: ValidationIssue) => void;
 }) {
-  const [status, setStatus] = useState<DeliveryStatus | null>(null);
+  const [status, setStatus] = useState<ConfigDeliveryStatus | null>(null);
+  const [target, setTarget] = useState<ConfigTarget>(DEFAULT_CONFIG_TARGET);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
@@ -44,6 +41,10 @@ export function ExportView({
   const [changingLink, setChangingLink] = useState(false);
   const [pendingLinkChange, setPendingLinkChange] = useState<'rotate' | 'revoke' | null>(null);
   const actionLock = useRef(false);
+  const targetConfig = CONFIG_TARGETS[target];
+  const isDefault = target === DEFAULT_CONFIG_TARGET;
+  const client = targetConfig.label;
+  const targetApi = configTargetApi(profileId, target);
   useUnsavedChanges(false, changingLink);
   useEffect(() => {
     let active = true;
@@ -51,9 +52,9 @@ export function ExportView({
     setError('');
     setNotice('');
     setOrigin(window.location.origin);
-    apiRequest<DeliveryStatus>(`/api/profiles/${profileId}/delivery`, { token })
+    apiRequest<ProfileDeliveryStatus>(`/api/profiles/${profileId}/delivery`, { token })
       .then((data) => {
-        if (active) setStatus(data);
+        if (active) setStatus(data.targets?.[target] ?? (isDefault ? data : null));
       })
       .catch((caught) => {
         if (active)
@@ -64,7 +65,16 @@ export function ExportView({
     return () => {
       active = false;
     };
-  }, [profileId, snapshot.profile.revision, token, statusAttempt]);
+  }, [profileId, snapshot.profile.revision, token, statusAttempt, target, isDefault]);
+  async function readRemoteDiagnostics() {
+    if (!status?.remoteSources) return;
+    try {
+      const data = await apiRequest<ProfileDeliveryStatus>(`/api/profiles/${profileId}/delivery`, { token });
+      setStatus(data.targets[target]);
+    } catch {
+      // Keep the download result visible; the user can retry reading status.
+    }
+  }
   async function download(bundle = false) {
     if (actionLock.current) return;
     actionLock.current = true;
@@ -72,7 +82,7 @@ export function ExportView({
     setError('');
     try {
       const response = await fetch(
-        `/api/profiles/${profileId}/${bundle ? 'bundle' : 'config_download'}`,
+        `${targetApi}/${bundle ? 'bundle' : 'config_download'}`,
         {
           headers: token ? { 'X-Admin-Token': token } : {}
         }
@@ -87,6 +97,7 @@ export function ExportView({
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '下载失败');
     } finally {
+      await readRemoteDiagnostics();
       actionLock.current = false;
       setBusy(false);
     }
@@ -115,14 +126,15 @@ export function ExportView({
     setStatus(null);
     try {
       if (revoke) {
-        await apiRequest(`/api/profiles/${profileId}/download-link`, { method: 'DELETE', token });
+        await apiRequest(`${targetApi}/download-link`, { method: 'DELETE', token });
         if (previous) setStatus({ ...previous, subscriptionPath: null, subscriptionUrl: null });
       } else {
-        const next = await apiRequest<DeliveryStatus>(`/api/profiles/${profileId}/download-link`, { method: 'POST', token });
+        const next = await apiRequest<ConfigDeliveryStatus>(`${targetApi}/download-link`, { method: 'POST', token });
         setStatus(next);
       }
       setNotice(revoke ? '订阅链接已撤销。' : '新订阅链接已生成，之前的链接已失效。');
     } catch (caught) {
+      await readRemoteDiagnostics();
       setError((caught instanceof Error ? caught.message : '链接操作失败') + ' 请重新读取下载状态以确认链接。');
     } finally {
       actionLock.current = false;
@@ -133,6 +145,9 @@ export function ExportView({
 
   const errors = validation.issues.filter((i) => i.severity === 'error');
   const missing = snapshot.proxyProviders.filter((p) => !p.sourceConfigured);
+  const compatibility = status?.issues ?? [];
+  const canDownload = status?.compiledRevision != null || Boolean(status?.remoteSources);
+  const sourceFailed = status?.remoteSources && compatibility.some((issue) => issue.severity === 'error');
   return (
     <section className="panel export-panel">
       <div className="panel-heading">
@@ -146,10 +161,30 @@ export function ExportView({
             ? `版本 ${status.compiledRevision} 可用`
             : status?.compiledRevision
               ? `继续提供版本 ${status.compiledRevision}`
-              : '等待配置完成'}
+              : sourceFailed ? '远程来源检查未通过'
+                : status?.remoteSources ? '等待拉取远程来源' : '等待配置完成'}
         </StatusBadge>
       </div>
-      {missing.length ? (
+      {!compact ? (
+        <div className="delivery-actions" role="group" aria-label="配置客户端">
+          {configTargetIds.map((option) => (
+            <button
+              key={option}
+              className={`button small ${target === option ? 'primary' : 'secondary'}`}
+              aria-pressed={target === option}
+              disabled={busy || pendingLinkChange !== null}
+              onClick={() => {
+                if (target === option || actionLock.current) return;
+                setStatus(null);
+                setTarget(option);
+              }}
+            >
+              {CONFIG_TARGETS[option].label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {isDefault && missing.length ? (
         <p className="inline-error">
           待配置来源：{missing.map((p) => p.name).join('、')}
           。请打开“代理源”填写各自的订阅地址或本地文件路径。
@@ -157,27 +192,35 @@ export function ExportView({
       ) : null}
       {status && !status.current && status.compiledRevision !== null ? (
         <p className="delivery-note">
-          最新修改（版本 {status.currentRevision}
-          ）尚未通过检查。下载和设备订阅仍使用最近成功的版本{' '}
+          {status.remoteSources && status.currentRevision === status.compiledRevision
+            ? '最近一次远程来源更新未通过检查。'
+            : <>最新修改（版本 {status.currentRevision}）尚未通过{isDefault ? '' : ` ${client} `}检查。</>}
+          下载和设备订阅仍使用最近成功的版本{' '}
           {status.compiledRevision}。
         </p>
+      ) : null}
+      {compatibility.length ? (
+        <div className="validation-block">
+          <strong>{client} 兼容性检查</strong>
+          <ValidationIssues issues={compatibility} onFix={onFixIssue} />
+        </div>
       ) : null}
       <div className="delivery-actions">
         <button
           className="button primary"
-          disabled={busy || status?.compiledRevision == null}
+          disabled={busy || !canDownload}
           onClick={() => void download()}
         >
           <Download size={16} />
-          下载 YAML
+          {busy && status?.remoteSources ? '正在处理…' : `下载 ${targetConfig.downloadLabel}`}
         </button>
-        <button
+        {targetConfig.bundle ? <button
           className="button secondary"
           disabled={busy || status?.compiledRevision == null}
           onClick={() => void download(true)}
         >
           下载交付 ZIP
-        </button>
+        </button> : null}
         <a
           className="button secondary"
           href="/docs/api"
@@ -190,15 +233,13 @@ export function ExportView({
       {!compact ? (
         <>
           <p className="delivery-note">
-            YAML 可直接导入 Stash。ZIP
-            包含配置、诊断和版本清单；远程订阅仍需联网，本地资源文件需另行准备。下载文件可能含私人凭据。
+            {targetConfig.importGuide} 下载文件可能含私人凭据。
           </p>
           <div className="section-rule">
             <span>设备订阅链接</span>
           </div>
           <p className="delivery-note">
-            生成后可粘贴到
-            Stash；后续保存并检查成功的配置会自动更新。持有此链接的人可下载完整私人配置。
+            将链接添加到 {client}。客户端更新时会获取该端最近通过检查的版本。持有此链接的人可下载完整私人配置。
           </p>
           {status?.subscriptionPath ? (
             <>
@@ -228,7 +269,7 @@ export function ExportView({
                 </button>
                 <button
                   className="button secondary"
-                  disabled={busy}
+                disabled={busy || !canDownload}
                   onClick={() => requestLinkChange()}
                 >
                   <RefreshCw size={15} />
@@ -247,7 +288,7 @@ export function ExportView({
             <div className="delivery-actions">
               <button
                 className="button secondary"
-                disabled={busy || status?.compiledRevision == null}
+                disabled={busy || !canDownload}
                 onClick={() => requestLinkChange()}
               >
                 <Link2 size={15} />
@@ -257,7 +298,7 @@ export function ExportView({
           )}
           <details className="export-contract">
             <summary>开发者 API</summary>
-            <code>GET /api/profiles/{profileId}/config_download</code>
+            <code>GET {targetApi}/config_download</code>
             <p>
               管理 API
               使用管理员认证；设备使用上面的独立订阅链接。无需传入任何订阅地址参数。
@@ -279,8 +320,8 @@ export function ExportView({
         title={pendingLinkChange === 'revoke' ? '撤销固定订阅链接？' : '更换固定订阅链接？'}
         description={
           pendingLinkChange === 'revoke'
-            ? '撤销后，所有设备都无法再通过旧链接更新配置。'
-            : '更换后，旧链接立即失效，所有设备都需要重新填写新链接。'
+            ? `撤销后，使用该链接的 ${client} 设备将无法再更新配置。`
+            : `更换后，旧链接立即失效，使用该链接的 ${client} 设备需要填写新链接。`
         }
         footer={
           <>

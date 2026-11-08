@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { ExportResult } from './exporter';
+import type { ShadowrocketArtifact } from './shadowrocket';
+import { configTargetApi, type ConfigTarget } from './config-targets';
 import { HttpError } from './http';
 
 export function rejectLegacyParameters(request: Request) {
@@ -30,6 +32,20 @@ export function yamlDownload(
   });
 }
 
+export function confDownload(artifact: ShadowrocketArtifact & { revision: number }) {
+  return new Response(artifact.conf, {
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${artifact.filename}"`,
+      'Cache-Control': 'no-store',
+      'Referrer-Policy': 'no-referrer',
+      'X-Config-SHA256': artifact.sha256,
+      'X-Config-Revision': String(artifact.revision),
+      'X-Rule-Count': String(artifact.ruleCount)
+    }
+  });
+}
+
 export function absoluteDownloadUrl(
   request: Request,
   pathname: string
@@ -50,16 +66,12 @@ export function absoluteDownloadUrl(
 export function deliveryLinks<T extends { subscriptionPath: string | null }>(
   request: Request,
   profileId: number,
+  target: ConfigTarget,
   status: T
 ) {
   return {
     ...status,
-    configDownloadUrl: absoluteDownloadUrl(
-      request,
-      `/api/profiles/${profileId}/config_download`
-    ),
-    subscriptionUrl: status.subscriptionPath
-      ? absoluteDownloadUrl(request, status.subscriptionPath)
-      : null
+    configDownloadUrl: absoluteDownloadUrl(request, `${configTargetApi(profileId, target)}/config_download`),
+    subscriptionUrl: status.subscriptionPath ? absoluteDownloadUrl(request, status.subscriptionPath) : null
   };
 }

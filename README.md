@@ -3,7 +3,7 @@
 [![Offline CI](https://github.com/hengistchan/clash-proxy/actions/workflows/offline-ci.yml/badge.svg?branch=main)](https://github.com/hengistchan/clash-proxy/actions/workflows/offline-ci.yml)
 [![Security CI](https://github.com/hengistchan/clash-proxy/actions/workflows/security-ci.yml/badge.svg?branch=main)](https://github.com/hengistchan/clash-proxy/actions/workflows/security-ci.yml)
 
-一个用于创建、编辑、检查、版本化和交付 Stash 配置的 Web 管理工具。
+一个用于创建、编辑、检查和版本化代理配置的 Web 管理工具，可交付 Stash YAML 和兼容的 Shadowrocket .conf。
 
 技术栈：Next.js / React、Node.js、SQLite、Playwright。应用不依赖特定订阅品牌、
 节点名称或规则集名称；你可以从最小配置开始，也可以导入已有 YAML。
@@ -18,8 +18,10 @@
 - 用关系树展示“路由规则 → 策略组 → 节点/代理源”以及规则集、DNS、脚本引用。
 - 检查规则顺序、MATCH 终位、策略组成员、循环引用、CIDR、端口、平台兼容性等问题。
 - 保存后自动生成配置；错误草稿仍可编辑，下载继续使用最近一次成功版本。
-- 导出 YAML、交付 ZIP，或生成可撤销的设备固定订阅链接。
+- 导出 Stash YAML 和 ZIP，或在「下载配置」切换到 Shadowrocket 查看兼容性并下载 .conf。两个客户端各有可撤销的固定更新链接。
 - 提供 REST API 和机器可读 OpenAPI 文档。
+
+可以导入 [双客户端示例](examples/DualClient.yaml) 查看两种输出。示例节点使用文档占位地址。Shadowrocket 的支持范围和设备验收步骤见[双客户端交付说明](docs/shadowrocket-delivery.md)。
 
 ## 本地运行
 

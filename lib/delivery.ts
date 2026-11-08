@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { getDb } from './db';
 import { decryptJson, encryptJson } from './crypto';
-import { refreshCompiledConfig } from './compilation';
+import { refreshStashConfig } from './stash-compilation';
 import type { ExportResult } from './exporter';
 import { getCompilationSnapshot } from './repository';
 import { HttpError } from './http';
@@ -10,7 +10,7 @@ import { assertArtifactSemantics } from './artifact-semantics';
 function artifactRow(profileId: number) {
   const snapshot = getCompilationSnapshot(profileId);
   const db = getDb();
-  refreshCompiledConfig(db, snapshot);
+  refreshStashConfig(db, snapshot);
   const row = db
     .prepare('SELECT * FROM compiled_configs WHERE profile_id = ?')
     .get(profileId) as

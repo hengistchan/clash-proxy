@@ -35,6 +35,11 @@ function operation(
 }
 const object = { type: 'object', additionalProperties: true };
 const name = { type: 'string', minLength: 1, maxLength: 160 };
+const configToken = { name: 'token', in: 'path', required: true, schema: { type: 'string' } };
+const shadowrocketFile = {
+  description: 'Shadowrocket .conf 附件；X-Config-Revision 表示实际下载版本',
+  content: { 'text/plain': { schema: { type: 'string' } } }
+};
 const paths: Record<string, object> = {
   '/api/profiles': {
     get: operation('列出配置'),
@@ -108,9 +113,12 @@ const paths: Record<string, object> = {
   '/api/profiles/{profileId}/delivery': {
     parameters: [id],
     get: operation(
-      '读取最新修订、最近成功版本与完整下载链接',
+      '读取 Stash 与 Shadowrocket 的交付状态、最近成功版本及链接',
       undefined,
-      ref('Delivery')
+      { allOf: [ref('Delivery'), { type: 'object', properties: {
+        shadowrocket: ref('ShadowrocketDelivery'),
+        targets: { type: 'object', additionalProperties: ref('ShadowrocketDelivery') }
+      } }] }
     )
   },
   '/api/profiles/{profileId}/config_download': {
@@ -153,9 +161,7 @@ const paths: Record<string, object> = {
     delete: operation('撤销设备下载链接')
   },
   '/api/config_download/{token}/config.yaml': {
-    parameters: [
-      { name: 'token', in: 'path', required: true, schema: { type: 'string' } }
-    ],
+    parameters: [configToken],
     get: {
       security: [],
       summary: '通过独立下载令牌读取最近成功版本，只读；不授予管理权限',
@@ -167,6 +173,29 @@ const paths: Record<string, object> = {
         '404': { description: '链接不存在或已撤销' },
         '409': { description: '尚无成功版本' }
       }
+    }
+  },
+  '/api/profiles/{profileId}/shadowrocket/config_download': {
+    parameters: [id],
+    get: {
+      summary: '刷新已配置的远程来源并下载 Shadowrocket .conf，无查询参数',
+      responses: { '200': shadowrocketFile, ...errors }
+    }
+  },
+  '/api/profiles/{profileId}/shadowrocket/download-link': {
+    parameters: [id],
+    post: operation('首次生成 .conf 并创建链接，或轮换已有 Shadowrocket 更新链接', undefined, ref('ShadowrocketDelivery')),
+    delete: {
+      summary: '撤销 Shadowrocket 更新链接',
+      responses: { '204': { description: '已撤销' }, ...errors }
+    }
+  },
+  '/api/config_download/{token}/config.conf': {
+    parameters: [configToken],
+    get: {
+      security: [],
+      summary: '以 Shadowrocket 独立令牌刷新来源并读取 .conf；失败时保留最近成功的文件',
+      responses: { '200': shadowrocketFile, '400': errors['400'], '404': errors['404'], '409': errors['409'] }
     }
   },
   '/api/profiles/{profileId}/rules/order': {
@@ -321,6 +350,27 @@ export const openapi = {
           },
           subscriptionPath: { type: ['string', 'null'] }
         }
+      },
+      ShadowrocketDelivery: {
+        allOf: [ref('Delivery'), {
+          type: 'object',
+          properties: {
+            issues: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  severity: { enum: ['error', 'warning', 'info'] },
+                  code: { type: 'string' },
+                  message: { type: 'string' },
+                  resource: { type: 'string' },
+                  resourceId: { type: 'integer' }
+                }
+              }
+            },
+            remoteSources: { type: 'boolean', description: '下载时会尝试刷新配置引用的远程来源' }
+          }
+        }]
       },
       ProfileCreate: {
         type: 'object',

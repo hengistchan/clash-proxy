@@ -152,6 +152,31 @@ const MIGRATIONS = [
         );
       `);
     }
+  },
+  {
+    version: 4,
+    apply(db: Database.Database) {
+      db.exec(`
+        CREATE TABLE shadowrocket_compilations (
+          profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+          checked_revision INTEGER NOT NULL,
+          compiler_version INTEGER NOT NULL,
+          issues_json TEXT NOT NULL,
+          remote_sources INTEGER NOT NULL CHECK (remote_sources IN (0, 1)),
+          remote_checked_at INTEGER,
+          revision INTEGER,
+          artifact_version INTEGER,
+          artifact_ciphertext TEXT,
+          created_at TEXT
+        );
+        CREATE TABLE shadowrocket_download_links (
+          profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+          token_hash TEXT NOT NULL UNIQUE,
+          token_ciphertext TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+      `);
+    }
   }
 ] as const;
 
