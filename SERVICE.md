@@ -9,7 +9,7 @@ Next.js / React + Node.js + SQLite。用户从最小配置、导入的 YAML 或�
 3. 导入配置后会进入“关联关系”，主页与关联页以可展开的关系树展示路由 → 策略 → 节点/订阅，以及规则集、DNS 和脚本引用。树保留规则和组成员顺序，共享资源可在多个分支出现；循环引用与缺失资源明确标记。大量成员分批展开，点击资源会自动展开其所在路径。每个资源可以查看使用者、被引用对象，直接创建预选关联的策略组或规则。管理节点、策略组、规则集、路由顺序、DNS、Hosts 和扩展顶层区块。策略组可以勾选节点、其他组及 provider，并用上下移动调整出口成员顺序；标识文本编辑收进专家模式。节点、来源、策略参数、DNS 扩展和高级区块使用递归字段表单，未知字段及嵌套类型保留，JSON 源码仅在专家模式显示。
 4. 保存自动检查和生成；错误草稿仍保存，下载继续提供最近成功版本。总览显示最新修订、实际可下载版本和待配置来源。
 5. 下载 YAML 直接导入 Stash，或下载包含配置、诊断、版本清单的 ZIP。ZIP 不抓取远程资源，不是离线资源包；本地 path 指向的文件需另外准备。
-6. 在“下载配置”生成固定设备订阅链接；之后每次成功保存自动更新该链接的内容。可以轮换或撤销，链接不授予管理权限。
+6. 在“下载配置”选择 Stash 或 Shadowrocket，下载文件或生成固定更新链接。两个客户端独立检查和交付；各自的链接可轮换或撤销，不授予管理权限。Shadowrocket 的支持范围见[双客户端交付说明](docs/shadowrocket-delivery.md)。
 
 ## 本地开发
 
@@ -58,11 +58,14 @@ SQLite `user_version` 当前为 3：v2 增加规则集显示名称，v3 增加�
 | GET | `/api/profiles/:id/validate` | 检查结果，error 阻止更新下载版本，warning/info 保留说明 |
 | GET | `/api/profiles/:id/relationships` | 实际资源节点、引用边、缺失引用；不包含连接凭据 |
 | POST | `/api/profiles/:id/simulate` | 输入 host/ip/network/protocol/process/port，返回候选和不确定项 |
-| GET | `/api/profiles/:id/delivery` | currentRevision、compiledRevision、current、generatedAt、configDownloadUrl、subscriptionUrl、subscriptionPath |
+| GET | `/api/profiles/:id/delivery` | 原 Stash 字段和独立的 `shadowrocket` 状态（含兼容性检查结果） |
 | GET | `/api/profiles/:id/config_download` | 下载最近成功的完整 YAML；不接受 URL/模板参数 |
 | GET | `/api/profiles/:id/bundle` | 下载交付 ZIP |
 | POST / DELETE | `/api/profiles/:id/download-link` | 生成或轮换 / 撤销固定订阅链接 |
 | GET | `/api/config_download/:token/config.yaml` | 设备只读下载，使用独立随机令牌，包含 #SUBSCRIBED |
+| GET | `/api/profiles/:id/shadowrocket/config_download` | 管理员下载最近成功的 Shadowrocket .conf |
+| POST / DELETE | `/api/profiles/:id/shadowrocket/download-link` | 生成、轮换或撤销 Shadowrocket 固定链接 |
+| GET | `/api/config_download/:token/config.conf` | 设备按需刷新上游来源并下载 .conf，只接受 Shadowrocket 下载令牌 |
 | PUT | `/api/profiles/:id/rules/order` | 全部规则 ID 顺序，不重不漏 |
 | GET | `/api/profiles/:id/revisions?limit=50&before=120` | 历史分页，limit 1–100；返回 items、nextCursor |
 | POST | `/api/profiles/:id/revisions/:revision/restore` | 恢复并自动检查 |

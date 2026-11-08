@@ -391,3 +391,87 @@ test('viewing relationships cannot bypass the navigation guard during a rule mut
   await card.getByRole('button', { name: '查看关联', exact: true }).click();
   await expect(page.locator('.side-nav button.active')).toHaveText('关联关系');
 });
+
+test('Shadowrocket downloads and updates independently from Stash', async ({ page, request }) => {
+  const initial = await create(request, 'shadowrocket', readFileSync('examples/DualClient.yaml', 'utf8'));
+  const profileApi = `/api/profiles/${initial.profile.id}`;
+  const stale = await request.post(`${profileApi}/download-link`, { headers });
+  expect(stale.status()).toBe(200);
+  const stashLink: string = (await stale.json()).subscriptionUrl;
+  expect((await request.get(`${profileApi}/shadowrocket/config_download`)).status()).toBe(401);
+
+  await login(page, initial);
+  await navigate(page, '下载配置');
+  await page.getByRole('button', { name: 'Shadowrocket', exact: true }).click();
+  await expect(page.getByText('Shadowrocket 兼容性检查', { exact: true })).toBeVisible();
+  const downloadEvent = page.waitForEvent('download');
+  await page.getByRole('button', { name: '下载 .conf', exact: true }).click();
+  const downloaded = await downloadEvent;
+  expect(downloaded.suggestedFilename()).toMatch(/\.conf$/);
+
+  await page.getByRole('button', { name: '生成固定订阅链接', exact: true }).click();
+  const field = page.getByRole('textbox', { name: '固定配置订阅链接' });
+  await expect(field).toHaveValue(/\/config\.conf$/);
+  const confLink = await field.inputValue();
+  const conf = await request.get(confLink);
+  expect(conf.status()).toBe(200);
+  expect(conf.headers()['cache-control']).toBe('no-store');
+  expect(await conf.text()).toBe(readFileSync((await downloaded.path())!, 'utf8'));
+  expect(await conf.text()).toContain('DOMAIN,allow.ads.example,DIRECT\nDOMAIN,blocked.example,REJECT\nDOMAIN-SUFFIX,ads.example,REJECT');
+  expect((await request.get(stashLink.replace('config.yaml', 'config.conf'))).status()).toBe(404);
+  expect((await request.get(confLink.replace('config.conf', 'config.yaml'))).status()).toBe(404);
+  expect((await request.get(confLink + '?url=ignored')).status()).toBe(400);
+
+  const revisionHeaders = async () => ({ ...headers, 'If-Match': `"${(await snapshot(request, initial.profile.id)).profile.revision}"` });
+  const incompatible = await request.post(`${profileApi}/rules`, {
+    headers: await revisionHeaders(), data: { type: 'DST-PORT', payload: '443', policy: 'DIRECT' }
+  });
+  expect(incompatible.status()).toBe(201);
+  await page.getByRole('button', { name: '刷新快照', exact: true }).click();
+  await expect(page.getByText('此分流规则的类型或匹配条件无法转换。')).toBeVisible();
+  const latestStash = await request.get(stashLink);
+  expect(await latestStash.text()).toContain('DST-PORT,443,DIRECT');
+  expect(await (await request.get(confLink)).text()).toBe(await conf.text());
+
+  const newRule = (await snapshot(request, initial.profile.id)).rules.find((rule) => rule.type === 'DST-PORT')!;
+  const repaired = await request.put(`${profileApi}/rules/${newRule.id}`, {
+    headers: await revisionHeaders(), data: { type: 'DOMAIN', payload: 'new.example', policy: 'REJECT' }
+  });
+  expect(repaired.status()).toBe(200);
+  expect(await (await request.get(confLink)).text()).toContain('DOMAIN,new.example,REJECT');
+
+  await page.getByRole('button', { name: '更换链接', exact: true }).click();
+  await page.getByRole('dialog', { name: '更换固定订阅链接？' }).getByRole('button', { name: '更换', exact: true }).click();
+  await expect(field).not.toHaveValue(confLink);
+  const rotatedLink = await field.inputValue();
+  expect((await request.get(confLink)).status()).toBe(404);
+  expect((await request.get(rotatedLink)).status()).toBe(200);
+  await page.getByRole('button', { name: '撤销链接', exact: true }).click();
+  await page.getByRole('dialog', { name: '撤销固定订阅链接？' }).getByRole('button', { name: '撤销', exact: true }).click();
+  await expect(field).toBeHidden();
+  expect((await request.get(rotatedLink)).status()).toBe(404);
+  await page.getByRole('button', { name: 'Stash', exact: true }).click();
+  await expect(field).toHaveValue(stashLink);
+  expect((await request.get(stashLink)).status()).toBe(200);
+});
+
+test('Shadowrocket offers first download for remote rules and explains blocked upstream requests', async ({ page, request }) => {
+  const initial = await create(request, 'shadowrocket-source-block', [
+    'rule-providers:',
+    '  local-only:',
+    '    behavior: classical',
+    '    format: text',
+    '    url: http://127.0.0.1:3117/api/meta',
+    'rules: ["RULE-SET,local-only,REJECT", "MATCH,DIRECT"]'
+  ].join('\n'));
+  await login(page, initial);
+  await navigate(page, '下载配置');
+  await page.getByRole('button', { name: 'Shadowrocket', exact: true }).click();
+  await expect(page.getByText('等待拉取远程来源')).toBeVisible();
+  await page.getByRole('button', { name: '下载 .conf', exact: true }).click();
+  await expect(page.getByText('远程来源检查未通过')).toBeVisible();
+  await expect(page.getByText('远程来源解析到非公网地址，已阻止下载。', { exact: false })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: '固定配置订阅链接' })).toBeHidden();
+  await page.getByRole('button', { name: 'Stash', exact: true }).click();
+  await expect(page.getByRole('button', { name: '下载 YAML', exact: true })).toBeEnabled();
+});

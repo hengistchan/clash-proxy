@@ -34,6 +34,10 @@ import { cidrContains, simulateRouting } from '../lib/routing-analysis';
 import { GET as download } from '../app/api/profiles/[profileId]/config_download/route';
 import { GET as legacy } from '../app/api/route';
 import { GET as subscribe } from '../app/api/config_download/[token]/config.yaml/route';
+import { getLatestShadowrocketConfig, getShadowrocketStatus, revokeShadowrocketLink, rotateShadowrocketLink, shadowrocketConfigForToken } from '../lib/shadowrocket-delivery';
+import { compileShadowrocket } from '../lib/shadowrocket';
+import { downloadSource, isPublicSourceAddress } from '../lib/upstream-download';
+import type { SourceDownload } from '../lib/upstream-download';
 
 const temp = mkdtempSync(path.join(os.tmpdir(), 'forge-product-'));
 const secretA = 'https://provider.test/a?token=private-a';
@@ -56,6 +60,178 @@ after(() => {
 function tokenFrom(link: string) {
   return link.split('/')[3];
 }
+
+test('upgrading a version 3 database preserves the original Stash artifact and token', async () => {
+  const profile = createProfile('Upgrade dual delivery').profile;
+  const original = getLatestConfig(profile.id);
+  const stashToken = tokenFrom(rotateDownloadLink(profile.id).subscriptionPath!);
+  const db = getDb();
+  // These are the only additions from v4; retain the original application data and key.
+  db.exec('DROP TABLE shadowrocket_compilations; DROP TABLE shadowrocket_download_links; PRAGMA user_version = 3;');
+  closeDbForTests();
+  resetRepositoryForTests();
+
+  assert.equal(configForToken(stashToken).yaml, original.yaml);
+  assert.equal(getShadowrocketStatus(profile.id).compiledRevision, original.revision);
+  assert.match((await getLatestShadowrocketConfig(profile.id)).conf, /^\[Rule\]\nFINAL,DIRECT$/m);
+  assert.notEqual(tokenFrom((await rotateShadowrocketLink(profile.id)).subscriptionPath!), stashToken);
+  assert.equal(getSnapshot(profile.id).profile.revision, original.revision);
+});
+
+test('Shadowrocket blocks syntax injection without fetching upstream or leaking source values', async () => {
+  const { profile } = createProfile('Unsafe syntax', [
+    'proxies:',
+    '  - name: Node',
+    '    type: socks5',
+    '    server: host.example',
+    '    port: 1080',
+    '    username: demo',
+    '    ' + ['pass', 'word'].join('') + ': "demo,skip-cert-verify=true"',
+    'proxy-providers:',
+    '  Remote:',
+    '    type: http',
+    `    url: ${secretA}`,
+    'proxy-groups:',
+    '  - name: Proxy',
+    '    type: select',
+    '    proxies: [Node]',
+    '    use: [Remote]',
+    'rules: ["MATCH,Proxy"]'
+  ].join('\n'));
+  const shadowrocket = getShadowrocketStatus(profile.id);
+  assert.equal(getDeliveryStatus(profile.id).current, true);
+  assert.equal(shadowrocket.compiledRevision, null);
+  assert.ok(shadowrocket.issues.some(({ code }) => code === 'shadowrocket.proxy'));
+  assert.equal(shadowrocket.remoteSources, false);
+  assert.ok(!JSON.stringify(shadowrocket).includes(secretA));
+  assert.ok(!JSON.stringify(shadowrocket).includes('skip-cert-verify'));
+  let called = false;
+  await assert.rejects(rotateShadowrocketLink(profile.id, async () => { called = true; return ''; }), /尚无可用/);
+  assert.equal(called, false);
+
+  const snapshot = getCompilationSnapshot(profile.id);
+  snapshot.proxyGroups[0].config = { proxies: ['DIRECT'] };
+  snapshot.proxies = [];
+  const converted = compileShadowrocket(snapshot);
+  assert.match(converted.artifact?.conf ?? '', /^Stash Proxy = select, DIRECT$/m);
+  assert.match(converted.artifact?.conf ?? '', /^FINAL,Stash Proxy$/m);
+});
+
+const remoteProfileYaml = [
+  'proxy-providers:',
+  '  Source:',
+  `    url: ${secretA}`,
+  '    filter: "(?i)^HK|Tokyo$"',
+  '    headers: { X-Fixture-Auth: test-only-marker }',
+  'proxy-groups:',
+  '  - name: Outlet',
+  '    type: select',
+  '    proxies: [DIRECT]',
+  '    use: [Source]',
+  'rule-providers:',
+  '  remote-github:',
+  '    behavior: classical',
+  '    format: yaml',
+  `    url: ${secretB}`,
+  '  remote-cidrs:',
+  '    behavior: ipcidr',
+  '    format: text',
+  '    url: https://provider.test/cidrs',
+  '  unused:',
+  '    behavior: domain',
+  '    url: https://provider.test/unused',
+  'rules:',
+  '  - DOMAIN,exception.example,DIRECT',
+  '  - RULE-SET,remote-github,Outlet',
+  '  - RULE-SET,remote-cidrs,REJECT,no-resolve',
+  '  - MATCH,DIRECT'
+].join('\n');
+
+test('device downloads refresh declared sources, cache repeated reads and keep the whole last good file on source failure', async () => {
+  const { profile } = createProfile('Remote resources', remoteProfileYaml);
+  const status = getShadowrocketStatus(profile.id);
+  assert.equal(status.compiledRevision, null);
+  assert.equal(status.remoteSources, true);
+  assert.equal(getDeliveryStatus(profile.id).current, true);
+  const calls: string[] = [];
+  let rule = 'github.com';
+  let invalidRule = false;
+  const fetchSource: SourceDownload = async (config) => {
+    calls.push(String(config.url));
+    if (config.url === secretA) {
+      assert.deepEqual(config.headers, { 'X-Fixture-Auth': 'test-only-marker' });
+      return 'proxies: [{name: hk One, type: socks5, server: node.example, port: 1080}, {name: Ignored, type: unknown}]';
+    }
+    if (config.url === secretB) return invalidRule ? 'payload: ["DST-PORT,443"]' : `payload: ["DOMAIN-SUFFIX,${rule}", "IP-CIDR,192.0.2.0/24,no-resolve"]`;
+    if (config.url === 'https://provider.test/cidrs') return '# ipv6 example\n2001:db8::/32\n';
+    throw new Error('Unreferenced source');
+  };
+  const token = tokenFrom((await rotateShadowrocketLink(profile.id, fetchSource)).subscriptionPath!);
+  const initial = await shadowrocketConfigForToken(token, fetchSource);
+  assert.deepEqual(new Set(calls), new Set([secretA, secretB, 'https://provider.test/cidrs']));
+  assert.equal(calls.length, 3);
+  assert.match(initial.conf, /Outlet = select, DIRECT, 来源 \d+ · hk One/);
+  assert.match(initial.conf, /DOMAIN,exception.example,DIRECT\nDOMAIN-SUFFIX,github.com,Outlet\nIP-CIDR,192.0.2.0\/24,Outlet,no-resolve\nIP-CIDR6,2001:db8::\/32,REJECT,no-resolve\nFINAL,DIRECT/);
+  assert.ok(!initial.conf.includes(secretA) && !initial.conf.includes(secretB) && !initial.conf.includes('test-only-marker'));
+  const expire = () => getDb().prepare('UPDATE shadowrocket_compilations SET remote_checked_at = 0 WHERE profile_id = ?').run(profile.id);
+  expire();
+  rule = 'github.dev';
+  const [updated, duplicate] = await Promise.all([
+    shadowrocketConfigForToken(token, fetchSource),
+    shadowrocketConfigForToken(token, fetchSource)
+  ]);
+  assert.equal(calls.length, 6);
+  assert.deepEqual(updated, duplicate);
+  assert.notEqual(updated.sha256, initial.sha256);
+  assert.equal(updated.revision, initial.revision);
+  assert.match(updated.conf, /DOMAIN-SUFFIX,github.dev,Outlet/);
+
+  expire();
+  invalidRule = true;
+  assert.deepEqual(await shadowrocketConfigForToken(token, fetchSource), updated);
+  assert.equal(getShadowrocketStatus(profile.id).current, false);
+  assert.ok(getShadowrocketStatus(profile.id).issues.some(({ code }) => code === 'shadowrocket.rule.provider-entry'));
+  expire();
+  const badFetch = async () => { throw new Error(secretA); };
+  assert.deepEqual(await shadowrocketConfigForToken(token, badFetch), updated);
+  assert.ok(getShadowrocketStatus(profile.id).issues.some(({ code }) => code === 'shadowrocket.source.fetch'));
+  assert.ok(!JSON.stringify(getShadowrocketStatus(profile.id)).includes(secretA));
+});
+
+test('a revoked device link and a superseded revision cannot publish a slow upstream result', async () => {
+  const { profile } = createProfile('Superseded upstream', remoteProfileYaml);
+  const fetchSource: SourceDownload = async (config) => {
+    if (config.url === secretA) return 'proxies: [{name: HK, type: http, server: node.example, port: 1080}]';
+    if (config.url === secretB) return 'payload: ["DOMAIN,first.example"]';
+    return '198.51.100.0/24';
+  };
+  const token = tokenFrom((await rotateShadowrocketLink(profile.id, fetchSource)).subscriptionPath!);
+  getDb().prepare('UPDATE shadowrocket_compilations SET remote_checked_at = 0 WHERE profile_id = ?').run(profile.id);
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const slowDownload = shadowrocketConfigForToken(token, async (config, signal) => {
+    await blocked;
+    return fetchSource(config, signal);
+  });
+  revokeShadowrocketLink(profile.id);
+  const next = importYaml(profile.id, 'rules: ["MATCH,REJECT"]');
+  release();
+  await assert.rejects(slowDownload, /not found/);
+  const artifact = await getLatestShadowrocketConfig(profile.id);
+  assert.equal(artifact.revision, next.profile.revision);
+  assert.match(artifact.conf, /FINAL,REJECT/);
+  assert.ok(!artifact.conf.includes('first.example'));
+});
+
+test('source requests reject private, mapped, and metadata addresses before opening a socket', async () => {
+  for (const address of ['127.0.0.1', '10.0.0.5', '100.100.100.200', '169.254.169.254', '::1', '::ffff:127.0.0.1', 'fd00::1', 'fe80::1']) {
+    assert.equal(isPublicSourceAddress(address), false, address);
+    const host = address.includes(':') ? `[${address}]` : address;
+    await assert.rejects(downloadSource({ url: `http://${host}/fixture` }, AbortSignal.timeout(1_000)), /Private source address/);
+  }
+  for (const address of ['1.1.1.1', '2606:4700:4700::1111']) assert.equal(isPublicSourceAddress(address), true, address);
+  await assert.rejects(downloadSource({ url: 'http://localhost/fixture' }, AbortSignal.timeout(1_000)), /Private source address/);
+});
 
 test('fresh installations and new configurations start without mandatory demo resources', () => {
   const p = getActiveProfile(),
@@ -334,7 +510,7 @@ test('platform-aware rules and direct-only configurations do not require demo gr
   assert.equal(getDeliveryStatus(p.id).current, true);
   assert.equal(simulateRouting(getSnapshot(p.id), {}).mode, 'direct');
   assert.equal(getCompilationSnapshot(p.id).profile.targetPlatform, 'ios');
-  assert.equal(getDb().pragma('user_version', { simple: true }), 3);
+  assert.equal(getDb().pragma('user_version', { simple: true }), 4);
 });
 
 test('supported HTTP and URL authentication sources are preserved while warnings stay redacted', () => {

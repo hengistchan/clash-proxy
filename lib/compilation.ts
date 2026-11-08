@@ -4,9 +4,18 @@ import { exportProfile, type ExportResult } from './exporter';
 import { CONFIG_COMPILER_VERSION } from './artifact-semantics';
 import { HttpError } from './http';
 import type { JsonValue, Snapshot } from './types';
+import { refreshShadowrocketConfig } from './shadowrocket-compilation';
 
 // A failed draft never replaces the last successfully compiled artifact.
 export function refreshCompiledConfig(
+  db: Database.Database,
+  snapshot: Snapshot
+): void {
+  refreshStashConfig(db, snapshot);
+  refreshShadowrocketConfig(db, snapshot);
+}
+
+export function refreshStashConfig(
   db: Database.Database,
   snapshot: Snapshot
 ): void {

@@ -12,6 +12,7 @@ services:
       STASH_KEY_PATH: /data/stash-config.sqlite3.key
       STASH_ADMIN_TOKEN: "${STASH_ADMIN_TOKEN:?Set STASH_ADMIN_TOKEN before starting the service}"
       STASH_PUBLIC_BASE_URL: "${STASH_PUBLIC_BASE_URL:-}"
+      STASH_UPSTREAM_DOH_URL: "${STASH_UPSTREAM_DOH_URL:-}"
       STASH_SECRET_KEY: "${STASH_SECRET_KEY:-}"
     restart: unless-stopped
     init: true

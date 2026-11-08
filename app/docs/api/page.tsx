@@ -65,6 +65,12 @@ curl -f -H "Authorization: Bearer $ADMIN_TOKEN" \\
         反向代理部署可通过 STASH_PUBLIC_BASE_URL 指定对外服务地址，确保链接和
         #SUBSCRIBED 使用正确的外部域名。
       </p>
+      <p>
+        <strong>Shadowrocket：</strong>在同一个 Profile 下使用
+        /shadowrocket/config_download 下载 .conf，使用 /shadowrocket/download-link
+        创建、更换或撤销远程配置链接。/delivery 的 shadowrocket 字段包含独立的版本、链接及兼容性检查结果。
+        将链接添加到 Shadowrocket 的「配置」页。更新时服务会拉取已保存的远程来源；若转换失败，会继续交付最近成功的版本。
+      </p>
       <h2>保存、错误与旧版本</h2>
       <p>
         资源保存成功表示草稿已持久化，不等同于所有检查通过。/delivery 返回
