@@ -21,7 +21,9 @@ export function pruneRevisionHistory(db: Database.Database, profileId: number): 
   const limit = revisionRetentionLimit();
   const profile = db.prepare('SELECT revision FROM profiles WHERE id = ?').get(profileId) as { revision: number } | undefined;
   if (!profile) return 0;
-  const protectedRevisions = [...new Set([profile.revision, ...protectedCompiledRevisions(db, profileId)])];
+  const published = db.prepare('SELECT DISTINCT revision FROM target_publications WHERE profile_id = ?')
+    .all(profileId) as Array<{ revision: number }>;
+  const protectedRevisions = [...new Set([profile.revision, ...protectedCompiledRevisions(db, profileId), ...published.map(row => row.revision)])];
   return db.prepare(`DELETE FROM revisions
     WHERE profile_id = ? AND revision NOT IN (${protectedRevisions.map(() => '?').join(', ')})
       AND revision NOT IN (SELECT revision FROM revisions WHERE profile_id = ? ORDER BY revision DESC LIMIT ?)`)

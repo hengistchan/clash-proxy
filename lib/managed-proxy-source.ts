@@ -1,31 +1,26 @@
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { parseDocument } from 'yaml';
-import { decryptJson, encryptJson, getEncryptionKey } from './crypto';
+import { decryptJson, encryptJson } from './crypto';
 import { getDb } from './db';
-import { ensureDownloadToken, readDownloadToken, readPersistedStashArtifact } from './delivery';
+import { managedSources, servedStashRecord } from './target-publication-store';
+import { sourceFingerprints } from './managed-source-health';
 import { absoluteDownloadUrl } from './download-response';
 import type { ExportResult } from './exporter';
+import { sourceCapability, verifySourceCapability } from './managed-source-access';
 import { HttpError } from './http';
 import { transformProxySource } from './proxy-source-transform';
 import { downloadSource, type SourceDownload } from './upstream-download';
 
 const RETRY_MS = 60_000;
 const MAX_BYTES = 8 * 1024 * 1024;
-const hash = (value: unknown) => createHmac('sha256', getEncryptionKey())
-  .update('managed-proxy-source-cache:').update(JSON.stringify(value)).digest('hex');
-function signature(token: string, profileId: number, providerId: number) {
-  return createHmac('sha256', token).update(`stash-proxy-source:${profileId}:${providerId}`).digest();
-}
-
-export function materializeStashArtifact<T extends ExportResult>(artifact: T, request: Request, token?: string): T {
+export function materializeStashArtifact<T extends ExportResult>(artifact: T, request: Request): T {
   const rewrites = artifact.proxyRewrites;
   if (!rewrites) return artifact;
-  // Validate the service origin before issuing a new link.
   const origin = absoluteDownloadUrl(request, '/');
-  const key = token ?? ensureDownloadToken(rewrites.profileId);
+  const db = getDb();
   const document = parseDocument(artifact.yaml);
   for (const source of rewrites.sources) {
-    const capability = `${rewrites.profileId}.${source.id}.${signature(key, rewrites.profileId, source.id).toString('hex')}`;
+    const capability = sourceCapability(db, rewrites.profileId, source.id);
     document.setIn(['proxy-providers', source.name, 'url'], new URL(`/api/proxy-source/${capability}/proxies.yaml`, origin).href);
   }
   const yaml = document.toString({ lineWidth: 0 });
@@ -34,15 +29,9 @@ export function materializeStashArtifact<T extends ExportResult>(artifact: T, re
 }
 
 function resolveSource(capability: string) {
-  const match = /^([1-9]\d{0,15})\.([1-9]\d{0,15})\.([a-f0-9]{64})$/.exec(capability);
-  const missing = () => new HttpError(404, 'Proxy source link not found');
-  if (!match) throw missing();
-  const profileId = Number(match[1]), providerId = Number(match[2]);
-  if (!Number.isSafeInteger(profileId) || !Number.isSafeInteger(providerId)) throw missing();
-  const token = readDownloadToken(profileId);
-  if (!token || !timingSafeEqual(signature(token, profileId, providerId), Buffer.from(match[3], 'hex'))) throw missing();
-  const source = readPersistedStashArtifact(profileId).proxyRewrites?.sources.find((item) => item.id === providerId);
-  if (!source) throw missing();
+  const { profileId, providerId } = verifySourceCapability(getDb(), capability);
+  const source = managedSources(servedStashRecord(getDb(), profileId)).find((item) => item.id === providerId);
+  if (!source) throw new HttpError(404, 'Proxy source link not found');
   return { profileId, providerId, source };
 }
 
@@ -59,14 +48,13 @@ const inFlight = new Map<string, Promise<void>>();
 
 export async function managedProxySource(capability: string, fetchSource: SourceDownload = downloadSource, now = Date.now) {
   const { profileId, providerId, source } = resolveSource(capability);
-  const sourceKey = hash(source.upstream);
-  const specKey = hash([sourceKey, source.rules]);
+  const { sourceKey, specKey } = sourceFingerprints(source);
   const db = getDb();
   const read = () => db.prepare('SELECT * FROM managed_proxy_source_cache WHERE profile_id = ? AND provider_id = ?')
     .get(profileId, providerId) as CacheRow | undefined;
   const current = () => {
     const { source: latest } = resolveSource(capability);
-    return hash([hash(latest.upstream), latest.rules]) === specKey;
+    return sourceFingerprints(latest).specKey === specKey;
   };
   const row = read();
   let deferred = false;

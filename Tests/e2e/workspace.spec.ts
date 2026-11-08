@@ -1,6 +1,8 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { Snapshot } from '../../lib/types';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { parse } from 'yaml';
 
 const testToken = ['browser', 'test', 'admin'].join('-');
 const headers = { 'X-Admin-Token': testToken };
@@ -83,8 +85,8 @@ test('new YAML profiles validate before creation and valid imports open their re
   await page.getByRole('option', { name: '导入已有配置', exact: true }).click();
   await expect(dialog.getByRole('button', { name: '创建配置', exact: true })).toBeDisabled();
   await dialog.getByLabel('完整配置').fill('proxies: invalid\nrules: ["MATCH,DIRECT"]');
-  await dialog.getByRole('button', { name: '创建配置', exact: true }).click();
-  await expect(page.locator('.toast[role=alert]')).toContainText(/proxies/);
+  await expect(dialog.getByRole('alert')).toContainText(/proxies/);
+  await expect(dialog.getByRole('button', { name: '创建配置', exact: true })).toBeDisabled();
   await expect(dialog).toBeVisible();
   const profiles = await (await request.get('/api/profiles', { headers })).json();
   expect(profiles.items.some((item: { name: string }) => item.name === profileName)).toBeFalsy();
@@ -471,6 +473,10 @@ test('Shadowrocket offers first download for remote rules and explains blocked u
   await navigate(page, '下载配置');
   await page.getByRole('button', { name: 'Shadowrocket', exact: true }).click();
   await expect(page.getByText('等待拉取远程来源')).toBeVisible();
+  await expect(page.getByRole('button', { name: '预览导出配置', exact: true })).toBeDisabled();
+  const root = `/api/profiles/${initial.profile.id}/delivery`;
+  expect((await request.get(root + '/shadowrocket/preview', { headers })).status()).toBe(409);
+  expect((await (await request.get(root, { headers })).json()).targets.shadowrocket.remoteCheckedAt).toBeNull();
   await page.getByRole('button', { name: '下载 .conf', exact: true }).click();
   await expect(page.getByText('远程来源检查未通过')).toBeVisible();
   await expect(page.getByText('远程来源解析到非公网地址，已阻止下载。', { exact: false })).toBeVisible();
@@ -541,7 +547,201 @@ test('edits remote proxy rewrites, previews the draft, and downloads a managed S
   const download = page.waitForEvent('download');
   await page.getByRole('button', { name: '下载 YAML', exact: true }).click();
   const content = readFileSync((await (await download).path())!, 'utf8');
-  expect(content).toMatch(/\/api\/proxy-source\/\d+\.\d+\.[a-f0-9]{64}\/proxies.yaml/);
+  expect(content).toMatch(/\/api\/proxy-source\/m1\.\d+\.\d+\.[a-f0-9]{64}\/proxies.yaml/);
   expect(content).not.toContain('private-rewrite-fixture');
-  await expect(page.getByLabel('固定配置订阅链接')).toBeVisible();
+  await expect(page.getByLabel('固定配置订阅链接')).toBeHidden();
+});
+
+test('managed YAML import, history restore and independent link revocation preserve device access boundaries', async ({ page, request }) => {
+  const initial = await create(request, 'managed-lifecycle-browser');
+  const root = `/api/profiles/${initial.profile.id}`;
+  const add = await request.post(root + '/proxy-providers', {
+    headers: { ...headers, 'If-Match': `"${initial.profile.revision}"` },
+    data: {
+      name: 'managed-fixture', sourceUrl: 'http://127.0.0.1:3117/api/meta', config: { type: 'http' },
+      rewriteRules: [{ matchName: 'fixture', field: 'udp', operation: 'fill', value: true }]
+    }
+  });
+  expect(add.status()).toBe(201);
+  const before = await snapshot(request, initial.profile.id);
+  await login(page, before);
+  await navigate(page, '下载配置');
+  async function download() {
+    const event = page.waitForEvent('download');
+    await page.getByRole('button', { name: '下载 YAML', exact: true }).click();
+    return readFileSync((await (await event).path())!, 'utf8');
+  }
+  const original = await download();
+  const sourceUrl = (text: string) => parse(text)['proxy-providers']['managed-fixture'].url as string;
+  const oldSource = sourceUrl(original);
+  // The isolated fixture points at loopback, which upstream access rejects.
+  // 502 means the signed link still resolves; a revoked or detached link is 404.
+  expect((await request.get(oldSource)).status()).toBe(502);
+  await expect(page.getByRole('textbox', { name: '固定配置订阅链接' })).toBeHidden();
+  await page.getByRole('button', { name: '生成固定订阅链接', exact: true }).click();
+  const field = page.getByRole('textbox', { name: '固定配置订阅链接' });
+  await expect(field).toBeVisible();
+  const subscription = await field.inputValue();
+  await page.getByRole('button', { name: '撤销链接', exact: true }).click();
+  await page.getByRole('dialog', { name: '撤销固定订阅链接？' }).getByRole('button', { name: '撤销', exact: true }).click();
+  await expect(field).toBeHidden();
+  expect((await request.get(subscription)).status()).toBe(404);
+  expect(sourceUrl(await download())).toBe(oldSource);
+  expect((await (await request.get(root + '/delivery', { headers })).json()).targets.stash.subscriptionPath).toBeNull();
+
+  await page.getByRole('button', { name: '导入配置文件', exact: true }).click();
+  const replace = page.getByRole('dialog', { name: '导入并替换当前 Profile' });
+  await replace.getByRole('textbox').fill(original);
+  await replace.getByRole('button', { name: '导入为新配置', exact: true }).click();
+  const clone = page.getByRole('dialog', { name: '新建配置' });
+  await clone.getByLabel('配置名称').fill(name('blocked-clone'));
+  await expect(clone.getByRole('alert')).toContainText('无法还原的工作台代理源链接');
+  await expect(clone.getByRole('button', { name: '创建配置', exact: true })).toBeDisabled();
+  await clone.getByRole('button', { name: '改为替换当前配置', exact: true }).click();
+  await replace.getByRole('button', { name: '预览导入变化', exact: true }).click();
+  await expect(replace.getByLabel('导入后的客户端检查')).toContainText('远程来源待检查');
+  await replace.getByRole('button', { name: '导入完整配置', exact: true }).click();
+  await expect(replace).toBeHidden();
+  expect((await snapshot(request, initial.profile.id)).proxyProviders[0].id).toBe(before.proxyProviders[0].id);
+  await navigate(page, '版本');
+  await page.locator('.timeline-item').filter({ hasText: `REV ${String(before.profile.revision).padStart(3, '0')}` })
+    .getByRole('button', { name: '查看变化', exact: true }).click();
+  await page.getByRole('button', { name: '确认恢复', exact: true }).click();
+  await expect(page.getByRole('button', { name: '确认恢复', exact: true })).toBeHidden();
+  expect((await request.get(oldSource)).status()).toBe(502);
+  await navigate(page, '下载配置');
+  await page.getByRole('button', { name: '更换代理源链接', exact: true }).click();
+  await page.getByRole('button', { name: '确认更换', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '更换代理源链接？' })).toBeHidden();
+  expect((await request.get(oldSource)).status()).toBe(404);
+  const replacement = sourceUrl(await download());
+  expect(replacement).not.toBe(oldSource);
+  expect((await request.get(replacement)).status()).toBe(502);
+  await page.getByRole('button', { name: '撤销代理源链接', exact: true }).click();
+  await page.getByRole('button', { name: '确认撤销', exact: true }).click();
+  await expect(page.getByText('链接已撤销', { exact: false }).last()).toBeVisible();
+  expect((await request.get(replacement)).status()).toBe(404);
+  const whileRevoked = sourceUrl(await download());
+  expect((await request.get(whileRevoked)).status()).toBe(404);
+  await page.getByRole('button', { name: '重新启用代理源链接', exact: true }).click();
+  await page.getByRole('button', { name: '确认启用', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '重新启用代理源链接？' })).toBeHidden();
+  expect((await request.get(whileRevoked)).status()).toBe(404);
+  expect((await request.get(sourceUrl(await download()))).status()).toBe(502);
+});
+
+test('manual Stash publication and rollback leave Shadowrocket and the saved draft independent', async ({ page, request }) => {
+  const initial = await create(request, 'independent-publication');
+  const root = `/api/profiles/${initial.profile.id}`;
+  const stashLink: string = (await (await request.post(root + '/download-link', { headers })).json()).subscriptionUrl;
+  const shadowLink: string = (await (await request.post(root + '/shadowrocket/download-link', { headers })).json()).subscriptionUrl;
+  const servedRevision = async (url: string) => Number((await request.get(url)).headers()['x-config-revision']);
+  await login(page, initial);
+  const overview = page.getByLabel('设备交付状态');
+  await expect(overview.locator('article').filter({ hasText: 'Stash' })).toContainText(`设备可下载版 ${initial.profile.revision}`);
+  await expect(overview.locator('article').filter({ hasText: 'Shadowrocket' })).toContainText(`设备可下载版 ${initial.profile.revision}`);
+  await overview.locator('article').filter({ hasText: 'Stash' }).getByRole('button', { name: '打开下载' }).click();
+  const confirm = async (button: string, dialog: string) => {
+    await page.getByRole('button', { name: button, exact: true }).click();
+    const modal = page.getByRole('dialog', { name: dialog, exact: true });
+    await modal.getByRole('button', { name: '确认', exact: true }).click();
+    await expect(modal).toBeHidden();
+  };
+  await confirm('启用手动发布', '启用手动发布？');
+  const publishPath = root + '/delivery/stash/publication';
+  const staleCommand = { action: 'manual', expectedMode: 'auto', expectedPublicationId: null };
+  expect((await request.post(publishPath, { data: staleCommand })).status()).toBe(401);
+  expect((await request.post(publishPath, { headers, data: staleCommand })).status()).toBe(428);
+  expect((await request.post(publishPath, {
+    headers: { ...headers, 'If-Match': `"${initial.profile.revision}"` }, data: staleCommand
+  })).status()).toBe(409);
+
+  const added = await request.post(root + '/rules', { headers: { ...headers, 'If-Match': `"${initial.profile.revision}"` },
+    data: { type: 'DOMAIN', payload: 'publish-fixture.test', policy: 'REJECT' } });
+  expect(added.status()).toBe(201);
+  const updated = (await snapshot(request, initial.profile.id)).profile.revision;
+  await page.getByRole('button', { name: '刷新快照', exact: true }).click();
+  await expect(page.getByText(`当前编辑版 ${updated} 尚未发布到 Stash。`)).toBeVisible();
+  expect(await servedRevision(stashLink)).toBe(initial.profile.revision);
+  expect(await servedRevision(shadowLink)).toBe(updated);
+
+  await confirm('发布当前编辑版', '发布当前编辑版？');
+  expect(await servedRevision(stashLink)).toBe(updated);
+  const downloaded = page.waitForEvent('download');
+  await page.getByRole('button', { name: '下载 YAML', exact: true }).click();
+  await downloaded;
+  await expect(page.getByRole('status').filter({ hasText: `已下载 Stash 版本 ${updated}` })).toBeVisible();
+  await page.getByText('查看已发布版本', { exact: true }).click();
+  await confirm(`回退到版本 ${initial.profile.revision}`, '回退设备版本？');
+  expect(await servedRevision(stashLink)).toBe(initial.profile.revision);
+  expect(await servedRevision(shadowLink)).toBe(updated);
+  expect((await snapshot(request, initial.profile.id)).profile.revision).toBe(updated);
+  await confirm('恢复自动发布', '恢复自动发布？');
+  expect(await servedRevision(stashLink)).toBe(updated);
+});
+
+test('Monaco previews the served file lazily and downloads the exact preview across targets', async ({ page, request }) => {
+  const initial = await create(request, 'artifact-preview', 'rules: ["DOMAIN,preview-only.test,REJECT", "MATCH,DIRECT"]');
+  const profileId = initial.profile.id;
+  const root = `/api/profiles/${profileId}`;
+  const previewPath = (target: string) => `${root}/delivery/${target}/preview`;
+  expect((await request.get(previewPath('stash'))).status()).toBe(401);
+  const seen: string[] = [];
+  const editorFailures: string[] = [];
+  page.on('request', req => { if (new URL(req.url()).pathname.endsWith('/preview')) seen.push(req.url()); });
+  page.on('console', message => {
+    const text = message.text();
+    if (/could not create web worker|violates the following content security policy/i.test(text)) editorFailures.push(text);
+  });
+  await login(page, initial);
+  await navigate(page, '下载配置');
+  const toggle = page.getByRole('button', { name: '预览导出配置', exact: true });
+  await expect(toggle).toBeEnabled();
+  expect(seen).toHaveLength(0);
+  const previewLoaded = page.waitForResponse(response => response.url().endsWith(previewPath('stash')));
+  await toggle.click();
+  const response = await previewLoaded;
+  expect(response.headers()['cache-control']).toBe('no-store');
+  expect(response.headers()['x-config-revision']).toBe(String(initial.profile.revision));
+  const panel = page.getByLabel('导出配置预览', { exact: true });
+  await expect(panel).toContainText(`版本 ${initial.profile.revision}`);
+  await expect(panel.locator('.monaco-editor .view-lines')).toContainText('preview-only.test');
+  await expect(panel.locator('.monaco-editor textarea')).toHaveJSProperty('readOnly', true);
+  await panel.getByRole('button', { name: '搜索配置', exact: true }).click();
+  const find = panel.locator('.find-widget');
+  await expect(find).toBeVisible();
+  await find.getByRole('textbox').first().fill('preview-only.test');
+  await expect(find).toContainText('1 of 1');
+  const download = page.waitForEvent('download');
+  await panel.getByRole('button', { name: '下载此预览', exact: true }).click();
+  const downloaded = readFileSync((await (await download).path())!);
+  expect(createHash('sha256').update(downloaded).digest('hex')).toBe(response.headers()['x-config-sha256']);
+  const ordinary = await request.get(root + '/config_download', { headers });
+  expect(await ordinary.body()).toEqual(downloaded);
+
+  await page.getByRole('button', { name: 'Shadowrocket', exact: true }).click();
+  await expect(panel.getByRole('heading')).toHaveText('Shadowrocket 导出配置预览');
+  await expect(panel.locator('.monaco-editor .view-lines')).toContainText('FINAL,DIRECT');
+  await page.getByRole('button', { name: '关闭预览', exact: true }).click();
+  await expect(panel).toHaveCount(0);
+  expect(seen).toHaveLength(2);
+  expect(editorFailures).toEqual([]);
+});
+
+test('touch browsers can read and download a configuration preview at phone width', async ({ browser, request }) => {
+  const initial = await create(request, 'touch-preview');
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  try {
+    const page = await context.newPage();
+    await login(page, initial);
+    await page.locator('.mobile-nav').getByRole('button', { name: '交付', exact: true }).click();
+    await page.getByRole('button', { name: '预览导出配置', exact: true }).click();
+    const plain = page.getByRole('textbox', { name: '导出配置内容（只读）' });
+    await expect(plain).toHaveValue(/MATCH,DIRECT/);
+    await expect(plain).toHaveAttribute('readonly', '');
+    await expect(page.getByRole('button', { name: '下载此预览', exact: true })).toBeEnabled();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+  } finally {
+    await context.close();
+  }
 });

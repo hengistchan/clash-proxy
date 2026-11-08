@@ -5,17 +5,16 @@ import { refreshStashConfig } from './stash-compilation';
 import { stashTargetIssues, type ExportResult } from './exporter';
 import { getCompilationSnapshot } from './repository';
 import { HttpError } from './http';
+import { publicationStatus, servedStashRecord, stashCandidate } from './target-publication-store';
+import { managedSourceHealth } from './managed-source-health';
+import { validateSnapshot } from './validation';
 import { assertArtifactSemantics } from './artifact-semantics';
 
 function artifactRow(profileId: number) {
   const snapshot = getCompilationSnapshot(profileId);
   const db = getDb();
   refreshStashConfig(db, snapshot);
-  const row = db
-    .prepare('SELECT * FROM compiled_configs WHERE profile_id = ?')
-    .get(profileId) as
-    | { revision: number; artifact_ciphertext: string; created_at: string }
-    | undefined;
+  const row = servedStashRecord(db, profileId);
   if (row) {
     const artifact = decryptJson<ExportResult>(row.artifact_ciphertext);
     try { assertArtifactSemantics(artifact); }
@@ -30,11 +29,19 @@ function artifactRow(profileId: number) {
 export function getDeliveryStatus(profileId: number) {
   const { snapshot, row, artifact } = artifactRow(profileId);
   const token = readDownloadToken(profileId);
-  const issues = stashTargetIssues(snapshot);
+  const db = getDb();
+  const issues = [...validateSnapshot(snapshot).issues, ...stashTargetIssues(snapshot)];
+  const readyRevision = stashCandidate(db, profileId)?.revision ?? null;
+  const managedSources = artifact?.proxyRewrites
+    ? managedSourceHealth(db, profileId, artifact.proxyRewrites.sources) : [];
+  const release = publicationStatus(db, profileId, 'stash');
   return {
     currentRevision: snapshot.profile.revision,
     compiledRevision: row?.revision ?? null,
     current: row?.revision === snapshot.profile.revision,
+    readyRevision,
+    ...release,
+    managedSources,
     ...(issues.length ? { issues } : {}),
     generatedAt: row?.created_at ?? null,
     ...(artifact?.proxyRewrites ? { managedProxySources: true } : {}),
@@ -46,15 +53,6 @@ export function readDownloadToken(profileId: number) {
     .prepare('SELECT token_ciphertext FROM download_links WHERE profile_id = ?')
     .get(profileId) as { token_ciphertext: string } | undefined;
   return link ? decryptJson<string>(link.token_ciphertext) : null;
-}
-export function ensureDownloadToken(profileId: number) {
-  const current = readDownloadToken(profileId);
-  if (current) return current;
-  const token = randomBytes(32).toString('base64url');
-  getDb().prepare(`INSERT INTO download_links (profile_id, token_hash, token_ciphertext, created_at)
-    VALUES (?, ?, ?, ?) ON CONFLICT(profile_id) DO NOTHING`)
-    .run(profileId, createHash('sha256').update(token).digest('hex'), encryptJson(token), new Date().toISOString());
-  return readDownloadToken(profileId) ?? token;
 }
 export function getLatestConfig(profileId: number) {
   const { snapshot, row, artifact } = artifactRow(profileId);
@@ -106,11 +104,7 @@ export function configForToken(token: string) {
   return readPersistedStashArtifact(link.profile_id);
 }
 export function readPersistedStashArtifact(profileId: number) {
-  const row = getDb()
-    .prepare('SELECT * FROM compiled_configs WHERE profile_id = ?')
-    .get(profileId) as
-    | { revision: number; artifact_ciphertext: string }
-    | undefined;
+  const row = servedStashRecord(getDb(), profileId);
   if (!row)
     throw new HttpError(
       409,

@@ -15,17 +15,19 @@ import type {
   StashRule
 } from '@/lib/types';
 import { splitClientFields } from '@/lib/config-client-fields';
-import { BUILTIN_POLICIES, RULE_OPTIONS, RULE_TYPES, SHADOWROCKET_BUILTINS } from '@/lib/types';
+import { BUILTIN_POLICIES, SHADOWROCKET_BUILTINS } from '@/lib/types';
 
 import { ApiError, apiRequest } from './api-client';
-import { Modal, SelectField, SwitchField } from './ui';
+import { Modal } from './ui';
 import type { EditorPreset } from './relationships-view';
-import { ConfigFields } from './config-fields';
+import { HostEditorFields, NodeEditorFields, RuleEditorFields } from './resource-editor-fields';
+import { ProxyProviderFields } from './proxy-provider-fields';
+import { ProxyGroupFields } from './proxy-group-fields';
+import { RuleProviderFields } from './rule-provider-fields';
 import { ProxySourceRewrites } from './proxy-source-rewrites';
 import { useUnsavedChanges } from './unsaved-changes';
 import {
   PROXY_GROUP_TYPE_DESCRIPTIONS,
-  RULE_TYPE_DESCRIPTIONS,
   builtinPolicyDescription
 } from '@/lib/rule-metadata';
 
@@ -331,6 +333,19 @@ export function EditorDialog({
     }
   }
 
+  function changeProviderType(next: string) {
+    try {
+      const config = parseObject(configText, '规则集配置');
+      ['type', 'payload', 'behavior'].forEach((key) => delete config[key]);
+      if (next === 'inline') ['url', 'path', 'format', 'interval', 'headers'].forEach((key) => delete config[key]);
+      if (next === 'local') ['url', 'headers', 'interval'].forEach((key) => delete config[key]);
+      setConfigText(JSON.stringify(config, null, 2));
+      setProviderType(next);
+      setSourceUrl('');
+      setSourceHeaders('');
+    } catch { setError('请先修复规则集配置，再切换来源类型。'); }
+  }
+
   const missingResource = Boolean(resource && existing && !snapshotResources(snapshot, resource).some((entry) => entry.id === existing.id));
 
   async function discardAndReload() {
@@ -505,560 +520,56 @@ export function EditorDialog({
       }
     >
       <div className="form-grid" ref={formRoot} inert={saving} aria-busy={saving}>
-        {resource === 'hosts' ? (
-          <>
-            <label className="field wide">
-              <span>Hostname / Wildcard</span>
-              <input
-                className="input"
-                value={hostPattern}
-                onChange={(event) => setHostPattern(event.target.value)}
-                placeholder="*.example.com"
-              />
-            </label>
-            <label className="field wide">
-              <span>目标地址</span>
-              <input
-                className="input"
-                value={hostValue}
-                onChange={(event) => setHostValue(event.target.value)}
-                placeholder="192.0.2.10"
-              />
-            </label>
-          </>
-        ) : null}
+        {resource === 'hosts' ? <HostEditorFields hostPattern={hostPattern} setHostPattern={setHostPattern} hostValue={hostValue} setHostValue={setHostValue} /> : null}
 
-        {resource === 'proxies' ? (
-          <>
-            <label className="field">
-              <span>节点名称</span>
-              <input
-                className="input"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-              />
-            </label>
-            <label className="field">
-              <span>协议类型</span>
-              <input
-                className="input"
-                value={type}
-                onChange={(event) => setType(event.target.value)}
-                list="stash-protocols"
-                placeholder="选择协议或输入其他 Stash 协议标识"
-              />
-            </label>
-            <datalist id="stash-protocols">
-              {[
-                'ss',
-                'vmess',
-                'vless',
-                'trojan',
-                'hysteria',
-                'hysteria2',
-                'tuic',
-                'wireguard',
-                'socks5',
-                'http'
-              ].map((protocol) => (
-                <option key={protocol} value={protocol} />
-              ))}
-            </datalist>
-            <ConfigFields
-              key={resource}
-              label="节点连接参数"
-              text={configText}
-              onChange={setConfigText}
-              suggestions={{ server: '', port: 443, tls: false }}
-            />
-          </>
-        ) : null}
+        {resource === 'proxies' ? <NodeEditorFields name={name} setName={setName} type={type} setType={setType} configText={configText} setConfigText={setConfigText} /> : null}
 
         {resource === 'proxy-providers' ? (
-          <>
-            <label className="field wide">
-              <span>代理源名称</span>
-              <input
-                className="input"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-              />
-            </label>
-            <SelectField
-              label="来源方式"
-              value={sourceType}
-              onValueChange={setSourceType}
-              options={[
-                { value: 'remote', label: '远程订阅（加密保存 URL）' },
-                { value: 'local', label: 'Stash 本地文件（使用 path）' }
-              ]}
-              wide
-            />
-            <label className="field wide">
-              <span>私人订阅地址（HTTP/HTTPS）</span>
-              <input
-                className="input mono"
-                type="password"
-                autoComplete="new-password"
-                disabled={sourceType === 'local' || clearSource}
-                value={sourceUrl}
-                onChange={(event) => setSourceUrl(event.target.value)}
-                placeholder={
-                  existing &&
-                  'sourceConfigured' in existing &&
-                  existing.sourceConfigured
-                    ? '已有来源，留空保留；填写新地址可替换'
-                    : 'https://…'
-                }
-              />
-              <small>
-                加密保存到这个代理源，下载时自动使用；普通 API
-                不回传地址。本地文件来源可留空，并在高级参数设置 path。
-              </small>
-            </label>
-            <SwitchField
-              label="清除已有订阅地址"
-              checked={clearSource}
-              onCheckedChange={setClearSource}
-              description="清除后远程来源变为待配置；下载仍保留最近成功版本，直到新配置通过检查。"
-            />
-            <details className="wide">
-              <summary>认证请求头与高级来源参数</summary>
-              <ConfigFields
-                label="替换认证请求头（不编辑则保留）"
-                text={sourceHeaders}
-                onChange={setSourceHeaders}
-              />
-              <SwitchField
-                label="清除已有请求头"
-                checked={clearHeaders}
-                onCheckedChange={setClearHeaders}
-              />
-            </details>
-            <ConfigFields
-              key={resource}
-              label="来源更新与缓存"
-              text={configText}
-              onChange={setConfigText}
-              suggestions={{ path: '', interval: 3600, filter: '' }}
-            />
-            {sourceType === 'remote' && <ProxySourceRewrites
-              rules={rewriteRules} onChange={setRewriteRules}
-              sourceKey={JSON.stringify([profileId, existing?.id, draftRevision, configText, sourceUrl, sourceHeaders, clearSource, clearHeaders])}
-              onPreview={async (signal) => apiRequest(`/api/profiles/${profileId}/proxy-source-preview`, {
-                method: 'POST', token, signal,
-                body: JSON.stringify({ ...proxySourceDraft(), providerId: existing?.id, rewriteRules })
-              })}
-            />}
-          </>
+          <ProxyProviderFields
+            name={name} setName={setName} configText={configText}
+            setConfigText={setConfigText} sourceUrl={sourceUrl} setSourceUrl={setSourceUrl}
+            sourceHeaders={sourceHeaders} setSourceHeaders={setSourceHeaders} clearSource={clearSource}
+            setClearSource={setClearSource} clearHeaders={clearHeaders} setClearHeaders={setClearHeaders}
+            sourceType={sourceType} setSourceType={setSourceType} sourceConfigured={Boolean((existing as ProxyProvider | null)?.sourceConfigured)}
+            rewrites={<ProxySourceRewrites
+                rules={rewriteRules} onChange={setRewriteRules}
+                sourceKey={JSON.stringify([profileId, existing?.id, draftRevision, configText, sourceUrl, sourceHeaders, clearSource, clearHeaders])}
+                onPreview={signal => apiRequest(`/api/profiles/${profileId}/proxy-source-preview`, {
+                  method: 'POST', token, signal,
+                  body: JSON.stringify({ ...proxySourceDraft(), providerId: existing?.id, rewriteRules })
+                })}
+              />}
+          />
         ) : null}
 
         {resource === 'proxy-groups' ? (
-          <>
-            <label className="field">
-              <span>策略组名称</span>
-              <input
-                className="input"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-              />
-            </label>
-            <SelectField
-              label="策略类型"
-              value={type || 'select'}
-              onValueChange={setType}
-              options={[
-                { value: 'select', label: 'select / 手动选择' },
-                { value: 'url-test', label: 'url-test / 延迟优选' },
-                { value: 'fallback', label: 'fallback / 顺序故障转移' },
-                { value: 'load-balance', label: 'load-balance / 负载均衡' },
-                { value: 'relay', label: 'relay / 链式代理' }
-              ]}
-            />
-            <div className="field wide">
-              <span>选择节点与策略组</span>
-              <div className="check-row">
-                {[
-                  ...BUILTIN_POLICIES,
-                  ...snapshot.proxies.map((p) => p.name),
-                  ...snapshot.proxyGroups
-                    .filter((g) => g.id !== existing?.id)
-                    .map((g) => g.name)
-                ].map((member) => (
-                  <label className="check-chip" key={member}>
-                    <input
-                      type="checkbox"
-                      checked={groupProxies.split('\n').includes(member)}
-                      onChange={(e) =>
-                        setGroupProxies((current) =>
-                          e.target.checked
-                            ? [
-                                ...current.split('\n').filter(Boolean),
-                                member
-                              ].join('\n')
-                            : current
-                                .split('\n')
-                                .filter((value) => value !== member)
-                                .join('\n')
-                        )
-                      }
-                    />
-                    {member}
-                  </label>
-                ))}
-              </div>
-            </div>
-            <div className="field wide">
-              <span>选择订阅来源</span>
-              <div className="check-row">
-                {snapshot.proxyProviders.map((provider) => (
-                  <label className="check-chip" key={provider.id}>
-                    <input
-                      type="checkbox"
-                      checked={groupUse.split('\n').includes(provider.name)}
-                      onChange={(e) =>
-                        setGroupUse((current) =>
-                          e.target.checked
-                            ? [
-                                ...current.split('\n').filter(Boolean),
-                                provider.name
-                              ].join('\n')
-                            : current
-                                .split('\n')
-                                .filter((v) => v !== provider.name)
-                                .join('\n')
-                        )
-                      }
-                    />
-                    {provider.name} ·{' '}
-                    {provider.sourceConfigured ? '已配置' : '缺少来源'}
-                  </label>
-                ))}
-              </div>
-              <small>
-                订阅中的节点由 Stash
-                加载；此处不把未验证的筛选结果显示为可用节点。
-              </small>
-            </div>
-            <div className="field wide">
-              <span>已选出口成员的顺序</span>
-              <div className="member-order">
-                {groupProxies
-                  .split('\n')
-                  .filter(Boolean)
-                  .map((member, index, list) => (
-                    <div key={member + index}>
-                      <strong>
-                        {index + 1}. {member}
-                      </strong>
-                      <button
-                        type="button"
-                        className="button secondary small"
-                        disabled={index === 0}
-                        onClick={() => {
-                          const next = [...list];
-                          [next[index - 1], next[index]] = [
-                            next[index],
-                            next[index - 1]
-                          ];
-                          setGroupProxies(next.join('\n'));
-                        }}
-                      >
-                        上移
-                      </button>
-                      <button
-                        type="button"
-                        className="button secondary small"
-                        disabled={index === list.length - 1}
-                        onClick={() => {
-                          const next = [...list];
-                          [next[index + 1], next[index]] = [
-                            next[index],
-                            next[index + 1]
-                          ];
-                          setGroupProxies(next.join('\n'));
-                        }}
-                      >
-                        下移
-                      </button>
-                    </div>
-                  ))}
-              </div>
-              <small>
-                fallback 按此顺序选择可用出口；select 在 Stash 中由用户选择。
-              </small>
-            </div>
-            <details className="wide">
-              <summary>专家模式 · 直接编辑引用标识</summary>
-              <div className="form-grid">
-                <label className="field">
-                  <span>显式成员（每行一个）</span>
-                  <textarea
-                    className="code-input compact"
-                    rows={7}
-                    value={groupProxies}
-                    onChange={(event) => setGroupProxies(event.target.value)}
-                    placeholder={'策略组或节点标识\nDIRECT'}
-                  />
-                </label>
-                <label className="field">
-                  <span>代理源引用（每行一个）</span>
-                  <textarea
-                    className="code-input compact"
-                    rows={7}
-                    value={groupUse}
-                    onChange={(event) => setGroupUse(event.target.value)}
-                    placeholder="订阅来源标识"
-                  />
-                </label>
-              </div>
-            </details>
-            <label className="field wide">
-              <span>节点过滤正则</span>
-              <input
-                className="input mono"
-                value={groupFilter}
-                onChange={(event) => setGroupFilter(event.target.value)}
-                placeholder="可选：按订阅节点名称筛选"
-              />
-            </label>
-            <ConfigFields
-              key={resource}
-              label="通用测速与显示参数"
-              text={configText}
-              onChange={setConfigText}
-              suggestions={{
-                interval: 600,
-                tolerance: 100,
-                hidden: false
-              }}
-            />
-            <ConfigFields label="Stash 专用参数" text={stashText} onChange={setStashText}
-              suggestions={{ lazy: true, 'ssid-policy': {} }} />
-            <ConfigFields label="Shadowrocket 专用参数" text={shadowrocketText} onChange={setShadowrocketText}
-              suggestions={{ 'policy-regex-filter': '', 'policy-select-name': '', select: 0, use: false, nativeMembers: [] }} />
-          </>
+          <ProxyGroupFields
+            name={name} setName={setName} configText={configText}
+            setConfigText={setConfigText} type={type} setType={setType}
+            groupProxies={groupProxies} setGroupProxies={setGroupProxies} groupUse={groupUse}
+            setGroupUse={setGroupUse} groupFilter={groupFilter} setGroupFilter={setGroupFilter}
+            stashText={stashText} setStashText={setStashText} shadowrocketText={shadowrocketText}
+            setShadowrocketText={setShadowrocketText} memberOptions={[...BUILTIN_POLICIES, ...snapshot.proxies.map(node => node.name),
+              ...snapshot.proxyGroups.filter(group => group.id !== existing?.id).map(group => group.name)]} providers={snapshot.proxyProviders}
+          />
         ) : null}
 
         {resource === 'rule-providers' ? (
-          <>
-            <label className="field">
-              <span>Stash 规则集标识</span>
-              <input
-                className="input"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-              />
-              <small>
-                写入 YAML 并供 RULE-SET 引用；修改时会同步更新引用。
-              </small>
-            </label>
-            <label className="field">
-              <span>界面显示名称</span>
-              <input
-                className="input"
-                value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
-                placeholder="例如：办公服务域名"
-              />
-              <small>
-                只保存在管理数据库中，不会导出到 Stash YAML；留空时显示 Stash
-                标识。
-              </small>
-            </label>
-            <SelectField
-              label="来源类型"
-              value={providerType}
-              onValueChange={(next) => {
-                try {
-                  const config = parseObject(configText, '规则集配置');
-                  ['type', 'payload', 'behavior'].forEach((key) => delete config[key]);
-                  if (next === 'inline') ['url', 'path', 'format', 'interval', 'headers'].forEach((key) => delete config[key]);
-                  if (next === 'local') ['url', 'headers', 'interval'].forEach((key) => delete config[key]);
-                  setConfigText(JSON.stringify(config, null, 2));
-                  setProviderType(next);
-                  setSourceUrl('');
-                  setSourceHeaders('');
-                } catch { setError('请先修复规则集配置，再切换来源类型。'); }
-              }}
-              options={[
-                { value: 'inline', label: 'inline / 数据库条目' },
-                { value: 'remote', label: 'remote / 远程 URL' },
-                { value: 'local', label: 'local / 本地 path' }
-              ]}
-            />
-            <SelectField
-              label="Behavior"
-              value={providerBehavior}
-              onValueChange={setProviderBehavior}
-              options={[
-                { value: 'domain', label: 'domain' },
-                { value: 'ipcidr', label: 'ipcidr' },
-                { value: 'classical', label: 'classical' }
-              ]}
-            />
-            <label className="field wide">
-              <span>Inline 条目（每行一个）</span>
-              <textarea
-                className="code-input"
-                rows={10}
-                value={entriesText}
-                onChange={(event) => setEntriesText(event.target.value)}
-                placeholder={'+.example.com\nexample.org'}
-                disabled={providerType !== 'inline'}
-              />
-            </label>
-            <p className="delivery-note wide">来源类型决定 Stash 如何加载规则；切换后不适用的来源字段会被移除，保存为本地或 inline 时会清除远程地址和认证。</p>
-            {providerType === 'inline' && (configText.trim() !== '{}' || stashText.trim() !== '{}') ? <div className="wide">
-              <p className="delivery-note">Inline 来源只使用上面的条目。旧配置中残留的来源参数需要清理后才能保存。</p>
-              <button className="button secondary small" onClick={() => { setConfigText('{}'); setStashText('{}'); setSourceUrl(''); setSourceHeaders(''); }}>清理 inline 来源参数</button>
-            </div> : null}
-            {providerType === 'remote' ? <>
-              <label className="field wide">
-                <span>私人规则集地址（HTTP/HTTPS）</span>
-                <input className="input mono" type="password" autoComplete="off" value={sourceUrl}
-                  onChange={(event) => setSourceUrl(event.target.value)} disabled={clearSource}
-                  placeholder={(existing as RuleProvider | null)?.sourceConfigured ? '已保存；留空保留当前地址' : '填写远程规则集地址'} />
-                <small>已保存的地址不会回显；缓存 path 不会替代远程来源。</small>
-              </label>
-              <ConfigFields label="规则集认证请求头" text={sourceHeaders || '{}'} onChange={setSourceHeaders} />
-              <SwitchField label="清除规则集地址" checked={clearSource} onCheckedChange={setClearSource} description="清除后草稿无法发布；最近成功版本仍可下载。" />
-              <SwitchField label="清除规则集认证请求头" checked={clearHeaders} onCheckedChange={setClearHeaders}
-                description={(existing as RuleProvider | null)?.headersConfigured ? '已有认证请求头；普通编辑会保留。' : '未保存认证请求头。'} />
-            </> : null}
-            {providerType !== 'inline' ? <ConfigFields
-              key={resource}
-              label="规则集来源与更新"
-              text={configText}
-              onChange={setConfigText}
-              suggestions={providerType === 'remote' ? { path: '', format: 'yaml', interval: 86400 } : { path: '', format: 'yaml' }}
-            /> : null}
-            {providerType !== 'inline' ? <>
-              <ConfigFields label="Stash 专用参数" text={stashText} onChange={setStashText} />
-              <SelectField label="Shadowrocket 专用 · 规则集交付方式"
-                value={String(parseObject(shadowrocketText, 'Shadowrocket 专用参数').referenceType || 'shared')}
-                onValueChange={(value) => setShadowrocketText(value === 'shared' ? '{}' : JSON.stringify({ referenceType: value }))}
-                options={[
-                  { value: 'shared', label: '通用转换 · 服务展开规则' },
-                  { value: 'RULE-SET', label: '原生 RULE-SET · 设备读取引用' },
-                  { value: 'DOMAIN-SET', label: '原生 DOMAIN-SET · 设备读取域名列表' }
-                ]} wide />
-              {providerType === 'remote' && parseObject(shadowrocketText, 'Shadowrocket 专用参数').referenceType ? <>
-                <label className="field wide">
-                  <span>Shadowrocket 专用规则集地址（可选）</span>
-                  <input className="input mono" type="password" autoComplete="off" value={shadowrocketSourceUrl}
-                    disabled={clearShadowrocketSource} onChange={(event) => setShadowrocketSourceUrl(event.target.value)}
-                    placeholder={(existing as RuleProvider | null)?.shadowrocketSourceConfigured ? '已保存；留空保留' : '留空使用通用地址'} />
-                </label>
-                <SwitchField label="清除 Shadowrocket 专用地址" checked={clearShadowrocketSource}
-                  onCheckedChange={setClearShadowrocketSource} description="清除后改用通用规则集地址。" />
-              </> : null}
-            </> : null}
-          </>
+          <RuleProviderFields
+            name={name} setName={setName} configText={configText}
+            setConfigText={setConfigText} sourceUrl={sourceUrl} setSourceUrl={setSourceUrl}
+            sourceHeaders={sourceHeaders} setSourceHeaders={setSourceHeaders} clearSource={clearSource}
+            setClearSource={setClearSource} clearHeaders={clearHeaders} setClearHeaders={setClearHeaders}
+            provider={existing as RuleProvider | null} displayName={displayName} setDisplayName={setDisplayName}
+            providerType={providerType} changeProviderType={changeProviderType} providerBehavior={providerBehavior}
+            setProviderBehavior={setProviderBehavior} entriesText={entriesText} setEntriesText={setEntriesText}
+            stashText={stashText} setStashText={setStashText} referenceType={providerType === 'inline' ? 'shared' : String(parseObject(shadowrocketText, 'Shadowrocket 专用参数').referenceType || 'shared')}
+            setShadowrocketText={setShadowrocketText} shadowrocketSourceUrl={shadowrocketSourceUrl} setShadowrocketSourceUrl={setShadowrocketSourceUrl}
+            clearShadowrocketSource={clearShadowrocketSource} setClearShadowrocketSource={setClearShadowrocketSource}
+          />
         ) : null}
 
-        {resource === 'rules' ? (
-          <>
-            <SelectField
-              label="规则类型"
-              value={type || 'DOMAIN'}
-              onValueChange={changeRuleType}
-              options={RULE_TYPES.map((item) => ({
-                value: item,
-                label: item,
-                description: RULE_TYPE_DESCRIPTIONS[item]
-              }))}
-              disabled={editingRuleType === 'MATCH'}
-            />
-            <SelectField
-              label="策略 / 目标组"
-              value={rulePolicy}
-              onValueChange={setRulePolicy}
-              options={policyOptions}
-            />
-            {type === 'RULE-SET' ? (
-              snapshot.ruleProviders.length ? (
-                <SelectField
-                  label="匹配规则集"
-                  value={rulePayload}
-                  onValueChange={setRulePayload}
-                  options={ruleSetOptions}
-                  wide
-                />
-              ) : (
-                <div className="empty-state compact wide">
-                  <strong>尚无可用规则集</strong>
-                  <span>请先创建规则集，再新增 RULE-SET 路由规则。</span>
-                </div>
-              )
-            ) : (
-              <label className="field wide">
-                <span>匹配内容</span>
-                <textarea
-                  className="code-input compact"
-                  rows={4}
-                  value={rulePayload}
-                  onChange={(event) => setRulePayload(event.target.value)}
-                  disabled={type === 'MATCH'}
-                  placeholder="DOMAIN-SUFFIX 填 example.com；逻辑规则填 ((...))"
-                />
-              </label>
-            )}
-            <label className="field">
-              <span>优先级</span>
-              <input
-                className="input mono"
-                type="number"
-                min={1}
-                value={rulePriority}
-                onChange={(event) => setRulePriority(event.target.value)}
-                disabled={editingRuleType === 'MATCH'}
-              />
-            </label>
-            <div className="field">
-              <span>选项</span>
-              <div className="check-row">
-                {RULE_OPTIONS.map((option) => (
-                  <label className="check-chip" key={option}>
-                    <input
-                      type="checkbox"
-                      checked={ruleOptions.includes(option)}
-                      onChange={(event) =>
-                        setRuleOptions((current) =>
-                          event.target.checked
-                            ? [...current, option]
-                            : current.filter((item) => item !== option)
-                        )
-                      }
-                      disabled={type === 'MATCH'}
-                    />
-                    {option}
-                  </label>
-                ))}
-              </div>
-            </div>
-            <label className="field wide">
-              <span>备注</span>
-              <input
-                className="input"
-                value={ruleNote}
-                maxLength={500}
-                onChange={(event) => setRuleNote(event.target.value)}
-              />
-            </label>
-            <div className="wide">
-              <SwitchField
-                label="启用此规则"
-                checked={ruleEnabled}
-                onCheckedChange={setRuleEnabled}
-                disabled={type === 'MATCH' && ruleEnabled}
-                description={type === 'MATCH'
-                  ? 'MATCH 必须启用并位于末尾；保存时会自动修复位置。'
-                  : '停用状态只影响数据库导出，不写入 Stash YAML。'}
-              />
-            </div>
-          </>
-        ) : null}
+        {resource === 'rules' ? <RuleEditorFields type={type} changeRuleType={changeRuleType} editingRuleType={editingRuleType} rulePolicy={rulePolicy} setRulePolicy={setRulePolicy} policyOptions={policyOptions} ruleSetOptions={ruleSetOptions} rulePayload={rulePayload} setRulePayload={setRulePayload} rulePriority={rulePriority} setRulePriority={setRulePriority} ruleOptions={ruleOptions} setRuleOptions={setRuleOptions} ruleNote={ruleNote} setRuleNote={setRuleNote} ruleEnabled={ruleEnabled} setRuleEnabled={setRuleEnabled} hasRuleProviders={snapshot.ruleProviders.length > 0} /> : null}
       </div>
       {error ? <pre className="inline-error">{error}</pre> : null}
     </Modal>

@@ -32,6 +32,7 @@ export async function GET(request: Request, context: Context) {
     });
     return new Response(bytes as BodyInit, {
       headers: {
+        'X-Config-Revision': String(artifact.revision),
         'Content-Type': 'application/zip',
         'Content-Disposition': `attachment; filename="config-${artifact.revision}.zip"`,
         'Cache-Control': 'no-store'

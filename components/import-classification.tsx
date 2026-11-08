@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { ImportChecks } from './import-checks';
+import type { inspectNewImport } from '@/lib/revision-comparison';
 import type { classifyConfig } from '@/lib/config-import';
 import { apiRequest } from './api-client';
 
@@ -17,21 +19,22 @@ export function ImportClassificationView({ result }: { result: ImportClassificat
   </div>;
 }
 
-export function InspectNewImport({ content, token }: { content: string; token: string }) {
-  const [result, setResult] = useState<ImportClassification | null>(null);
+export function InspectNewImport({ content, token, onReady }: { content: string; token: string; onReady: (text: string | null) => void }) {
+  const [result, setResult] = useState<ReturnType<typeof inspectNewImport> | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
+    onReady(null);
     setResult(null);
     setError('');
     if (!content.trim()) return;
     let active = true;
     const timer = window.setTimeout(() => {
-      apiRequest<ImportClassification>('/api/profiles/import-inspect', {
+      apiRequest<ReturnType<typeof inspectNewImport>>('/api/profiles/import-inspect', {
         method: 'POST', token, body: JSON.stringify({ content })
-      }).then((data) => { if (active) setResult(data); })
+      }).then((data) => { if (active) { setResult(data); onReady(content); } })
         .catch((caught: unknown) => { if (active) setError(caught instanceof Error ? caught.message : '无法识别配置格式'); });
     }, 250);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [content, token]);
-  return result ? <ImportClassificationView result={result} /> : error ? <p className="delivery-note wide">{error}</p> : null;
+  }, [content, token, onReady]);
+  return result ? <><ImportClassificationView result={result} /><ImportChecks checks={result.checks} /></> : error ? <p className="inline-error wide" role="alert">{error}</p> : null;
 }

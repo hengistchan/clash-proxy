@@ -1,3 +1,4 @@
+import { splitCommonFields } from './config-storage-model';
 import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { RE2JS } from 're2js';
@@ -184,21 +185,24 @@ function generalLines(snapshot: Snapshot, diagnose: Diagnose) {
     diagnose('dns', 'DNS 设置必须是一个映射。', 'dns');
     return lines;
   }
-  if (dns['fake-ip-range'] !== undefined || dns['fake-ip-filter'] !== undefined) {
+  const { common, stash } = splitCommonFields('dns', dns);
+  if (stash['fake-ip-range'] !== undefined || stash['fake-ip-filter'] !== undefined) {
     diagnose('dns.fake-ip', 'Stash 的 Fake IP 地址池和过滤规则没有已验证的等价写法，不能自动转换。', 'dns');
   }
-  if (!noExtra(dns, ['nameserver', 'proxy-server-nameserver', 'fake-ip-range', 'fake-ip-filter'])) {
+  if (!noExtra(stash, ['fake-ip-range', 'fake-ip-filter'])) {
     diagnose('dns', '配置包含无法自动转换的 DNS 策略。', 'dns');
   }
-  for (const [key, target] of [['nameserver', 'dns-server'], ['proxy-server-nameserver', 'proxy-dns-server']] as const) {
-    const nameservers = dns[key];
+  for (const [key, original, target] of [
+    ['resolvers', 'nameserver', 'dns-server'], ['proxyHostResolvers', 'proxy-server-nameserver', 'proxy-dns-server']
+  ] as const) {
+    const nameservers = common[key];
     if (nameservers === undefined) continue;
     if (!Array.isArray(nameservers) || !nameservers.length || !nameservers.every((value) => atom(value) && (
       value === 'system' || (isIP(value) !== 0 && !value.includes('%')) || (httpUrl(value) && value.startsWith('https://'))
-    ))) diagnose('dns.nameserver', `${key} 仅支持 system、IP 地址或 HTTPS DNS 地址。`, 'dns');
+    ))) diagnose('dns.nameserver', `${original} 仅支持 system、IP 地址或 HTTPS DNS 地址。`, 'dns');
     else lines.push(`${target} = ${nameservers.join(', ')}`);
   }
-  if (dns.nameserver !== undefined || dns['proxy-server-nameserver'] !== undefined) {
+  if (common.resolvers !== undefined || common.proxyHostResolvers !== undefined) {
     diagnose('dns.runtime', '已分别转换普通 DNS 和节点域名解析设置。客户端的 DNS 回退和缓存行为可能不同，请在设备上验证。', 'dns', undefined, 'warning');
   }
   return lines;
@@ -234,7 +238,7 @@ function nodeFilter(value: unknown): ((name: string) => boolean) | null {
   }
 }
 
-export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources): Report {
+export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources, validation = validateSnapshot(snapshot)): Report {
   const issues: ValidationIssue[] = [];
   const sources = new Map<string, RemoteSource>();
   let blocked = false;
@@ -243,7 +247,6 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
     if (issues.length < MAX_ISSUES) issues.push({ code: `shadowrocket.${code}`, message, severity, resource, resourceId });
     else if (issues.length === MAX_ISSUES) issues.push({ code: 'shadowrocket.diagnostics-limit', message: '还有其他兼容问题，请先处理上面列出的问题。', severity: 'warning' });
   };
-  const validation = validateSnapshot(snapshot);
   const hasBlockingIssue = validation.issues.some((issue) => issue.severity === 'error' &&
     !(issue.code === 'rule-provider.url-missing' && snapshot.ruleProviders.some((provider) =>
       provider.id === issue.resourceId && typeof provider.clientOptions?.shadowrocket?.sourceUrl === 'string' &&
@@ -306,6 +309,8 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
   }
   const providerNodes = new Map<number, Map<string, string>>();
   const proxyProviders = new Map(snapshot.proxyProviders.map((provider) => [provider.name, provider]));
+  const sharedGroups = new Map(snapshot.proxyGroups.map(group => [group.id, splitCommonFields('policyGroup', group.config).common]));
+  const sharedSources = new Map(snapshot.proxyProviders.map(source => [source.id, splitCommonFields('nodeSource', source.config).common]));
   const directNames = new Set(snapshot.proxies.map((node) => node.name));
   const groupsByName = new Map(snapshot.proxyGroups.map((group) => [group.name, group]));
   const checkedGroups = new Set<string>();
@@ -315,7 +320,7 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
     const group = groupsByName.get(name);
     if (!group || checkedGroups.has(name)) return false;
     checkingGroups.add(name);
-    const members = group.clientOptions?.shadowrocket?.nativeMembers ?? group.config.proxies;
+    const members = group.clientOptions?.shadowrocket?.nativeMembers ?? sharedGroups.get(group.id)?.policies;
     const found = Array.isArray(members) && members.some((member) => typeof member === 'string' && cyclic(member));
     checkingGroups.delete(name);
     checkedGroups.add(name);
@@ -352,12 +357,13 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
       diagnose('group.provider', '暂不支持自动纳入全部来源。请在策略组中逐个选择要使用的代理源。', 'proxy-group', group.id);
       continue;
     }
-    const groupFilter = filterFor(group.config.filter);
+    const shared = sharedGroups.get(group.id);
+    const groupFilter = filterFor(shared?.nameFilter);
     if (!groupFilter) {
       diagnose('group.filter', '策略组筛选须使用不超过 256 字符的 RE2 正则。', 'proxy-group', group.id);
       continue;
     }
-    const declared = explicitMembers ?? group.config.proxies ?? [];
+    const declared = explicitMembers ?? shared?.policies ?? [];
     if (!Array.isArray(declared)) {
       diagnose('group', '策略组成员必须是列表。', 'proxy-group', group.id);
       continue;
@@ -374,9 +380,9 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
     const remoteMembers: string[] = [];
     const benchmarks: JsonObject[] = [];
     let unusable = false;
-    for (const name of explicitMembers === undefined && Array.isArray(group.config.use) ? new Set(group.config.use) : []) {
+    for (const name of explicitMembers === undefined && Array.isArray(shared?.nodeSources) ? new Set(shared.nodeSources) : []) {
       const provider = typeof name === 'string' ? proxyProviders.get(name) : undefined;
-      const filter = filterFor(provider?.config.filter);
+      const filter = filterFor(provider ? sharedSources.get(provider.id)?.nameFilter : undefined);
       if (!provider || provider.sourceType !== 'remote' ||
         (provider.config.type !== undefined && provider.config.type !== 'http') ||
         !filter || !noExtra(provider.config, ['type', 'url', 'headers', 'interval', 'path', 'filter', 'benchmark-url', 'benchmark-timeout'])) {
@@ -456,7 +462,9 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
     else hosts.push(`${host.pattern} = ${host.value}`);
   }
 
-  const providers = new Map(snapshot.ruleProviders.map((provider) => [provider.name, provider]));
+  const providers = new Map(snapshot.ruleProviders.map((provider) => [
+    provider.name, { provider, source: splitCommonFields('ruleSource', provider.config).common }
+  ]));
   const rules: string[] = [];
   for (const rule of snapshot.rules.filter((item) => item.enabled).sort((a, b) => a.priority - b.priority)) {
     if (rules.length >= MAX_RULES) {
@@ -474,14 +482,15 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
     if (type === 'MATCH') {
       rules.push(`FINAL,${policy}`);
     } else if (type === 'RULE-SET') {
-      const provider = providers.get(payload);
-      if (!provider) {
+      const resource = providers.get(payload);
+      if (!resource) {
         diagnose('rule.provider', '找不到引用的规则集。', 'rule', rule.id);
       } else {
+        const { provider, source } = resource;
         const reference = provider.clientOptions?.shadowrocket?.referenceType;
         if (reference === 'RULE-SET' || reference === 'DOMAIN-SET') {
           const alternative = provider.clientOptions?.shadowrocket?.sourceUrl;
-          const value = provider.providerType === 'remote' ? alternative ?? provider.config.url : provider.config.path;
+          const value = provider.providerType === 'remote' ? alternative ?? source.address : source.filePath;
           if (provider.providerType === 'inline' || !atom(value) || (alternative === undefined && provider.headersConfigured) ||
             (provider.providerType === 'remote' ? !/^https?:\/\//i.test(value) : !/^[\p{L}\p{N}_./ -]+$/u.test(value))) {
             diagnose('rule.native-source', '原生引用必须使用有效的 HTTP/HTTPS 或本地路径，不能依赖自定义认证请求头。', 'rule-provider', provider.id);
@@ -494,7 +503,7 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
         if (provider.providerType === 'inline') {
           entries = provider.entries.map((entry) => entry.value);
         } else if (provider.providerType === 'remote' &&
-          (provider.config.format === undefined || provider.config.format === 'yaml' || provider.config.format === 'text') &&
+          (source.serialization === undefined || source.serialization === 'yaml' || source.serialization === 'text') &&
           (provider.config.behavior === undefined || provider.config.behavior === provider.behavior) &&
           noExtra(provider.config, ['format', 'url', 'headers', 'interval', 'path', 'behavior'])) {
           sources.set(`rule-${provider.id}`, { kind: 'rule-provider', id: provider.id, config: provider.config });

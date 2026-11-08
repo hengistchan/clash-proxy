@@ -15,14 +15,17 @@ import {
 import type { Snapshot, ValidationResult, ValidationIssue } from '@/lib/types';
 
 import { StatusBadge } from './ui';
-import { ExportView } from './export-view';
+import { DeliverySummary } from './delivery-summary';
+import type { DeliveryWorkspace } from './use-delivery-workspace';
+import type { ConfigTarget } from '@/lib/config-targets';
 import { ValidationIssues } from './validation-issues';
 import { ResourceTree } from './resource-tree';
 import type { ResourceNode } from '@/lib/resource-graph';
 
 export function OverviewView({
   snapshot,
-  token,
+  delivery,
+  onDelivery,
   validation,
   onNavigate,
   onInspect,
@@ -30,7 +33,8 @@ export function OverviewView({
   onImport
 }: {
   snapshot: Snapshot;
-  token: string;
+  delivery: DeliveryWorkspace;
+  onDelivery: (target: ConfigTarget) => void;
   validation: ValidationResult;
   onNavigate: (section: string) => void;
   onInspect: (node: ResourceNode) => void;
@@ -102,7 +106,7 @@ export function OverviewView({
           <div className="delivery-actions"><button className="button secondary small" onClick={onImport}>导入已有配置</button><button className="text-action" onClick={() => onNavigate('relationships')}>管理资源关系</button></div></div>
         </article>
         <article>
-          <span className="workflow-number">2</span><div><h3>{errors.length ? `修复 ${errors.length} 个问题` : '检查配置'}</h3><p>{errors.length ? '草稿已保留；定位具体资源，修复后自动生成新版本。' : '结构检查已通过，可以继续模拟路由或交付设备。'}</p>
+          <span className="workflow-number">2</span><div><h3>{errors.length ? `修复 ${errors.length} 个问题` : '检查配置'}</h3><p>{errors.length ? '草稿已保留；定位具体资源，修复后自动生成新版本。' : '结构检查已通过。各客户端能否交付，请看下方状态。'}</p>
           <button className="text-action" onClick={() => errors.length ? onFixIssue(errors[0]) : onNavigate('rules')}>{errors.length ? '处理首个错误' : '模拟路由匹配'}</button></div>
         </article>
         <article>
@@ -110,14 +114,7 @@ export function OverviewView({
         </article>
       </section>
 
-      <ExportView
-        snapshot={snapshot}
-        validation={validation}
-        profileId={snapshot.profile.id}
-        token={token}
-        compact
-        onFixIssue={onFixIssue}
-      />
+      <DeliverySummary delivery={delivery} revision={snapshot.profile.revision} onOpen={onDelivery} />
       <section className="validation-panel">
         <div className="validation-head">
           {errors.length ? (

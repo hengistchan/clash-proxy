@@ -32,6 +32,13 @@ export interface ConfigDeliveryStatus {
   issues?: ValidationIssue[];
   remoteSources?: boolean;
   managedProxySources?: boolean;
+  readyRevision?: number | null;
+  deliveryMode?: 'auto' | 'manual';
+  publicationId?: number | null;
+  remoteState?: 'none' | 'pending' | 'ready' | 'failed';
+  remoteCheckedAt?: number | null;
+  managedSources?: Array<{ id: number; name: string; state: 'pending' | 'ready' | 'stale' | 'failed' | 'revoked'; lastAttempt: number | null; lastSuccess: number | null }>;
+  publications?: Array<{ id: number; revision: number; publishedAt: string }>;
 }
 
 export function configTargetApi(profileId: number, target: ConfigTarget) {

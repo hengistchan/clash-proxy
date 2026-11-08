@@ -92,7 +92,7 @@ const paths: Record<string, object> = {
     post: operation('导入 Stash YAML 或 Shadowrocket .conf；保留现有请求字段 yaml', {
       type: 'object',
       required: ['yaml'],
-      properties: { yaml: { type: 'string' } }
+      properties: { yaml: { type: 'string' }, previewFingerprint: { type: 'string', pattern: '^[0-9a-f]{64}$' } }
     })
   },
   '/api/profiles/{profileId}/proxy-source-preview': {
@@ -131,7 +131,7 @@ const paths: Record<string, object> = {
   '/api/profiles/{profileId}/delivery': {
     parameters: [id],
     get: operation(
-      '读取 Stash 与 Shadowrocket 的交付状态、最近成功版本及链接',
+      '读取两端编辑版、可发布产物、设备版本、来源状态与链接',
       undefined,
       { allOf: [ref('Delivery'), { type: 'object', properties: {
         shadowrocket: ref('ShadowrocketDelivery'),
@@ -250,7 +250,7 @@ const paths: Record<string, object> = {
         schema: { type: 'integer' }
       }
     ],
-    post: operation('恢复修订并自动检查，成功后更新下载版本')
+    post: operation('恢复修订并自动检查；手动发布的客户端继续提供已发布版本')
   },
   '/api/health': { get: { ...operation('服务健康状态'), security: [] } },
   '/api/meta': {
@@ -258,7 +258,7 @@ const paths: Record<string, object> = {
   }
 };
 paths['/api/profiles/import-inspect'] = {
-  post: operation('识别导入格式并分类共有和客户端专用字段；不保存配置', {
+  post: operation('识别导入格式、分类字段，并返回各客户端静态检查；不保存配置', {
     type: 'object', required: ['content'], properties: { content: { type: 'string' } }
   })
 };
@@ -322,7 +322,7 @@ paths[
   delete: operation('删除 inline 条目')
 };
 paths['/api/profiles/{profileId}/import-preview'] = {
-  parameters: [id], post: operation('只读预览规范化导入的脱敏语义变化', { type: 'object', required: ['yaml'], properties: { yaml: { type: 'string' } } })
+  parameters: [id], post: operation('只读预览脱敏语义变化和两端兼容性；返回 currentRevision 与 previewFingerprint', { type: 'object', required: ['yaml'], properties: { yaml: { type: 'string' } } })
 };
 paths['/api/profiles/{profileId}/revisions/{revision}/compare'] = {
   parameters: [id, { name: 'revision', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } }],
@@ -336,8 +336,43 @@ paths['/api/profiles/{profileId}/rules/batch'] = {
     }
   })
 };
+const target = { name: 'target', in: 'path', required: true, schema: { enum: ['stash', 'shadowrocket'] } };
+paths['/api/profiles/{profileId}/delivery/{target}/preview'] = {
+  parameters: [id, target],
+  get: {
+    summary: '只读预览当前交付文件，不检查或刷新上游来源',
+    responses: {
+      ...errors,
+      '200': {
+        description: '当前交付文件，可能包含私人来源。X-Config-Revision 标识实际产物。',
+        content: { 'application/yaml': { schema: { type: 'string' } }, 'text/plain': { schema: { type: 'string' } } }
+      }
+    }
+  }
+};
+paths['/api/profiles/{profileId}/delivery/{target}/publication'] = {
+  parameters: [id, target],
+  post: operation('独立启用手动发布、恢复自动、发布当前版或回退设备版', {
+    type: 'object', required: ['action', 'expectedMode', 'expectedPublicationId'],
+    properties: {
+      action: { enum: ['manual', 'auto', 'publish', 'rollback'] },
+      expectedMode: { enum: ['auto', 'manual'] },
+      expectedPublicationId: { type: ['integer', 'null'], minimum: 1 },
+      publicationId: { type: 'integer', minimum: 1, description: 'rollback 时指定的发布记录 ID' }
+    }
+  })
+};
+paths['/api/profiles/{profileId}/delivery/{target}/check'] = {
+  parameters: [id, target, { name: 'sourceId', in: 'query', schema: { type: 'integer', minimum: 1 }, description: '可选的 Stash 托管来源 ID' }],
+  post: operation('检查 Shadowrocket 候选来源或 Stash 设备版托管来源；手动发布指针不变')
+};
+paths['/api/profiles/{profileId}/delivery/{target}/sources/{sourceId}'] = {
+  parameters: [id, { ...target, schema: { const: 'stash' } }, { name: 'sourceId', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } }],
+  post: operation('为当前设备版的托管代理源换发链接；已撤销时重新启用'),
+  delete: operation('撤销该托管代理源的链接，直到管理员重新启用')
+};
 for (const [path, value] of Object.entries(paths)) {
-  if (!path.startsWith('/api/profiles/{profileId}') || ['/simulate', '/download-link', '/import-preview'].some((suffix) => path.endsWith(suffix))) continue;
+  if (!path.startsWith('/api/profiles/{profileId}') || ['/simulate', '/download-link', '/import-preview', '/check', '/sources/{sourceId}'].some(suffix => path.endsWith(suffix))) continue;
   for (const [method, operation] of Object.entries(value as Record<string, unknown>)) {
     if (!['put', 'post', 'delete', 'patch'].includes(method) || !operation || typeof operation !== 'object') continue;
     Object.assign(operation, { parameters: [{ name: 'If-Match', in: 'header', required: true, description: '编辑基线版本的强 ETag，从 snapshot 响应读取；冲突返回409且不写入', schema: { type: 'string', example: '"12"' } }] });
@@ -349,7 +384,7 @@ export const openapi = {
     title: 'Stash 配置管理 API',
     version: SERVICE_VERSION,
     description:
-      '保存配置后自动检查，成功版本更新 YAML 下载；有错误时仍保存草稿并保留上次成功版本。私人订阅 URL 绑定到各 provider，加密保存，普通响应不返回。配置写入必须携带基线 If-Match，缺失428，过期409。导入/恢复前可读取脱敏变化预览。旧 /api?url= 和导出时模板过滤已移除。'
+      '保存后独立检查两端。默认自动交付最近成功产物，手动模式交付指定的发布记录。私人订阅 URL 绑定到各 provider，加密保存，普通响应不返回。配置写入必须携带基线 If-Match，缺失428，过期409。导入/恢复前可读取脱敏变化预览。旧 /api?url= 和导出时模板过滤已移除。'
   },
   security: [{ BearerAuth: [] }, { AdminToken: [] }],
   paths,
@@ -363,7 +398,20 @@ export const openapi = {
         type: 'object',
         properties: {
           currentRevision: { type: 'integer' },
-          compiledRevision: { type: ['integer', 'null'] },
+          compiledRevision: { type: ['integer', 'null'], description: '设备当前可下载的修订' },
+          readyRevision: { type: ['integer', 'null'], description: '最近成功生成的候选修订' },
+          deliveryMode: { enum: ['auto', 'manual'] },
+          publicationId: { type: ['integer', 'null'] },
+          publications: { type: 'array', items: { type: 'object', properties: {
+            id: { type: 'integer' }, revision: { type: 'integer' }, publishedAt: { type: 'string', format: 'date-time' }
+          } } },
+          remoteState: { enum: ['none', 'pending', 'ready', 'failed'] },
+          remoteCheckedAt: { type: ['integer', 'null'] },
+          managedSources: { type: 'array', items: { type: 'object', properties: {
+            id: { type: 'integer' }, name: { type: 'string' },
+            state: { enum: ['pending', 'ready', 'stale', 'failed', 'revoked'] },
+            lastAttempt: { type: ['integer', 'null'] }, lastSuccess: { type: ['integer', 'null'] }
+          } } },
           current: { type: 'boolean' },
           generatedAt: { type: ['string', 'null'] },
           configDownloadUrl: { type: 'string', format: 'uri' },

@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { Download, Link2, RefreshCw } from 'lucide-react';
-import type { Snapshot, ValidationResult, ValidationIssue } from '@/lib/types';
+import { useRef, useState } from 'react';
+import { Download, FileCode2, Link2, RefreshCw } from 'lucide-react';
+import type { Snapshot, ValidationIssue } from '@/lib/types';
 import {
   apiRequest,
   downloadBlob,
@@ -13,31 +13,31 @@ import { ValidationIssues } from './validation-issues';
 import { Modal, StatusBadge } from './ui';
 import {
   CONFIG_TARGETS, DEFAULT_CONFIG_TARGET, configTargetApi, configTargetIds,
-  type ConfigTarget, type ConfigDeliveryStatus, type ProfileDeliveryStatus
+  type ConfigDeliveryStatus
 } from '@/lib/config-targets';
+import type { DeliveryWorkspace } from './use-delivery-workspace';
+import { ConfigExportPreview } from './config-export-preview';
+import { DeliveryPublication, ManagedSourceControls } from './delivery-publication';
 
 export function ExportView({
   snapshot,
-  validation,
+  delivery,
   profileId,
   token,
-  compact = false,
   onFixIssue
 }: {
   snapshot: Snapshot;
-  validation: ValidationResult;
+  delivery: DeliveryWorkspace;
   profileId: number;
   token: string;
-  compact?: boolean;
   onFixIssue?: (issue: ValidationIssue) => void;
 }) {
-  const [status, setStatus] = useState<ConfigDeliveryStatus | null>(null);
-  const [target, setTarget] = useState<ConfigTarget>(DEFAULT_CONFIG_TARGET);
+  const { target, setTarget, targets } = delivery;
+  const status = targets[target];
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
-  const [origin, setOrigin] = useState('');
-  const [statusAttempt, setStatusAttempt] = useState(0);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [changingLink, setChangingLink] = useState(false);
   const [pendingLinkChange, setPendingLinkChange] = useState<'rotate' | 'revoke' | null>(null);
   const actionLock = useRef(false);
@@ -46,35 +46,6 @@ export function ExportView({
   const client = targetConfig.label;
   const targetApi = configTargetApi(profileId, target);
   useUnsavedChanges(false, changingLink);
-  useEffect(() => {
-    let active = true;
-    setStatus(null);
-    setError('');
-    setNotice('');
-    setOrigin(window.location.origin);
-    apiRequest<ProfileDeliveryStatus>(`/api/profiles/${profileId}/delivery`, { token })
-      .then((data) => {
-        if (active) setStatus(data.targets?.[target] ?? (isDefault ? data : null));
-      })
-      .catch((caught) => {
-        if (active)
-          setError(
-            caught instanceof Error ? caught.message : '读取下载状态失败'
-          );
-      });
-    return () => {
-      active = false;
-    };
-  }, [profileId, snapshot.profile.revision, token, statusAttempt, target, isDefault]);
-  async function readRemoteDiagnostics() {
-    if (!status?.remoteSources && !status?.managedProxySources) return;
-    try {
-      const data = await apiRequest<ProfileDeliveryStatus>(`/api/profiles/${profileId}/delivery`, { token });
-      setStatus(data.targets[target]);
-    } catch {
-      // Keep the download result visible; the user can retry reading status.
-    }
-  }
   async function download(bundle = false) {
     if (actionLock.current) return;
     actionLock.current = true;
@@ -93,11 +64,12 @@ export function ExportView({
         await response.blob(),
         filenameFromDisposition(response.headers.get('content-disposition'))
       );
-      setNotice('已下载最近成功生成的版本。');
+      const revision = response.headers.get('X-Config-Revision');
+      setNotice(revision ? `已下载 ${client} 版本 ${revision}。` : `已下载 ${client} 配置。`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '下载失败');
     } finally {
-      await readRemoteDiagnostics();
+      if (status?.remoteSources && status.deliveryMode !== 'manual') await delivery.refresh();
       actionLock.current = false;
       setBusy(false);
     }
@@ -123,18 +95,17 @@ export function ExportView({
     setError('');
     setNotice('');
     const previous = status;
-    setStatus(null);
+    delivery.applyTarget(target, null);
     try {
       if (revoke) {
         await apiRequest(`${targetApi}/download-link`, { method: 'DELETE', token });
-        if (previous) setStatus({ ...previous, subscriptionPath: null, subscriptionUrl: null });
+        if (previous) delivery.applyTarget(target, { ...previous, subscriptionPath: null, subscriptionUrl: null });
       } else {
         const next = await apiRequest<ConfigDeliveryStatus>(`${targetApi}/download-link`, { method: 'POST', token });
-        setStatus(next);
+        delivery.applyTarget(target, { ...previous, ...next });
       }
       setNotice(revoke ? '订阅链接已撤销。' : '新订阅链接已生成，之前的链接已失效。');
     } catch (caught) {
-      await readRemoteDiagnostics();
       setError((caught instanceof Error ? caught.message : '链接操作失败') + ' 请重新读取下载状态以确认链接。');
     } finally {
       actionLock.current = false;
@@ -143,30 +114,28 @@ export function ExportView({
     }
   }
 
-  const errors = validation.issues.filter((i) => i.severity === 'error');
   const missing = snapshot.proxyProviders.filter((p) => !p.sourceConfigured);
   const compatibility = status?.issues ?? [];
-  const canDownload = status?.compiledRevision != null || Boolean(status?.remoteSources);
+  const canDownload = status?.compiledRevision != null || Boolean(status?.remoteSources && status.deliveryMode !== 'manual');
   const sourceFailed = status?.remoteSources && compatibility.some((issue) => issue.severity === 'error');
   return (
     <section className="panel export-panel">
       <div className="panel-heading">
         <div>
           <p className="kicker">CONFIGURATION / DOWNLOAD</p>
-          <h2>{compact ? '配置与下载' : '下载配置'}</h2>
-          <p>保存后自动检查并生成可用版本；订阅来源在各代理源中维护。</p>
+          <h2>下载配置</h2>
+          <p>对照当前编辑版与设备可下载版，管理各客户端的发布和订阅。</p>
         </div>
         <StatusBadge tone={status?.current ? 'good' : 'warn'}>
-          {status?.current
+          {!status ? (delivery.error ? '状态未确认' : '读取中') : status.current
             ? `版本 ${status.compiledRevision} 可用`
-            : status?.compiledRevision
+            : status.compiledRevision != null
               ? `继续提供版本 ${status.compiledRevision}`
               : sourceFailed ? '远程来源检查未通过'
                 : status?.remoteSources ? '等待拉取远程来源' : '等待配置完成'}
         </StatusBadge>
       </div>
-      {!compact ? (
-        <div className="delivery-actions" role="group" aria-label="配置客户端">
+      <div className="delivery-actions" role="group" aria-label="配置客户端">
           {configTargetIds.map((option) => (
             <button
               key={option}
@@ -175,15 +144,15 @@ export function ExportView({
               disabled={busy || pendingLinkChange !== null}
               onClick={() => {
                 if (target === option || actionLock.current) return;
-                setStatus(null);
+                setError('');
+                setNotice('');
                 setTarget(option);
               }}
             >
               {CONFIG_TARGETS[option].label}
             </button>
           ))}
-        </div>
-      ) : null}
+      </div>
       {isDefault && missing.length ? (
         <p className="inline-error">
           待配置来源：{missing.map((p) => p.name).join('、')}
@@ -194,8 +163,10 @@ export function ExportView({
         <p className="delivery-note">
           {status.remoteSources && status.currentRevision === status.compiledRevision
             ? '最近一次远程来源更新未通过检查。'
-            : <>最新修改（版本 {status.currentRevision}）尚未通过{isDefault ? '' : ` ${client} `}检查。</>}
-          下载和设备订阅仍使用最近成功的版本{' '}
+            : status.deliveryMode === 'manual'
+              ? <>当前编辑版 {status.currentRevision} 尚未发布到 {client}。</>
+              : <>最新修改（版本 {status.currentRevision}）尚未通过{isDefault ? '' : ` ${client} `}检查。</>}
+          下载和设备订阅当前使用版本{' '}
           {status.compiledRevision}。
         </p>
       ) : null}
@@ -206,7 +177,7 @@ export function ExportView({
         </div>
       ) : null}
       {isDefault && status?.managedProxySources && <p className="delivery-note">
-        这份配置中的改写代理源由工作台提供。下载时会启用设备订阅链接；更换或撤销链接后，请重新下载并导入配置。
+        这份配置中的改写代理源由工作台提供。它们有独立链接，手动下载不会开启设备订阅。
       </p>}
       <div className="delivery-actions">
         <button
@@ -216,6 +187,11 @@ export function ExportView({
         >
           <Download size={16} />
           {busy && status?.remoteSources ? '正在处理…' : `下载 ${targetConfig.downloadLabel}`}
+        </button>
+        <button type="button" className="button secondary" disabled={busy || (!previewOpen && status?.compiledRevision == null)}
+          aria-expanded={previewOpen} aria-controls="config-export-preview"
+          onClick={() => setPreviewOpen(open => !open)}>
+          <FileCode2 size={16} />{previewOpen ? '关闭预览' : '预览导出配置'}
         </button>
         {targetConfig.bundle ? <button
           className="button secondary"
@@ -233,8 +209,15 @@ export function ExportView({
           API 使用文档
         </a>
       </div>
-      {!compact ? (
-        <>
+      {previewOpen ? <ConfigExportPreview id="config-export-preview"
+        key={JSON.stringify([profileId, target, status?.compiledRevision, status?.generatedAt])}
+        profileId={profileId} target={target} token={token} available={status?.compiledRevision != null} /> : null}
+      {status ? <DeliveryPublication key={target} profileId={profileId} revision={snapshot.profile.revision} token={token}
+        target={target} status={status} delivery={delivery} disabled={busy} /> : null}
+      {isDefault && status?.managedSources?.length ? <ManagedSourceControls profileId={profileId}
+        token={token} status={status} delivery={delivery} disabled={busy} /> : null}
+      <>
+
           <p className="delivery-note">
             {targetConfig.importGuide} 下载文件可能含私人凭据。
           </p>
@@ -242,7 +225,7 @@ export function ExportView({
             <span>设备订阅链接</span>
           </div>
           <p className="delivery-note">
-            将链接添加到 {client}。客户端更新时会获取该端最近通过检查的版本。持有此链接的人可下载完整私人配置。
+            将链接添加到 {client}。客户端更新时会获取上面显示的设备版本。持有此链接的人可下载完整私人配置。
           </p>
           {status?.subscriptionPath ? (
             <>
@@ -251,7 +234,7 @@ export function ExportView({
                 aria-label="固定配置订阅链接"
                 readOnly
                 value={
-                  status.subscriptionUrl || origin + status.subscriptionPath
+                  status.subscriptionUrl || window.location.origin + status.subscriptionPath
                 }
               />
               <div className="delivery-actions">
@@ -262,7 +245,7 @@ export function ExportView({
                     void navigator.clipboard
                       .writeText(
                         status.subscriptionUrl ||
-                          origin + status.subscriptionPath
+                          window.location.origin + status.subscriptionPath
                       )
                       .then(() => setNotice('订阅链接已复制。'))
                       .catch(() => setError('复制失败，请手动选择链接复制。'))
@@ -308,13 +291,6 @@ export function ExportView({
             </p>
           </details>
         </>
-      ) : null}
-      {!compact && errors.length ? (
-        <div className="validation-block error-block">
-          <strong>最新修改需要修复 {errors.length} 个问题</strong>
-          <ValidationIssues issues={errors} onFix={onFixIssue} />
-        </div>
-      ) : null}
       <Modal
         open={pendingLinkChange !== null}
         onOpenChange={(open) => {
@@ -350,9 +326,9 @@ export function ExportView({
         </p>
       </Modal>
       {notice ? <p role="status">{notice}</p> : null}
-      {error ? <div role="alert">
-        <pre className="inline-error">{error}</pre>
-        <button className="button secondary small" disabled={busy} onClick={() => setStatusAttempt((attempt) => attempt + 1)}>重试读取下载状态</button>
+      {error || delivery.error ? <div role="alert">
+        <pre className="inline-error">{error || delivery.error}</pre>
+        <button className="button secondary small" disabled={busy} onClick={() => { setError(''); void delivery.refresh(); }}>重试读取下载状态</button>
       </div> : null}
     </section>
   );

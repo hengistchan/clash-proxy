@@ -597,3 +597,30 @@ details > summary { padding: 12px 0; color: var(--forest); cursor: pointer; font
   border: 1px solid var(--line);
   border-radius: 8px;
 }
+
+.delivery-target-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.delivery-target-card { display: grid; gap: 8px; align-content: start; padding: 14px; border: 1px solid var(--line); border-radius: 12px; }
+.delivery-target-card > div { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.delivery-target-card p, .delivery-release-list p { margin: 0; }
+.delivery-target-card .button { justify-self: start; }
+.delivery-subsection { display: grid; gap: 8px; }
+.delivery-release-list { display: grid; gap: 8px; list-style: none; padding: 0; margin: 8px 0; }
+.delivery-release-list li { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+@media (max-width: 550px) { .delivery-target-grid { grid-template-columns: 1fr; } }
+
+@media (max-width: 860px) {
+  .mobile-nav { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); overflow: visible; }
+  .mobile-nav > button { justify-content: center; min-height: 44px; padding: 0 4px; }
+  .mobile-resource-nav { position: absolute; z-index: 1; top: 100%; left: 12px; right: 12px; display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; padding: 10px; border: 1px solid var(--line);
+    border-radius: 12px; background: #fff; box-shadow: 0 10px 20px #1b35221f; }
+  .mobile-resource-nav button { justify-content: center; }
+}
+
+.config-export-preview { display: grid; gap: 10px; min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 12px; }
+.config-preview-heading { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 8px 14px; }
+.config-preview-heading h3, .config-export-preview p { margin: 0; overflow-wrap: anywhere; }
+.config-preview-code { position: relative; overflow: hidden; min-width: 0; height: clamp(240px, 52vh, 560px); border: 1px solid var(--line); border-radius: 8px; background: white; }
+.config-preview-monaco, .config-preview-text { position: absolute; inset: 0; width: 100%; height: 100%; }
+.config-preview-monaco[aria-hidden="true"] { visibility: hidden; }
+.config-preview-text { margin: 0; padding: 12px; resize: none; border: 0; background: white; color: #24372d; font: 16px/1.5 ui-monospace, monospace; overflow-wrap: anywhere; }

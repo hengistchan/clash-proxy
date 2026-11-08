@@ -37,6 +37,16 @@ function separate(value: JsonObject, mapping: Record<string, string>) {
   return { common: Object.fromEntries(common), extensions: { stash: Object.fromEntries(extensions) } };
 }
 
+type ModelKind = keyof typeof fields;
+type CommonKey<K extends ModelKind> = (typeof fields)[K][keyof (typeof fields)[K]] & string;
+
+/** Shared semantics used by storage and compilers. The compatibility DTO keeps
+ * client spellings at its boundary; adapters work with these names internally. */
+export function splitCommonFields<K extends ModelKind>(kind: K, value: JsonObject) {
+  const { common, extensions } = separate(value, fields[kind]);
+  return { common: common as Partial<Record<CommonKey<K>, JsonValue>>, stash: extensions.stash };
+}
+
 function combine(value: JsonValue, mapping: Record<string, string>): JsonObject {
   if (!isJsonObject(value) || !isJsonObject(value.common) || !isJsonObject(value.extensions) ||
     !isJsonObject(value.extensions.stash)) throw new Error('Invalid configuration storage model');

@@ -7,9 +7,8 @@ export function parseConfigDocument(text: string) {
   return isShadowrocketDocument(text) ? parseShadowrocketDocument(text) : parseYamlDocument(text);
 }
 
-export function classifyConfig(text: string) {
+export function classifyConfig(text: string, doc = parseConfigDocument(text)) {
   const shadowrocket = isShadowrocketDocument(text);
-  const doc = parseConfigDocument(text);
   const common = new Set<string>();
   const stash = new Set<string>();
   const native = new Set<string>();

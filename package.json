@@ -22,6 +22,7 @@
     "better-sqlite3": "13.0.3",
     "clsx": "2.1.1",
     "lucide-react": "0.552.0",
+    "monaco-editor": "0.57.0",
     "next": "16.4.5",
     "re2js": "2.9.1",
     "react": "19.3.1",
@@ -37,6 +38,11 @@
     "@types/react-dom": "19.2.2",
     "tsx": "4.20.6",
     "typescript": "5.9.3"
+  },
+  "overrides": {
+    "monaco-editor": {
+      "dompurify": "3.4.17"
+    }
   },
   "engines": {
     "node": ">=20.9"

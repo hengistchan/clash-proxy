@@ -3,7 +3,8 @@ import { NextResponse } from 'next/server';
 
 import { requireAdmin } from '@/lib/auth';
 import { jsonError, parseId } from '@/lib/http';
-import { getSnapshot, getCompilationSnapshot } from '@/lib/repository';
+import { getCompilationSnapshot } from '@/lib/repository';
+import { publicSnapshot } from '@/lib/repository-shared';
 import { validateSnapshot } from '@/lib/validation';
 
 export const runtime = 'nodejs';
@@ -16,10 +17,10 @@ export async function GET(
   try {
     requireAdmin(request);
     const { profileId } = await context.params;
-    const snapshot = getSnapshot(parseId(profileId));
+    const snapshot = getCompilationSnapshot(parseId(profileId));
     return NextResponse.json({
-      ...snapshot,
-      validation: validateSnapshot(getCompilationSnapshot(snapshot.profile.id))
+      ...publicSnapshot(snapshot),
+      validation: validateSnapshot(snapshot)
     }, { headers: { ETag: revisionEtag(snapshot.profile.revision) } });
   } catch (error) {
     return jsonError(error);

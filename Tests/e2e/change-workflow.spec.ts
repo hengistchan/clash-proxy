@@ -96,6 +96,11 @@ test('mobile rule editing keeps touch controls at least 44 pixels without page o
   const initial = await create(request, 'mobile-browser', 'rules: ["DOMAIN,mobile.test,DIRECT", "MATCH,DIRECT"]');
   await page.setViewportSize({ width: 390, height: 844 });
   await login(page, initial);
+  await expect(page.locator('.mobile-nav > button')).toHaveCount(5);
+  await page.locator('.mobile-nav').getByRole('button', { name: '资源', exact: true }).click();
+  await expect(page.locator('.mobile-resource-nav').getByRole('button', { name: '全局与 DNS', exact: true })).toBeVisible();
+  await page.locator('.mobile-resource-nav').getByRole('button', { name: 'Hosts', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Host 映射', exact: true })).toBeVisible();
   await page.locator('.mobile-nav').getByRole('button', { name: '路由规则', exact: true }).click();
   await expect(page.getByRole('heading', { name: '路由规则', exact: true })).toBeVisible();
   const edit = page.locator('.rule-card').first().getByRole('button', { name: '编辑', exact: true });

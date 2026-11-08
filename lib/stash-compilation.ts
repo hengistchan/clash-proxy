@@ -2,6 +2,8 @@ import type Database from 'better-sqlite3';
 import { decryptJson, encryptJson } from './crypto';
 import { exportProfile, type ExportResult } from './exporter';
 import { CONFIG_COMPILER_VERSION } from './artifact-semantics';
+import { managedSources, stashCandidate, deliveryMode } from './target-publication-store';
+import { reconcileServedSources } from './managed-source-health';
 import { HttpError } from './http';
 import type { JsonValue, Snapshot } from './types';
 
@@ -14,9 +16,7 @@ export function refreshStashConfig(
   db: Database.Database,
   snapshot: Snapshot
 ): void {
-  const current = db
-    .prepare('SELECT revision, artifact_ciphertext FROM compiled_configs WHERE profile_id = ?')
-    .get(snapshot.profile.id) as { revision: number; artifact_ciphertext: string } | undefined;
+  const current = stashCandidate(db, snapshot.profile.id);
   if (current && (current.revision > snapshot.profile.revision || (current.revision === snapshot.profile.revision && decryptJson<ExportResult>(current.artifact_ciphertext).compilerVersion === CONFIG_COMPILER_VERSION))) return;
   try {
     const artifact = exportProfile(snapshot);
@@ -34,10 +34,9 @@ export function refreshStashConfig(
         new Date().toISOString()
       );
       if (!saved.changes) return;
-      const ids = artifact.proxyRewrites?.sources.map(({ id }) => id) ?? [];
-      db.prepare(`DELETE FROM managed_proxy_source_cache WHERE profile_id = ?
-        ${ids.length ? `AND provider_id NOT IN (${ids.map(() => '?').join(',')})` : ''}`)
-        .run(snapshot.profile.id, ...ids);
+      if (!deliveryMode(db, snapshot.profile.id, 'stash')) {
+        reconcileServedSources(db, snapshot.profile.id, managedSources(current), artifact.proxyRewrites?.sources ?? []);
+      }
     }).immediate();
   } catch (error) {
     if (!(error instanceof HttpError && error.status === 409)) throw error;

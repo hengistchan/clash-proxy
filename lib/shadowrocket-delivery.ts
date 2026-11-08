@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { decryptJson, encryptJson } from './crypto';
 import { getDb } from './db';
+import { deliveryMode, publicationRecord, publicationStatus } from './target-publication-store';
 import { HttpError } from './http';
 import { getCompilationSnapshot } from './repository';
 import { compileShadowrocket, SHADOWROCKET_COMPILER_VERSION, type ShadowrocketArtifact } from './shadowrocket';
@@ -45,7 +46,7 @@ function tokenHash(token: string) {
   return createHash('sha256').update(token).digest('hex');
 }
 
-async function refreshUpstream(profileId: number, fetchSource?: SourceDownload) {
+export async function refreshShadowrocketUpstream(profileId: number, fetchSource?: SourceDownload) {
   const { snapshot, row } = refresh(profileId);
   if (!row?.remote_sources || row.checked_revision !== snapshot.profile.revision ||
     (row.remote_checked_at !== null && Date.now() - row.remote_checked_at < REFRESH_MS)) return;
@@ -77,12 +78,24 @@ function artifactFrom(row: ArtifactRow | undefined) {
   return { ...decryptJson<ShadowrocketArtifact>(row.artifact_ciphertext), revision: row.revision };
 }
 
+function deliveredArtifact(profileId: number) {
+  const db = getDb();
+  const mode = deliveryMode(db, profileId, 'shadowrocket');
+  if (!mode) return artifactFrom(getRow(profileId));
+  const record = publicationRecord(db, profileId, 'shadowrocket', mode.publication_id);
+  return record ? { ...decryptJson<ShadowrocketArtifact>(record.artifact_ciphertext), revision: record.revision } : null;
+}
+
 export function getShadowrocketStatus(profileId: number) {
   const { row, snapshot } = refresh(profileId);
   const link = getDb().prepare('SELECT token_ciphertext FROM shadowrocket_download_links WHERE profile_id = ?')
     .get(profileId) as { token_ciphertext: string } | undefined;
   const token = link ? decryptJson<string>(link.token_ciphertext) : null;
-  const compiledRevision = isDeliverable(row) ? row.revision : null;
+  const db = getDb();
+  const mode = deliveryMode(db, profileId, 'shadowrocket');
+  const pinned = mode ? publicationRecord(db, profileId, 'shadowrocket', mode.publication_id) : undefined;
+  const readyRevision = isDeliverable(row) ? row.revision : null;
+  const compiledRevision = mode ? pinned?.revision ?? null : readyRevision;
   const issues = row ? JSON.parse(row.issues_json) as ValidationIssue[] : [];
   const remoteSources = Boolean(row?.remote_sources);
   if (remoteSources && row?.remote_checked_at === null) {
@@ -92,20 +105,29 @@ export function getShadowrocketStatus(profileId: number) {
   return {
     currentRevision,
     compiledRevision,
-    current: compiledRevision === currentRevision && row?.artifact_version === SHADOWROCKET_COMPILER_VERSION &&
-      !issues.some((issue) => issue.severity === 'error'),
-    generatedAt: compiledRevision === null ? null : row?.created_at ?? null,
+    current: compiledRevision === currentRevision && (Boolean(mode) || (row?.artifact_version === SHADOWROCKET_COMPILER_VERSION &&
+      !issues.some((issue) => issue.severity === 'error'))),
+    readyRevision,
+    ...publicationStatus(db, profileId, 'shadowrocket'),
+    generatedAt: compiledRevision === null ? null : (mode ? pinned?.created_at : row?.created_at) ?? null,
+    remoteState: !remoteSources ? 'none' as const : row?.remote_checked_at === null ? 'pending' as const
+      : issues.some((issue) => issue.severity === 'error') ? 'failed' as const : 'ready' as const,
+    remoteCheckedAt: row?.remote_checked_at ?? null,
     issues,
     remoteSources,
     subscriptionPath: token ? `/api/config_download/${token}/config.conf` : null
   };
 }
 
-export async function getLatestShadowrocketConfig(profileId: number, fetchSource?: SourceDownload) {
-  await refreshUpstream(profileId, fetchSource);
-  const artifact = artifactFrom(getRow(profileId));
+export function readPersistedShadowrocketArtifact(profileId: number) {
+  const artifact = deliveredArtifact(profileId);
   if (!artifact) throw new HttpError(409, '尚无可用的 Shadowrocket 配置。请查看下载页的兼容性检查。');
   return artifact;
+}
+
+export async function getLatestShadowrocketConfig(profileId: number, fetchSource?: SourceDownload) {
+  if (!deliveryMode(getDb(), profileId, 'shadowrocket')) await refreshShadowrocketUpstream(profileId, fetchSource);
+  return readPersistedShadowrocketArtifact(profileId);
 }
 
 export async function rotateShadowrocketLink(profileId: number, fetchSource?: SourceDownload) {
@@ -135,13 +157,13 @@ function linkForToken(token: string) {
 export async function shadowrocketConfigForToken(token: string, fetchSource?: SourceDownload) {
   const profileId = linkForToken(token);
   try {
-    await refreshUpstream(profileId, fetchSource);
+    if (!deliveryMode(getDb(), profileId, 'shadowrocket')) await refreshShadowrocketUpstream(profileId, fetchSource);
   } catch (error) {
     linkForToken(token); // A deletion or revocation during the fetch still returns 404.
     throw error;
   }
   linkForToken(token);
-  const artifact = artifactFrom(getRow(profileId));
+  const artifact = deliveredArtifact(profileId);
   if (!artifact) throw new HttpError(409, 'No successfully compiled Shadowrocket configuration is available');
   return artifact;
 }

@@ -38,6 +38,7 @@ import { GET as legacy } from '../app/api/route';
 import { GET as subscribe } from '../app/api/config_download/[token]/config.yaml/route';
 import { getLatestShadowrocketConfig, getShadowrocketStatus, revokeShadowrocketLink, rotateShadowrocketLink, shadowrocketConfigForToken } from '../lib/shadowrocket-delivery';
 import { classifyConfig } from '../lib/config-import';
+import { changeTargetPublication } from '../lib/target-publication';
 import { previewImport } from '../lib/revision-comparison';
 import { compileShadowrocket } from '../lib/shadowrocket';
 import { downloadSource, isPublicSourceAddress } from '../lib/upstream-download';
@@ -71,7 +72,7 @@ test('upgrading a version 3 database preserves the original Stash artifact and t
   const stashToken = tokenFrom(rotateDownloadLink(profile.id).subscriptionPath!);
   const db = getDb();
   // These are the only additions from v4; retain the original application data and key.
-  db.exec('DROP TABLE shadowrocket_compilations; DROP TABLE shadowrocket_download_links; PRAGMA user_version = 3;');
+  db.exec('DROP TABLE target_delivery_modes; DROP TABLE target_publications; DROP TABLE managed_proxy_source_access; DROP TABLE managed_proxy_source_cache; DROP TABLE shadowrocket_compilations; DROP TABLE shadowrocket_download_links; PRAGMA user_version = 3;');
   closeDbForTests();
   resetRepositoryForTests();
 
@@ -125,14 +126,14 @@ test('v4 data migrates into common fields and dialect extensions without changin
   const legacyRevision = encryptJson(before as unknown as JsonValue);
   db.prepare('UPDATE revisions SET config_ciphertext = ? WHERE profile_id = ? AND revision = ?')
     .run(legacyRevision, profile.id, profile.revision);
-  db.pragma('user_version = 4');
+  db.exec('DROP TABLE target_delivery_modes; DROP TABLE target_publications; DROP TABLE managed_proxy_source_access; DROP TABLE managed_proxy_source_cache; PRAGMA user_version = 4;');
   closeDbForTests();
   resetRepositoryForTests();
 
   assert.deepEqual(getCompilationSnapshot(profile.id), before);
   assert.equal(configForToken(stashToken).yaml, originalYaml);
   assert.deepEqual(await shadowrocketConfigForToken(shadowToken), originalConf);
-  assert.equal(getDb().pragma('user_version', { simple: true }), 6);
+  assert.equal(getDb().pragma('user_version', { simple: true }), 7);
   const stored = getDb().prepare('SELECT config_ciphertext FROM proxy_groups WHERE id = ?').pluck()
     .get(before.proxyGroups[0].id) as string;
   assert.match(stored, /^model1:v2\./);
@@ -655,7 +656,7 @@ test('platform-aware rules and direct-only configurations do not require demo gr
   assert.equal(getDeliveryStatus(p.id).current, true);
   assert.equal(simulateRouting(getSnapshot(p.id), {}).mode, 'direct');
   assert.equal(getCompilationSnapshot(p.id).profile.targetPlatform, 'ios');
-  assert.equal(getDb().pragma('user_version', { simple: true }), 6);
+  assert.equal(getDb().pragma('user_version', { simple: true }), 7);
 });
 
 test('supported HTTP and URL authentication sources are preserved while warnings stay redacted', () => {
@@ -990,4 +991,57 @@ test('a shared group and rule source can have independent Stash and Shadowrocket
   assert.doesNotMatch(yaml, /referenceType|select=1|clientOptions/);
   assert.ok(yaml.includes('RULE-SET,shared,REJECT'));
   assert.ok(yaml.includes(secretB) && !yaml.includes(secretA));
+});
+
+test('manual Shadowrocket keeps the exact published bytes and requires a checked current candidate', async () => {
+  const config = (source: string) => [
+    'rule-providers:', '  remote:', '    behavior: domain', '    format: text',
+    `    url: https://${source}.example.test/rules`,
+    'rules: ["RULE-SET,remote,REJECT", "MATCH,DIRECT"]'
+  ].join('\n');
+  const { profile } = createProfile('Manual native file', config('first'));
+  const id = profile.id;
+  const token = tokenFrom((await rotateShadowrocketLink(id, async () => 'one.example.test')).subscriptionPath!);
+  const db = getDb();
+  const change = (action: 'manual' | 'publish') => {
+    const current = getShadowrocketStatus(id);
+    db.transaction(() => changeTargetPublication(db, id, 'shadowrocket', {
+      action, expectedMode: current.deliveryMode, expectedPublicationId: current.publicationId
+    })).immediate();
+  };
+  change('manual');
+  const old = await shadowrocketConfigForToken(token);
+  importYaml(id, config('second'));
+  const current = getCompilationSnapshot(id).profile.revision;
+  assert.equal(getDeliveryStatus(id).compiledRevision, current);
+  assert.equal(getShadowrocketStatus(id).remoteState, 'pending');
+  assert.throws(() => change('publish'), /尚未通过/);
+  let fetched = false;
+  const supplier = async () => { fetched = true; return 'two.example.test'; };
+  assert.deepEqual(await shadowrocketConfigForToken(token, supplier), old);
+  assert.equal(fetched, false);
+  const { refreshShadowrocketUpstream } = await import('../lib/shadowrocket-delivery');
+  await refreshShadowrocketUpstream(id, supplier);
+  assert.equal(fetched, true);
+  assert.deepEqual(await getLatestShadowrocketConfig(id), old);
+  change('publish');
+  const published = await shadowrocketConfigForToken(token);
+  assert.equal(published.revision, current);
+  assert.match(published.conf, /DOMAIN,two\.example\.test,REJECT/);
+  assert.doesNotMatch(published.conf, /one\.example\.test/);
+});
+
+test('database v6 upgrades without rotating existing device links or changing their bytes', async () => {
+  const { profile } = createProfile('Publication storage migration');
+  const stashToken = tokenFrom(rotateDownloadLink(profile.id).subscriptionPath!);
+  const shadowToken = tokenFrom((await rotateShadowrocketLink(profile.id)).subscriptionPath!);
+  const stash = configForToken(stashToken);
+  const shadow = await shadowrocketConfigForToken(shadowToken);
+  getDb().exec('DROP TABLE target_delivery_modes; DROP TABLE target_publications; DROP TABLE managed_proxy_source_access; PRAGMA user_version = 6;');
+  closeDbForTests();
+  resetRepositoryForTests();
+  assert.deepEqual(configForToken(stashToken), stash);
+  assert.deepEqual(await shadowrocketConfigForToken(shadowToken), shadow);
+  assert.equal(getDb().pragma('user_version', { simple: true }), 7);
+  assert.equal(getShadowrocketStatus(profile.id).deliveryMode, 'auto');
 });

@@ -26,7 +26,7 @@ export interface ImportedDocument {
   settings: JsonObject;
   clientOptions?: ClientOptions;
   proxies: Array<{ name: string; type: string; config: JsonObject }>;
-  proxyProviders: Array<{ name: string; config: JsonObject; requiresUrl: boolean; rewriteRules?: ProxyRewriteRule[] }>;
+  proxyProviders: Array<{ name: string; config: JsonObject; requiresUrl: boolean; rewriteRules?: ProxyRewriteRule[]; previousId?: number }>;
   proxyGroups: Array<{ name: string; type: ProxyGroupType; config: JsonObject; clientOptions?: ClientOptions }>;
   ruleProviders: Array<{
     name: string;

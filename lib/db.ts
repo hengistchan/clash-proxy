@@ -200,6 +200,35 @@ const MIGRATIONS = [
         );
       `);
     }
+  },
+  {
+    version: 7,
+    apply(db: Database.Database) {
+      db.exec(`
+        CREATE TABLE managed_proxy_source_access (
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          provider_id INTEGER NOT NULL,
+          generation TEXT NOT NULL,
+          enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+          PRIMARY KEY (profile_id, provider_id)
+        );
+        CREATE TABLE target_publications (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          target TEXT NOT NULL CHECK (target IN ('stash', 'shadowrocket')),
+          revision INTEGER NOT NULL,
+          artifact_ciphertext TEXT NOT NULL,
+          published_at TEXT NOT NULL
+        );
+        CREATE INDEX target_publications_lookup ON target_publications(profile_id, target, id DESC);
+        CREATE TABLE target_delivery_modes (
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          target TEXT NOT NULL CHECK (target IN ('stash', 'shadowrocket')),
+          publication_id INTEGER REFERENCES target_publications(id),
+          PRIMARY KEY (profile_id, target)
+        );
+      `);
+    }
   }
 ] as const;
 

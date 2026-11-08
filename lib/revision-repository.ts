@@ -20,13 +20,11 @@ export function createRevisionRepository({
   ensureInitialized: () => void;
   recordRevision: (db: Database.Database, profileId: number) => number;
 }) {
-  function importYaml(profileId: number, yamlText: string): Snapshot {
+  function importYaml(profileId: number, yamlText: string, previewFingerprint?: string): Snapshot {
     ensureInitialized();
     const document = parseConfigDocument(yamlText);
     return transaction((db) => {
-      replaceProfileResources(db, profileId, document, {
-        preserveExistingSources: true
-      });
+      replaceProfileResources(db, profileId, document, 'replace', previewFingerprint);
       recordRevision(db, profileId);
       return publicSnapshot(snapshotFromDb(db, profileId));
     });
@@ -104,7 +102,8 @@ export function createRevisionRepository({
           name: item.name,
           config: item.config,
           requiresUrl: item.requiresUrl,
-          rewriteRules: item.rewriteRules
+          rewriteRules: item.rewriteRules,
+          previousId: item.id
         })),
         proxyGroups: snapshot.proxyGroups.map((item) => ({
           clientOptions: item.clientOptions,
@@ -137,7 +136,7 @@ export function createRevisionRepository({
           key: item.key,
           value: item.value
         }))
-      });
+      }, 'restore');
       recordRevision(db, profileId);
       return publicSnapshot(snapshotFromDb(db, profileId));
     });

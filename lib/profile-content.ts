@@ -2,42 +2,27 @@ import type Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { encryptResource, decryptResourceObject, encryptNodeSource, readNodeSourceRewriteRules, storeMatchType } from './config-storage-model';
+import { encryptResource, encryptNodeSource, storeMatchType } from './config-storage-model';
 import type { ImportedDocument } from './yaml-import';
-import type { JsonObject, ProxyRewriteRule } from './types';
+import { HttpError } from './http';
+import { importPreviewFingerprint, prepareImport } from './import-candidate';
 import {
-  getProfileRow,
-  now
+  now, snapshotFromDb
 } from './repository-shared';
 
 export function replaceProfileResources(
   db: Database.Database,
   profileId: number,
-  document: ImportedDocument,
-  options: { preserveExistingSources?: boolean } = {}
+  input: ImportedDocument,
+  intent: 'new' | 'replace' | 'restore' = 'new',
+  previewFingerprint?: string
 ): void {
-  getProfileRow(db, profileId);
+  const current = intent === 'new' ? undefined : snapshotFromDb(db, profileId);
+  const document = prepareImport(db, profileId, input, current, intent);
+  if (previewFingerprint !== undefined && (!current || importPreviewFingerprint(current.profile, document) !== previewFingerprint)) {
+    throw new HttpError(409, '导入内容或托管代理源绑定已改变，请重新预览。');
+  }
   const touched = now();
-  // Template imports may reuse existing source bindings. History restoration
-  // must reproduce the snapshot, including intentionally missing credentials.
-  const existingSources = new Map<string, { config: JsonObject; rules?: ProxyRewriteRule[] }>(
-    options.preserveExistingSources
-      ? (
-          db
-            .prepare('SELECT * FROM proxy_providers WHERE profile_id = ?')
-            .all(profileId) as Record<string, unknown>[]
-        ).map((row) => [String(row.name), { config: decryptResourceObject('nodeSource', row.config_ciphertext), rules: readNodeSourceRewriteRules(row.config_ciphertext) }])
-      : []
-  );
-  const existingRuleSetNames = new Map(
-    (
-      db
-        .prepare(
-          'SELECT name, display_name FROM rule_providers WHERE profile_id = ?'
-        )
-        .all(profileId) as Record<string, unknown>[]
-    ).map((row) => [String(row.name), String(row.display_name || '')])
-  );
   db.prepare('DELETE FROM proxies WHERE profile_id = ?').run(profileId);
   db.prepare('DELETE FROM proxy_providers WHERE profile_id = ?').run(profileId);
   db.prepare('DELETE FROM proxy_groups WHERE profile_id = ?').run(profileId);
@@ -78,21 +63,13 @@ export function replaceProfileResources(
 
   const providerInsert = db.prepare(
     `INSERT INTO proxy_providers
-       (profile_id, name, config_ciphertext, requires_url, sort_order)
-     VALUES (?, ?, ?, ?, ?)`
+       (id, profile_id, name, config_ciphertext, requires_url, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?)`
   );
   document.proxyProviders.forEach((item, index) => {
-    const existing = item.requiresUrl ? existingSources.get(item.name) : undefined;
-    const config = existing ? {
-      ...item.config,
-      ...Object.fromEntries(Object.entries(existing.config).filter(([key]) => key === 'url' || key === 'headers'))
-    } : item.config;
     providerInsert.run(
-      profileId,
-      item.name,
-      encryptNodeSource(config, item.rewriteRules ?? (config.url === existing?.config.url ? existing?.rules : undefined)),
-      Number(item.requiresUrl),
-      index + 1
+      item.retainedId ?? null, profileId, item.name, encryptNodeSource(item.config, item.rewriteRules),
+      Number(item.requiresUrl), index + 1
     );
   });
 
@@ -122,7 +99,7 @@ export function replaceProfileResources(
     const result = ruleProviderInsert.run(
       profileId,
       item.name,
-      item.displayName ?? existingRuleSetNames.get(item.name) ?? '',
+      item.displayName ?? '',
       item.behavior,
       item.providerType,
       encryptResource('ruleSource', item.config, item.clientOptions),

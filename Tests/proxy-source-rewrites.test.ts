@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,6 +14,8 @@ import { resetEncryptionCacheForTests } from '../lib/crypto';
 import { closeDbForTests, getDb } from '../lib/db';
 import { configForToken, getDeliveryStatus, revokeDownloadLink, rotateDownloadLink } from '../lib/delivery';
 import { HttpError } from '../lib/http';
+import { rotateSourceCapability } from '../lib/managed-source-access';
+import { previewImport } from '../lib/revision-comparison';
 import { managedProxySource } from '../lib/managed-proxy-source';
 import { previewProxySource } from '../lib/proxy-source-preview';
 import { transformProxySource } from '../lib/proxy-source-transform';
@@ -113,7 +115,8 @@ test('manual YAML, device YAML and ZIP use identical scoped URLs without upstrea
   assert.equal(entry.filter, 'HK');
   assert.equal(parse(text)['proxy-providers'].untouched.url, 'https://unmanaged.example.test/feed');
   assert.doesNotMatch(text, /private-feed|fixture-private-header|managed-source\.invalid/);
-  const { subscriptionPath } = getDeliveryStatus(profile.id);
+  assert.equal(getDeliveryStatus(profile.id).subscriptionPath, null);
+  const { subscriptionPath } = rotateDownloadLink(profile.id);
   const token = subscriptionPath!.split('/')[3];
   const subscribed = await subscribe(new Request('http://internal.test' + subscriptionPath), { params: Promise.resolve({ token }) });
   assert.equal(subscribed.status, 200);
@@ -132,12 +135,19 @@ test('manual YAML, device YAML and ZIP use identical scoped URLs without upstrea
   assert.equal(invalid.status, 404);
   assert.equal(invalid.headers.get('Cache-Control'), 'no-store');
   assert.equal(invalid.headers.get('Referrer-Policy'), 'no-referrer');
+  const legacy = `${profile.id}.${managed.id}.${createHmac('sha256', token)
+    .update(`stash-proxy-source:${profile.id}:${managed.id}`).digest('hex')}`;
+  assert.equal((await managedProxySource(legacy, async () => body)).stale, false);
   rotateDownloadLink(profile.id);
-  await assert.rejects(managedProxySource(capability), expectStatus(404));
-  const rotated = await readExport(profile.id);
-  assert.notEqual(rotated.capability, capability);
+  await assert.rejects(managedProxySource(legacy), expectStatus(404));
+  assert.equal((await readExport(profile.id)).capability, capability);
   revokeDownloadLink(profile.id);
-  await assert.rejects(managedProxySource(rotated.capability), expectStatus(404));
+  assert.equal((await readExport(profile.id)).capability, capability);
+  assert.equal(getDeliveryStatus(profile.id).subscriptionPath, null);
+  assert.equal((await managedProxySource(capability, async () => body)).stale, false);
+  rotateSourceCapability(getDb(), profile.id, managed.id);
+  await assert.rejects(managedProxySource(capability), expectStatus(404));
+  assert.notEqual((await readExport(profile.id)).capability, capability);
 });
 
 test('managed requests share one refresh, recover from outage, and never reuse cache for changed credentials', async () => {
@@ -182,11 +192,11 @@ test('managed requests share one refresh, recover from outage, and never reuse c
 
 test('upstream request finishing after revocation cannot return data or populate the cache', async () => {
   const { profile } = createProfile('Revoke during refresh');
-  createProxyProvider(profile.id, fixtureSource());
+  const provider = createProxyProvider(profile.id, fixtureSource());
   const { capability } = await readExport(profile.id);
   let complete!: (body: string) => void;
   const pending = managedProxySource(capability, () => new Promise((resolve) => { complete = resolve; }));
-  revokeDownloadLink(profile.id);
+  rotateSourceCapability(getDb(), profile.id, provider.id);
   complete(body);
   await assert.rejects(pending, expectStatus(404));
   assert.equal(getDb().prepare('SELECT COUNT(*) FROM managed_proxy_source_cache').pluck().get(), 0);
@@ -204,4 +214,27 @@ test('rewrite rules survive imports of the same source and can be restored from 
   assert.deepEqual(getSnapshot(profile.id).proxyProviders[0].rewriteRules, rules);
   importYaml(profile.id, 'proxy-providers:\n  remote: {type: http}\nrules: ["MATCH,DIRECT"]');
   assert.deepEqual(getSnapshot(profile.id).proxyProviders[0].rewriteRules, rules);
+});
+
+test('managed YAML round-trips only in its own profile and restores the same delivery identity', async () => {
+  const { profile } = createProfile('Source round trip');
+  const original = createProxyProvider(profile.id, fixtureSource());
+  const saved = getSnapshot(profile.id);
+  const { capability, text } = await readExport(profile.id);
+  const preview = previewImport(profile.id, text);
+  assert.equal(preview.checks.stash.state, 'pending');
+  assert.equal(preview.changes.totalChanges, 0);
+  assert.equal(getSnapshot(profile.id).profile.revision, saved.profile.revision);
+  assert.doesNotMatch(JSON.stringify(preview), /private-feed|fixture-private-header|\/api\/proxy-source/);
+  assert.throws(() => createProfile('Bad clone', text), expectStatus(409));
+  const other = createProfile('Other profile');
+  assert.throws(() => previewImport(other.profile.id, text), expectStatus(409));
+  assert.throws(() => importYaml(other.profile.id, text), expectStatus(409));
+  assert.throws(() => importYaml(profile.id, text + '\nhosts: { changed.test: 192.0.2.2 }', preview.previewFingerprint), expectStatus(409));
+  importYaml(profile.id, text, preview.previewFingerprint);
+  assert.equal(getSnapshot(profile.id).proxyProviders[0].id, original.id);
+  assert.deepEqual(getSnapshot(profile.id).proxyProviders[0].rewriteRules, rules);
+  restoreRevision(profile.id, saved.profile.revision);
+  assert.equal((await readExport(profile.id)).capability, capability);
+  assert.equal((await managedProxySource(capability, async () => body)).stale, false);
 });

@@ -1,12 +1,15 @@
-import { configForToken, getDeliveryStatus, getLatestConfig, revokeDownloadLink, rotateDownloadLink } from './delivery';
+import { configForToken, getDeliveryStatus, getLatestConfig, readPersistedStashArtifact, revokeDownloadLink, rotateDownloadLink } from './delivery';
 import { absoluteDownloadUrl, confDownload, deliveryLinks, rejectLegacyParameters, yamlDownload } from './download-response';
 import {
-  getLatestShadowrocketConfig, getShadowrocketStatus, revokeShadowrocketLink,
+  getLatestShadowrocketConfig, getShadowrocketStatus, readPersistedShadowrocketArtifact, revokeShadowrocketLink,
   rotateShadowrocketLink, shadowrocketConfigForToken
 } from './shadowrocket-delivery';
 import { materializeStashArtifact } from './managed-proxy-source';
+import { getDb } from './db';
+import { publicationsFor } from './target-publication-store';
 import { requireAdmin } from './auth';
-import { jsonError, parseId } from './http';
+import { getProfileRow } from './repository-shared';
+import { HttpError, jsonError, parseId } from './http';
 import { configTargetIds, type ConfigDeliveryStatus, type ConfigTarget } from './config-targets';
 
 type MaybePromise<T> = T | Promise<T>;
@@ -14,6 +17,7 @@ type MaybePromise<T> = T | Promise<T>;
 interface ConfigDeliveryAdapter {
   status(profileId: number): ConfigDeliveryStatus;
   adminFile(profileId: number, request: Request): MaybePromise<Response>;
+  previewFile(profileId: number, request: Request): Response;
   deviceFile(token: string, request: Request): MaybePromise<Response>;
   rotate(profileId: number): MaybePromise<ConfigDeliveryStatus>;
   revoke(profileId: number): MaybePromise<void>;
@@ -23,8 +27,9 @@ const adapters = {
   stash: {
     status: getDeliveryStatus,
     adminFile: (profileId, request) => yamlDownload(materializeStashArtifact(getLatestConfig(profileId), request)),
+    previewFile: (profileId, request) => yamlDownload(materializeStashArtifact(readPersistedStashArtifact(profileId), request)),
     deviceFile: (token, request) => yamlDownload(
-      materializeStashArtifact(configForToken(token), request, token),
+      materializeStashArtifact(configForToken(token), request),
       absoluteDownloadUrl(request, new URL(request.url).pathname)
     ),
     rotate: rotateDownloadLink,
@@ -33,6 +38,7 @@ const adapters = {
   shadowrocket: {
     status: getShadowrocketStatus,
     adminFile: async (profileId) => confDownload(await getLatestShadowrocketConfig(profileId)),
+    previewFile: (profileId) => confDownload(readPersistedShadowrocketArtifact(profileId)),
     deviceFile: async (token) => confDownload(await shadowrocketConfigForToken(token)),
     rotate: rotateShadowrocketLink,
     revoke: revokeShadowrocketLink
@@ -41,8 +47,26 @@ const adapters = {
 
 export function profileDeliveryTargets(request: Request, profileId: number) {
   return Object.fromEntries(configTargetIds.map((target) => [
-    target, deliveryLinks(request, profileId, target, adapters[target].status(profileId))
+    target, deliveryLinks(request, profileId, target, { ...adapters[target].status(profileId), publications: publicationsFor(getDb(), profileId, target) })
   ])) as Record<ConfigTarget, ConfigDeliveryStatus>;
+}
+
+export function previewDeliveredConfig(request: Request, params: { profileId: string; target: string }) {
+  try {
+    requireAdmin(request);
+    rejectLegacyParameters(request);
+    const target = configTargetIds.find(candidate => candidate === params.target);
+    if (!target) throw new HttpError(404, 'Unknown client');
+    const profileId = parseId(params.profileId);
+    const db = getDb();
+    // Bind the served artifact and managed source generations to one read snapshot.
+    return db.transaction(() => {
+      getProfileRow(db, profileId);
+      return (adapters[target] as ConfigDeliveryAdapter).previewFile(profileId, request);
+    })();
+  } catch (error) {
+    return jsonError(error);
+  }
 }
 
 type ProfileContext = { params: Promise<{ profileId: string }> };

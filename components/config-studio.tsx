@@ -19,8 +19,7 @@ import {
   RefreshCw,
   Settings2,
   ShieldAlert,
-  Sparkles,
-  Upload
+  Sparkles
 } from 'lucide-react';
 
 import type {
@@ -40,11 +39,13 @@ import type {
 
 import { AdvancedView } from './advanced-view';
 import { ApiError, apiRequest } from './api-client';
+import { useResourceEditor, type EditableResource } from './use-resource-editor';
 import { EditorDialog } from './editor-dialog';
+import { useDeliveryWorkspace } from './use-delivery-workspace';
+import type { ConfigTarget } from '@/lib/config-targets';
 import { ExportView } from './export-view';
 import { HistoryView } from './history-view';
-import { ImportPreview } from './import-preview';
-import { InspectNewImport } from './import-classification';
+import { ProfileImportDialogs, type ImportDialogMode } from './profile-import-dialogs';
 import { OverviewView } from './overview-view';
 import { ResourceList } from './resource-list';
 import { RulesView } from './rules-view';
@@ -52,31 +53,11 @@ import { SettingsView } from './settings-view';
 import { Modal, SelectField, StatusBadge } from './ui';
 import { RelationshipsView, type EditorPreset } from './relationships-view';
 import { resourceKey, type ResourceNode } from '@/lib/resource-graph';
-import { UnsavedChangesProvider, useNavigationGuard, useUnsavedChanges } from './unsaved-changes';
+import { UnsavedChangesProvider, useNavigationGuard } from './unsaved-changes';
 
-type SectionId =
-  | 'relationships'
-  | 'overview'
-  | 'settings'
-  | 'proxy-providers'
-  | 'proxies'
-  | 'proxy-groups'
-  | 'rule-providers'
-  | 'rules'
-  | 'hosts'
-  | 'advanced'
-  | 'export'
-  | 'history';
-
+type SectionId = 'relationships' | 'overview' | 'settings' | 'proxy-providers' | 'proxies' |
+  'proxy-groups' | 'rule-providers' | 'rules' | 'hosts' | 'advanced' | 'export' | 'history';
 type SnapshotResponse = Snapshot & { validation: ValidationResult };
-type EditableResource =
-  | ProxyNode
-  | ProxyProvider
-  | ProxyGroup
-  | RuleProvider
-  | StashRule
-  | HostEntry
-  | null;
 
 interface Meta {
   rule_types: string[];
@@ -190,6 +171,8 @@ function Workspace() {
     issues: []
   });
   const [section, setSection] = useState<SectionId>('overview');
+  const [mobileResources, setMobileResources] = useState(false);
+  const resourceNavActive = !['overview', 'rules', 'export', 'history'].includes(section);
   const [token, setToken] = useState('');
   const [tokenDraft, setTokenDraft] = useState('');
   const [authRequired, setAuthRequired] = useState(false);
@@ -200,17 +183,8 @@ function Workspace() {
   const initialiseRequest = useRef(0);
   const mutationLock = useRef(false);
   const [graphFocus, setGraphFocus] = useState<string | null>(null);
-  const [editorPreset, setEditorPreset] = useState<EditorPreset | undefined>();
-  const [editorOpen, setEditorOpen] = useState(false);
-  const [editorKind, setEditorKind] = useState<ResourceKind | null>(null);
-  const [editing, setEditing] = useState<EditableResource>(null);
-  const [profileDialog, setProfileDialog] = useState(false);
-  const [newProfileName, setNewProfileName] = useState('');
-  const [newProfileSource, setNewProfileSource] = useState('empty');
-  const [newProfileYaml, setNewProfileYaml] = useState('');
-  const [importDialog, setImportDialog] = useState(false);
-  const [importYamlText, setImportYamlText] = useState('');
-  const [importPreviewRevision, setImportPreviewRevision] = useState<number | null>(null);
+  const editor = useResourceEditor();
+  const [importMode, setImportMode] = useState<ImportDialogMode>(null);
   const [pendingDelete, setPendingDelete] = useState<{
     kind: ResourceKind;
     item: EditableResource;
@@ -221,33 +195,17 @@ function Workspace() {
     tone: 'good' | 'bad' | 'warn';
   } | null>(null);
   const toastTimer = useRef<number | null>(null);
-  const { confirmDiscard: discardProfileDialog } = useUnsavedChanges(
-    profileDialog && Boolean(newProfileName || newProfileYaml || newProfileSource !== 'empty'),
-    profileBusy,
-    () => { setNewProfileName(''); setNewProfileYaml(''); setNewProfileSource('empty'); }
-  );
-  const { confirmDiscard: discardImportDialog } = useUnsavedChanges(
-    importDialog && Boolean(importYamlText), false, () => setImportYamlText('')
-  );
-  async function closeProfileDialog(open: boolean) {
-    if (open || (await discardProfileDialog())) setProfileDialog(open);
-  }
-  async function closeImportDialog(open: boolean) {
-    if (profileBusy) return;
-    if (open || (await discardImportDialog())) setImportDialog(open);
-  }
-
   async function navigate(next: SectionId) {
     if (next === section || !(await confirmNavigation())) return;
     setSection(next);
   }
 
   async function openImportDialog() {
-    if (await confirmNavigation()) setImportDialog(true);
+    if (await confirmNavigation()) setImportMode('replace');
   }
 
   async function openProfileDialog() {
-    if (await confirmNavigation()) setProfileDialog(true);
+    if (await confirmNavigation()) setImportMode('new');
   }
 
   async function inspectGraphNode(node: ResourceNode) {
@@ -402,8 +360,7 @@ function Workspace() {
       if (await loadSnapshot(id, token)) {
         setSection('overview');
         setGraphFocus(null);
-        setEditorOpen(false);
-        setEditorKind(null);
+        editor.close();
       }
     } catch (caught) {
       handleError(caught);
@@ -433,12 +390,7 @@ function Workspace() {
     } finally { mutationLock.current = false; setProfileBusy(false); }
   }
 
-  function openEditor(kind: ResourceKind, item: EditableResource = null) {
-    setEditorPreset(undefined);
-    setEditorKind(kind);
-    setEditing(item);
-    setEditorOpen(true);
-  }
+  const openEditor = editor.open;
 
   function requestDelete(kind: ResourceKind, item: EditableResource) {
     if (!item || !profileId) return;
@@ -491,10 +443,7 @@ function Workspace() {
     if (item) openEditor(kind, item as EditableResource);
   }
   function createRelated(kind: 'proxy-groups' | 'rules', preset: EditorPreset) {
-    setEditorKind(kind);
-    setEditing(null);
-    setEditorPreset(preset);
-    setEditorOpen(true);
+    editor.open(kind, null, preset);
   }
 
   async function fixIssue(issue: ValidationIssue) {
@@ -510,60 +459,11 @@ function Workspace() {
     setSection(kind || (issue.resource === 'advanced' ? 'advanced' : 'settings'));
   }
 
-  async function createProfile() {
-    if (mutationLock.current) return;
-    mutationLock.current = true;
-    setProfileBusy(true);
-    try {
-      const data = await apiRequest<SnapshotResponse>('/api/profiles', {
-        method: 'POST',
-        token,
-        body: JSON.stringify({
-          name: newProfileName.trim(),
-          importYaml:
-            newProfileSource === 'import'
-              ? newProfileYaml.trim() || undefined
-              : undefined,
-          example: newProfileSource === 'example'
-        })
-      });
-      setProfileDialog(false);
-      setNewProfileName('');
-      setNewProfileYaml('');
-      setNewProfileSource('empty');
-      setSection(newProfileSource === 'empty' ? 'overview' : 'relationships');
-      await initialise(token, data.profile.id);
-      notify('新配置已创建。');
-    } catch (caught) {
-      handleError(caught);
-    } finally {
-      mutationLock.current = false;
-      setProfileBusy(false);
-    }
-  }
-
-  async function importCurrent() {
-    if (!profileId || importPreviewRevision === null || mutationLock.current) return;
-    mutationLock.current = true;
-    setProfileBusy(true);
-    try {
-      await apiRequest(`/api/profiles/${profileId}/import`, {
-        method: 'POST',
-        expectedRevision: importPreviewRevision!,
-        token,
-        body: JSON.stringify({ yaml: importYamlText })
-      });
-      setImportDialog(false);
-      setImportYamlText('');
-      await reload('配置文件已解析，可以从关联关系中继续配置。');
-      setGraphFocus(null);
-      setSection('relationships');
-    } catch (caught) {
-      handleError(caught);
-    } finally {
-      mutationLock.current = false;
-      setProfileBusy(false);
-    }
+  const delivery = useDeliveryWorkspace(snapshot?.profile.id, snapshot?.profile.revision, token, section);
+  async function openDelivery(target: ConfigTarget) {
+    if (!(await confirmNavigation())) return;
+    delivery.setTarget(target);
+    setSection('export');
   }
 
   const currentProfile = snapshot?.profile.id === profileId ? snapshot.profile : profiles.find((item) => item.id === profileId);
@@ -702,21 +602,27 @@ function Workspace() {
           </div>
         </header>
 
-        <div className="mobile-nav">
-          {NAV.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.id}
-                className={section === item.id ? 'active' : ''}
-                onClick={() => navigate(item.id)}
-              >
-                <Icon size={15} />
-                {item.label}
-              </button>
-            );
-          })}
-        </div>
+        <nav className="mobile-nav" aria-label="手机配置导航">
+          {([
+            ['overview', '总览', '总览'], ['rules', '路由', '路由规则'],
+            ['resources', '资源', '资源'], ['export', '交付', '交付'], ['history', '历史', '历史']
+          ] as const).map(([id, label, aria]) => id === 'resources' ? (
+            <button key={id} className={resourceNavActive ? 'active' : ''} aria-label={aria}
+              aria-expanded={mobileResources} aria-controls="mobile-resource-nav"
+              onClick={() => setMobileResources(open => !open)}>{label}</button>
+          ) : (
+            <button key={id} className={section === id ? 'active' : ''} aria-label={aria}
+              aria-current={section === id ? 'page' : undefined}
+              onClick={() => { setMobileResources(false); void navigate(id); }}>{label}</button>
+          ))}
+          {mobileResources ? <div className="mobile-resource-nav" id="mobile-resource-nav">
+            {NAV.filter(item => !['overview', 'rules', 'export', 'history'].includes(item.id)).map(item => (
+              <button key={item.id} className={section === item.id ? 'active' : ''} onClick={() => {
+                setMobileResources(false); void navigate(item.id);
+              }}>{item.label}</button>
+            ))}
+          </div> : null}
+        </nav>
 
         {connectionError ? (
           <div className="connection-banner" role="alert">
@@ -733,7 +639,8 @@ function Workspace() {
           <div className="content-stage" key={snapshot.profile.id}>
             {section === 'overview' ? (
               <OverviewView
-                token={token}
+                delivery={delivery}
+                onDelivery={(target) => void openDelivery(target)}
                 snapshot={snapshot}
                 validation={validation}
                 onNavigate={(value) => navigate(value as SectionId)}
@@ -823,7 +730,7 @@ function Workspace() {
             {section === 'export' ? (
               <ExportView
                 snapshot={snapshot}
-                validation={validation}
+                delivery={delivery}
                 profileId={snapshot.profile.id}
                 token={token}
                 onFixIssue={fixIssue}
@@ -851,141 +758,32 @@ function Workspace() {
         </footer>
       </main>
 
-      {editorKind && snapshot ? (
+      {editor.session && snapshot ? (
         <EditorDialog
-          open={editorOpen}
-          onOpenChange={setEditorOpen}
-          initialValues={editorPreset}
-          resource={editorKind}
-          existing={editing}
-          snapshot={snapshot!}
-          profileId={snapshot!.profile.id}
+          open
+          onOpenChange={open => { if (!open) editor.close(); }}
+          initialValues={editor.session.preset}
+          resource={editor.session.kind}
+          existing={editor.session.item}
+          snapshot={snapshot}
+          profileId={snapshot.profile.id}
           token={token}
           onSaved={reload}
         />
       ) : null}
 
-      <Modal
-        open={profileDialog}
-        onOpenChange={closeProfileDialog}
-        title="新建配置"
-        description="可以从空配置开始，或导入 Stash YAML / Shadowrocket .conf。"
-        wide
-        footer={
-          <>
-            <button
-              className="button secondary"
-              onClick={() => closeProfileDialog(false)}
-            >
-              取消
-            </button>
-            <button
-              className="button primary"
-              disabled={profileBusy || !newProfileName.trim() || (newProfileSource === 'import' && !newProfileYaml.trim())}
-              onClick={createProfile}
-            >
-              {profileBusy ? '创建中…' : '创建配置'}
-            </button>
-          </>
-        }
-      >
-        <div className="form-grid">
-          <label className="field wide">
-            <span>配置名称</span>
-            <input
-              className="input"
-              value={newProfileName}
-              onChange={(event) => setNewProfileName(event.target.value)}
-              placeholder="例如：我的手机"
-            />
-          </label>
-          <SelectField
-            label="从哪里开始"
-            value={newProfileSource}
-            onValueChange={setNewProfileSource}
-            options={[
-              { value: 'empty', label: '最小配置 · 自己添加需要的资源' },
-              { value: 'import', label: '导入已有配置' },
-              { value: 'example', label: '可选示例 · 用于了解各项功能' }
-            ]}
-            wide
-          />
-          {newProfileSource === 'import' ? (
-            <>
-              <p className="delivery-note wide">将创建独立配置。粘贴或选择文件后会识别格式，并列出共有和客户端专用内容。</p>
-              <label className="field wide">
-                <span>完整配置</span>
-                <textarea
-                  className="code-input"
-                  rows={13}
-                  value={newProfileYaml}
-                  onChange={(event) => setNewProfileYaml(event.target.value)}
-                  placeholder="粘贴 Stash YAML 或 Shadowrocket .conf"
-                />
-              </label>
-              <InspectNewImport content={newProfileYaml} token={token} />
-              <label className="file-drop wide">
-                <Upload size={18} />
-                <span>选择配置文件</span>
-                <input
-                  type="file"
-                  accept=".yaml,.yml,.conf,.config,text/yaml,application/yaml,text/plain,application/json"
-                  onChange={async (event) => {
-                    const file = event.target.files?.[0];
-                    if (file) setNewProfileYaml(await file.text());
-                  }}
-                />
-              </label>
-            </>
-          ) : null}
-        </div>
-      </Modal>
-
-      <Modal
-        open={importDialog}
-        onOpenChange={closeImportDialog}
-        title="导入并替换当前 Profile"
-        description={`将替换「${snapshot?.profile.name || '当前配置'}」的全部资源。当前状态保留在版本历史，导入错误不会覆盖现有内容。`}
-        wide
-        footer={
-          <>
-            <button
-              className="button secondary"
-              onClick={() => closeImportDialog(false)}
-            >
-              取消
-            </button>
-            <button
-              className="button primary"
-              disabled={profileBusy || !importYamlText.trim() || importPreviewRevision === null}
-              onClick={importCurrent}
-            >
-              {profileBusy ? '导入中…' : '导入完整配置'}
-            </button>
-          </>
-        }
-      >
-        <label className="file-drop">
-          <Upload size={18} />
-          <span>读取配置文件</span>
-          <input
-            type="file"
-            accept=".yaml,.yml,.conf,.config,text/yaml,application/yaml,text/plain,application/json"
-            onChange={async (event) => {
-              const file = event.target.files?.[0];
-              if (file) { setImportPreviewRevision(null); setImportYamlText(await file.text()); }
-            }}
-          />
-        </label>
-        <textarea
-          className="code-input import-code"
-          rows={18}
-          value={importYamlText}
-          onChange={(event) => { setImportPreviewRevision(null); setImportYamlText(event.target.value); }}
-          placeholder="粘贴 Stash YAML 或 Shadowrocket .conf"
-        />
-        {profileId ? <ImportPreview profileId={profileId} token={token} yaml={importYamlText} onPreview={setImportPreviewRevision} /> : null}
-      </Modal>
+      <ProfileImportDialogs mode={importMode} setMode={setImportMode} profile={snapshot?.profile} token={token}
+        onBusy={setProfileBusy} onError={handleError}
+        onCreated={async (id, hasResources) => {
+          setSection(hasResources ? 'relationships' : 'overview');
+          await initialise(token, id);
+          notify('新配置已创建。');
+        }}
+        onReplaced={async () => {
+          await reload('配置文件已解析，可以从关联关系中继续配置。');
+          setGraphFocus(null);
+          setSection('relationships');
+        }} />
 
       <Modal
         open={pendingDelete !== null}
