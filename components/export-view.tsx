@@ -38,6 +38,7 @@ export function ExportView({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [mihomoSelected, setMihomoSelected] = useState(false);
   const [changingLink, setChangingLink] = useState(false);
   const [pendingLinkChange, setPendingLinkChange] = useState<'rotate' | 'revoke' | null>(null);
   const actionLock = useRef(false);
@@ -126,24 +127,25 @@ export function ExportView({
           <h2>下载配置</h2>
           <p>对照当前编辑版与设备可下载版，管理各客户端的发布和订阅。</p>
         </div>
-        <StatusBadge tone={status?.current ? 'good' : 'warn'}>
+        {!mihomoSelected ? <StatusBadge tone={status?.current ? 'good' : 'warn'}>
           {!status ? (delivery.error ? '状态未确认' : '读取中') : status.current
             ? `版本 ${status.compiledRevision} 可用`
             : status.compiledRevision != null
               ? `继续提供版本 ${status.compiledRevision}`
               : sourceFailed ? '远程来源检查未通过'
                 : status?.remoteSources ? '等待拉取远程来源' : '等待配置完成'}
-        </StatusBadge>
+        </StatusBadge> : null}
       </div>
       <div className="delivery-actions" role="group" aria-label="配置客户端">
           {configTargetIds.map((option) => (
             <button
               key={option}
-              className={`button small ${target === option ? 'primary' : 'secondary'}`}
-              aria-pressed={target === option}
+              className={`button small ${!mihomoSelected && target === option ? 'primary' : 'secondary'}`}
+              aria-pressed={!mihomoSelected && target === option}
               disabled={busy || pendingLinkChange !== null}
               onClick={() => {
-                if (target === option || actionLock.current) return;
+                if ((!mihomoSelected && target === option) || actionLock.current) return;
+                setMihomoSelected(false);
                 setError('');
                 setNotice('');
                 setTarget(option);
@@ -152,7 +154,23 @@ export function ExportView({
               {CONFIG_TARGETS[option].label}
             </button>
           ))}
+          <button type="button"
+            className={`button small ${mihomoSelected ? 'primary' : 'secondary'}`}
+            aria-pressed={mihomoSelected}
+            disabled={busy || pendingLinkChange !== null}
+            onClick={() => setMihomoSelected(true)}>
+            Clash (Mihomo)
+          </button>
       </div>
+      {mihomoSelected ? <>
+        <p className="delivery-note">
+          导出当前保存版本的 YAML，可导入使用 Mihomo 内核的 Clash 客户端。若有未迁移的 Stash 区块，预览顶部会列出。
+          远程来源由客户端加载，本地文件需放入 Mihomo 工作目录。
+        </p>
+        <ConfigExportPreview id="mihomo-export-preview" key={`${profileId}:${snapshot.profile.revision}`}
+          endpoint={`/api/profiles/${profileId}/mihomo/config_download`} client="Clash (Mihomo)"
+          language="yaml" token={token} available downloadLabel="下载 Mihomo YAML" onFixIssue={onFixIssue} />
+      </> : <>
       {isDefault && missing.length ? (
         <p className="inline-error">
           待配置来源：{missing.map((p) => p.name).join('、')}
@@ -211,7 +229,9 @@ export function ExportView({
       </div>
       {previewOpen ? <ConfigExportPreview id="config-export-preview"
         key={JSON.stringify([profileId, target, status?.compiledRevision, status?.generatedAt])}
-        profileId={profileId} target={target} token={token} available={status?.compiledRevision != null} /> : null}
+        endpoint={`/api/profiles/${profileId}/delivery/${target}/preview`}
+        client={client} language={target === 'shadowrocket' ? 'ini' : 'yaml'}
+        token={token} available={status?.compiledRevision != null} /> : null}
       {status ? <DeliveryPublication key={target} profileId={profileId} revision={snapshot.profile.revision} token={token}
         target={target} status={status} delivery={delivery} disabled={busy} /> : null}
       {isDefault && status?.managedSources?.length ? <ManagedSourceControls profileId={profileId}
@@ -330,6 +350,7 @@ export function ExportView({
         <pre className="inline-error">{error || delivery.error}</pre>
         <button className="button secondary small" disabled={busy} onClick={() => { setError(''); void delivery.refresh(); }}>重试读取下载状态</button>
       </div> : null}
+      </>}
     </section>
   );
 }

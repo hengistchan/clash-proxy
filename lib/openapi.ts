@@ -193,6 +193,19 @@ const paths: Record<string, object> = {
       }
     }
   },
+  '/api/profiles/{profileId}/mihomo/config_download': {
+    parameters: [id],
+    get: {
+      summary: '从当前保存版本导出 Clash (Mihomo) YAML，无查询参数',
+      responses: {
+        '200': {
+          description: 'Mihomo YAML 附件；X-Config-Revision 表示源版本',
+          content: { 'application/yaml': { schema: { type: 'string' } } }
+        },
+        ...errors
+      }
+    }
+  },
   '/api/profiles/{profileId}/shadowrocket/config_download': {
     parameters: [id],
     get: {

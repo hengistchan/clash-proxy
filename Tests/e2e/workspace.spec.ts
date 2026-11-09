@@ -760,3 +760,39 @@ test('touch browsers can read and download a configuration preview at phone widt
     await context.close();
   }
 });
+
+test('Clash (Mihomo) previews and downloads the same YAML and explains blocked rules', async ({ page, request }) => {
+  const initial = await create(request, 'mihomo-preview', `
+http: {mitm: ["*.example.test"]}
+rules:
+  - DOMAIN,clash.example.test,DIRECT
+  - MATCH,DIRECT
+`);
+  await login(page, initial);
+  await navigate(page, '下载配置');
+  const endpoint = `/api/profiles/${initial.profile.id}/mihomo/config_download`;
+  const loaded = page.waitForResponse(response => response.url().endsWith(endpoint));
+  await page.getByRole('button', { name: 'Clash (Mihomo)', exact: true }).click();
+  const response = await loaded;
+  expect(response.status()).toBe(200);
+  const preview = page.getByLabel('导出配置预览', { exact: true });
+  await expect(preview).toContainText(`版本 ${initial.profile.revision}`);
+  await expect(preview.locator('.monaco-editor .view-lines')).toContainText('未迁移的 Stash 专用区块：http');
+  await expect(page.getByText('设备订阅链接', { exact: true })).toHaveCount(0);
+  const pending = page.waitForEvent('download');
+  await preview.getByRole('button', { name: '下载 Mihomo YAML' }).click();
+  const downloaded = await pending;
+  expect(downloaded.suggestedFilename()).toBe(`mihomo-${initial.profile.id}.yaml`);
+  expect(createHash('sha256').update(readFileSync((await downloaded.path())!)).digest('hex'))
+    .toBe(response.headers()['x-config-sha256']);
+
+  const changed = await request.post(`/api/profiles/${initial.profile.id}/import`, {
+    headers: { ...headers, 'If-Match': `"${initial.profile.revision}"` },
+    data: { yaml: 'rules: ["DOMAIN,ads.example.test,REJECT,pre-matching", "MATCH,DIRECT"]' }
+  });
+  expect(changed.ok()).toBeTruthy();
+  await preview.getByRole('button', { name: '刷新预览' }).click();
+  await expect(preview.getByRole('alert')).toContainText('未通过 Mihomo 导出检查');
+  await expect(preview.getByText(/第 1 条规则的类型/)).toBeVisible();
+  await expect(preview.getByRole('button', { name: '下载 Mihomo YAML' })).toHaveCount(0);
+});

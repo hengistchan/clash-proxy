@@ -71,6 +71,10 @@ curl -f -H "Authorization: Bearer $ADMIN_TOKEN" \\
         创建、更换或撤销远程配置链接。/delivery 的 shadowrocket 字段包含独立的版本、链接及兼容性检查结果。
         将链接添加到 Shadowrocket 的「配置」页。更新时服务会拉取已保存的远程来源；若转换失败，会继续交付最近成功的版本。
       </p>
+      <p>
+        <strong>Clash (Mihomo)：</strong>使用 /mihomo/config_download 导出当前保存版本的 YAML。
+        需要管理员认证；不兼容时返回 409 和检查项。此接口用于手动导出文件，不参与设备发布和订阅。
+      </p>
       <h2>保存、错误与旧版本</h2>
       <p>
         资源保存成功表示草稿已持久化，不等同于所有检查通过。/delivery 返回

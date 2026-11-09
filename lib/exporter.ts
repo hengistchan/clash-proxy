@@ -12,23 +12,28 @@ import { SHADOWROCKET_BUILTINS } from './types';
 import type { ValidationIssue } from './types';
 
 export function stashTargetIssues(snapshot: Snapshot): ValidationIssue[] {
+  return yamlTargetIssues(snapshot, 'stash');
+}
+
+export function yamlTargetIssues(snapshot: Snapshot, target: 'stash' | 'mihomo'): ValidationIssue[] {
+  const label = target === 'stash' ? 'Stash' : 'Mihomo';
   if (snapshot.profile.clientOptions?.shadowrocket?.native !== true) return [];
   const options = snapshot.profile.clientOptions.shadowrocket;
   const issues: ValidationIssue[] = [];
   const add = (message: string, resource?: string, resourceId?: number) => issues.push({
-    severity: 'error', code: 'stash.shadowrocket-native', message, resource, resourceId
+    severity: 'error', code: `${target}.shadowrocket-native`, message, resource, resourceId
   });
   const known = new Set([...snapshot.proxies, ...snapshot.proxyGroups].map((item) => item.name));
   const nativePolicy = (name: string) => !known.has(name) && SHADOWROCKET_BUILTINS.some((item) => item === name);
   if ([options.general, options.sections].some((items) => Array.isArray(items) && items.length > 0)) {
-    add('导入的配置包含 Shadowrocket 专用全局设置或区块；为保留行为，不能直接交付给 Stash。');
+    add(`导入的配置包含 Shadowrocket 专用全局设置或区块；为保留行为，不能直接交付给 ${label}。`);
   }
   for (const group of snapshot.proxyGroups) {
     const native = group.clientOptions?.shadowrocket;
     const members = Array.isArray(group.config.proxies) ? group.config.proxies : [];
     if (native && (native.use === true || Array.isArray(native.nativeMembers) ||
       (!members.length && native['policy-regex-filter'] !== undefined))) {
-      add('此策略组依赖 Shadowrocket 客户端节点，无法转换为 Stash。', 'proxy-group', group.id);
+      add(`此策略组依赖 Shadowrocket 客户端节点，无法转换为 ${label}。`, 'proxy-group', group.id);
     }
   }
   for (const rule of snapshot.rules.filter((item) => item.enabled)) {
@@ -37,7 +42,7 @@ export function stashTargetIssues(snapshot: Snapshot): ValidationIssue[] {
   const used = new Set(snapshot.rules.filter((rule) => rule.enabled && rule.type === 'RULE-SET').map((rule) => rule.payload));
   for (const source of snapshot.ruleProviders) {
     if (used.has(source.name) && source.clientOptions?.shadowrocket?.referenceType === 'DOMAIN-SET') {
-      add('Shadowrocket DOMAIN-SET 的匹配格式不能自动作为 Stash 规则集发布。', 'rule-provider', source.id);
+      add(`Shadowrocket DOMAIN-SET 的匹配格式不能自动作为 ${label} 规则集发布。`, 'rule-provider', source.id);
     }
   }
   return issues;
@@ -73,11 +78,7 @@ function mergeObject(
   } as JsonObject;
 }
 
-export function buildConfigObject(snapshot: Snapshot): {
-  config: Record<string, unknown>;
-  validation: ReturnType<typeof validateSnapshot>;
-  proxyRewrites?: ExportResult['proxyRewrites'];
-} {
+export function buildConfigObject(snapshot: Snapshot) {
   const validation = validateSnapshot(snapshot);
   const nativeIssues = stashTargetIssues(snapshot);
   if (nativeIssues.length) throw new HttpError(409, 'Stash compatibility check failed', nativeIssues);
@@ -89,6 +90,10 @@ export function buildConfigObject(snapshot: Snapshot): {
     );
   }
 
+  return { ...assembleYamlConfig(snapshot), validation };
+}
+
+export function assembleYamlConfig(snapshot: Snapshot) {
   const advanced = new Map(
     snapshot.advancedSections.map((item) => [item.key, item.value])
   );
@@ -153,12 +158,25 @@ export function buildConfigObject(snapshot: Snapshot): {
     config[key] = value;
   }
 
-  return { config, validation, ...(sources.length ? { proxyRewrites: { profileId: snapshot.profile.id, sources } } : {}) };
+  return { config, ...(sources.length ? { proxyRewrites: { profileId: snapshot.profile.id, sources } } : {}) };
 }
 
 export function exportProfile(snapshot: Snapshot): ExportResult {
   const { config, validation, proxyRewrites } = buildConfigObject(snapshot);
-  const yaml = stringifyYaml(config, {
+  return {
+    ...serializeYamlConfig(config, `config-${snapshot.profile.id}.yaml`, validation),
+    compilerVersion: CONFIG_COMPILER_VERSION,
+    ...(proxyRewrites ? { proxyRewrites } : {})
+  };
+}
+
+export function serializeYamlConfig(
+  config: Record<string, unknown>,
+  filename: string,
+  validation: ExportResult['validation'],
+  comments: string[] = []
+): ExportResult {
+  const yaml = comments.map(line => `# ${line}\n`).join('') + stringifyYaml(config, {
     lineWidth: 0,
     minContentWidth: 0,
     sortMapEntries: false
@@ -167,11 +185,8 @@ export function exportProfile(snapshot: Snapshot): ExportResult {
   let parsed: unknown;
   try {
     parsed = parseYaml(yaml);
-  } catch (error) {
-    throw new HttpError(
-      500,
-      `Generated configuration could not be parsed: ${error instanceof Error ? error.message : 'unknown error'}`
-    );
+  } catch {
+    throw new HttpError(500, 'Generated configuration could not be parsed');
   }
   if (!isJsonObject(parsed)) {
     throw new HttpError(500, 'Generated configuration is not a YAML mapping');
@@ -182,13 +197,11 @@ export function exportProfile(snapshot: Snapshot): ExportResult {
   }
   const sha256 = createHash('sha256').update(yaml, 'utf8').digest('hex');
   return {
-    compilerVersion: CONFIG_COMPILER_VERSION,
     yaml,
-    filename: `config-${snapshot.profile.id}.yaml`,
+    filename,
     sha256,
     ruleCount: expectedRules.length,
-    validation,
-    ...(proxyRewrites ? { proxyRewrites } : {})
+    validation
   };
 }
 

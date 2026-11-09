@@ -6,7 +6,7 @@ import {
   type StashRule
 } from './types';
 
-function splitTopLevel(value: string): string[] {
+export function splitTopLevel(value: string): string[] {
   const parts: string[] = [];
   let current = '';
   let depth = 0;
