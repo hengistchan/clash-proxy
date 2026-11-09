@@ -1,6 +1,7 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { configSubscriptionPath } from './config-targets';
+import { profileForTargetToken, readTargetToken, revokeTargetToken, rotateTargetToken } from './download-link-store';
 import { getDb } from './db';
-import { decryptJson, encryptJson } from './crypto';
+import { decryptJson } from './crypto';
 import { refreshStashConfig } from './stash-compilation';
 import { stashTargetIssues, type ExportResult } from './exporter';
 import { getCompilationSnapshot } from './repository';
@@ -45,14 +46,11 @@ export function getDeliveryStatus(profileId: number) {
     ...(issues.length ? { issues } : {}),
     generatedAt: row?.created_at ?? null,
     ...(artifact?.proxyRewrites ? { managedProxySources: true } : {}),
-    subscriptionPath: token ? `/api/config_download/${token}/config.yaml` : null
+    subscriptionPath: configSubscriptionPath('stash', token)
   };
 }
 export function readDownloadToken(profileId: number) {
-  const link = getDb()
-    .prepare('SELECT token_ciphertext FROM download_links WHERE profile_id = ?')
-    .get(profileId) as { token_ciphertext: string } | undefined;
-  return link ? decryptJson<string>(link.token_ciphertext) : null;
+  return readTargetToken(getDb(), 'stash', profileId);
 }
 export function getLatestConfig(profileId: number) {
   const { snapshot, row, artifact } = artifactRow(profileId);
@@ -70,38 +68,16 @@ export function getLatestConfig(profileId: number) {
 }
 export function rotateDownloadLink(profileId: number) {
   getCompilationSnapshot(profileId);
-  const token = randomBytes(32).toString('base64url');
-  getDb()
-    .prepare(
-      `INSERT INTO download_links (profile_id, token_hash, token_ciphertext, created_at)
-    VALUES (?, ?, ?, ?) ON CONFLICT(profile_id) DO UPDATE SET token_hash = excluded.token_hash,
-    token_ciphertext = excluded.token_ciphertext, created_at = excluded.created_at`
-    )
-    .run(
-      profileId,
-      createHash('sha256').update(token).digest('hex'),
-      encryptJson(token),
-      new Date().toISOString()
-    );
+  rotateTargetToken(getDb(), 'stash', profileId);
   return getDeliveryStatus(profileId);
 }
 export function revokeDownloadLink(profileId: number) {
   getCompilationSnapshot(profileId);
-  getDb()
-    .prepare('DELETE FROM download_links WHERE profile_id = ?')
-    .run(profileId);
+  revokeTargetToken(getDb(), 'stash', profileId);
 }
 export function configForToken(token: string) {
   // Only persisted, successful artifacts are read on a device download. No draft compilation here.
-  if (!/^[A-Za-z0-9_-]{43}$/.test(token))
-    throw new HttpError(404, 'Download link not found');
-  const link = getDb()
-    .prepare('SELECT profile_id FROM download_links WHERE token_hash = ?')
-    .get(createHash('sha256').update(token).digest('hex')) as
-    | { profile_id: number }
-    | undefined;
-  if (!link) throw new HttpError(404, 'Download link not found');
-  return readPersistedStashArtifact(link.profile_id);
+  return readPersistedStashArtifact(profileForTargetToken(getDb(), 'stash', token));
 }
 export function readPersistedStashArtifact(profileId: number) {
   const row = servedStashRecord(getDb(), profileId);

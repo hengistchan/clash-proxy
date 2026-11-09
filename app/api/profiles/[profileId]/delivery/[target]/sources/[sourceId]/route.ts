@@ -2,8 +2,8 @@ import { requireAdmin } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { profileDeliveryTargets } from '@/lib/config-delivery-adapters';
 import { HttpError, jsonError, parseId } from '@/lib/http';
-import { setSourceAccess } from '@/lib/managed-source-access';
-import { managedSources, servedStashRecord } from '@/lib/target-publication-store';
+import { isManagedSourceTarget, setSourceAccess } from '@/lib/managed-source-access';
+import { managedSources, servedRecord } from '@/lib/target-publication-store';
 
 export const runtime = 'nodejs';
 
@@ -14,13 +14,14 @@ async function change(request: Request, context: Context, enabled: boolean) {
     requireAdmin(request);
     const params = await context.params;
     const profileId = parseId(params.profileId), sourceId = parseId(params.sourceId);
-    if (params.target !== 'stash') throw new HttpError(404, 'Managed source not found');
+    const { target } = params;
+    if (!isManagedSourceTarget(target)) throw new HttpError(404, 'Managed source not found');
     const db = getDb();
     return db.transaction(() => {
-      if (!managedSources(servedStashRecord(db, profileId)).some(source => source.id === sourceId)) {
+      if (!managedSources(servedRecord(db, profileId, target)).some(source => source.id === sourceId)) {
         throw new HttpError(404, 'Managed source not found');
       }
-      setSourceAccess(db, profileId, sourceId, enabled);
+      setSourceAccess(db, profileId, sourceId, enabled, target);
       return Response.json({ targets: profileDeliveryTargets(request, profileId) }, { headers: { 'Cache-Control': 'no-store' } });
     }).immediate();
   } catch (error) {

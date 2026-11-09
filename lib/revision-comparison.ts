@@ -6,7 +6,7 @@ import { compareConfigurations } from './config-diff';
 import { ensureInitialized, getCompilationSnapshot } from './repository';
 import { importedSnapshot, importPreviewFingerprint, prepareImport } from './import-candidate';
 import { checkDraft } from './draft-check';
-import { deliveryMode, publicationRecord, servedStashRecord, shadowrocketCandidate } from './target-publication-store';
+import { servedRecord } from './target-publication-store';
 
 export const NORMALIZATION_NOTICE = '导入会分类保存共有语义和客户端专用字段；注释及原始排版不会保留。下面只展示语义变化摘要，不显示私人连接参数或凭据。';
 
@@ -32,15 +32,17 @@ export function previewImport(profileId: number, text: string) {
     const before = getCompilationSnapshot(profileId);
     const prepared = prepareImport(db, profileId, document, before, 'replace');
     const after = importedSnapshot(before.profile, prepared);
-    const mode = deliveryMode(db, profileId, 'shadowrocket');
-    const shadow = mode ? publicationRecord(db, profileId, 'shadowrocket', mode.publication_id) : shadowrocketCandidate(db, profileId);
     return {
       currentRevision: before.profile.revision,
       changes: compareConfigurations(before, after),
       normalizationNotice: NORMALIZATION_NOTICE,
       classification,
       previewFingerprint: importPreviewFingerprint(before.profile, prepared),
-      checks: checkDraft(after, { stash: servedStashRecord(db, profileId)?.revision, shadowrocket: shadow?.revision })
+      checks: checkDraft(after, {
+        stash: servedRecord(db, profileId, 'stash')?.revision,
+        shadowrocket: servedRecord(db, profileId, 'shadowrocket')?.revision,
+        mihomo: servedRecord(db, profileId, 'mihomo')?.revision
+      })
     };
   })();
 }

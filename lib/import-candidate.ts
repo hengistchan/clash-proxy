@@ -5,7 +5,7 @@ import type { ImportedDocument } from './yaml-import';
 import type { Profile, Snapshot } from './types';
 import { HttpError } from './http';
 import { managedSourceReference, verifySourceCapability } from './managed-source-access';
-import { managedSources, servedStashRecord } from './target-publication-store';
+import { managedSources, servedRecord } from './target-publication-store';
 
 export type PreparedDocument = Omit<ImportedDocument, 'proxyProviders'> & {
   proxyProviders: Array<ImportedDocument['proxyProviders'][number] & { retainedId?: number }>;
@@ -20,7 +20,7 @@ export function prepareImport(
   const byId = new Map(current?.proxyProviders.map((item) => [item.id, item]));
   const displayNames = new Map(current?.ruleProviders.map((item) => [item.name, item.displayName]));
   const assigned = new Set<number>();
-  let served: Map<number, ReturnType<typeof managedSources>[number]> | undefined;
+  const served = new Map<string, Map<number, ReturnType<typeof managedSources>[number]>>();
   const invalidReference = () => new HttpError(409, '这份配置包含无法还原的工作台代理源链接。请在原配置中重新导出，或先在文件中替换为原始上游地址，再导入。');
   return {
     ...document,
@@ -34,8 +34,12 @@ export function prepareImport(
         let identity: ReturnType<typeof verifySourceCapability>;
         try { identity = verifySourceCapability(db, reference.capability); } catch { throw invalidReference(); }
         if (identity.profileId !== profileId || !byId.has(identity.providerId)) throw invalidReference();
-        served ??= new Map(managedSources(servedStashRecord(db, profileId)).map(source => [source.id, source]));
-        const source = served.get(identity.providerId);
+        let sources = served.get(identity.target);
+        if (!sources) {
+          sources = new Map(managedSources(servedRecord(db, profileId, identity.target)).map(source => [source.id, source]));
+          served.set(identity.target, sources);
+        }
+        const source = sources.get(identity.providerId);
         if (!source) throw invalidReference();
         const { headers: _headers, url: _url, ...options } = config;
         config = { ...options, ...source.upstream };

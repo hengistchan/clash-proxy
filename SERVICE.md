@@ -9,7 +9,7 @@ Next.js / React + Node.js + SQLite。用户从最小配置、导入的 YAML 或�
 3. 导入配置后会进入“关联关系”，主页与关联页以可展开的关系树展示路由 → 策略 → 节点/订阅，以及规则集、DNS 和脚本引用。树保留规则和组成员顺序，共享资源可在多个分支出现；循环引用与缺失资源明确标记。大量成员分批展开，点击资源会自动展开其所在路径。每个资源可以查看使用者、被引用对象，直接创建预选关联的策略组或规则。管理节点、策略组、规则集、路由顺序、DNS、Hosts 和扩展顶层区块。策略组可以勾选节点、其他组及 provider，并用上下移动调整出口成员顺序；标识文本编辑收进专家模式。节点、来源、策略参数、DNS 扩展和高级区块使用递归字段表单，未知字段及嵌套类型保留，JSON 源码仅在专家模式显示。
 4. 保存自动检查和生成；错误草稿仍保存，下载继续提供最近成功版本。总览显示最新修订、实际可下载版本和待配置来源。
 5. 下载 YAML 直接导入 Stash，或下载包含配置、诊断、版本清单的 ZIP。ZIP 不抓取远程资源，不是离线资源包；本地 path 指向的文件需另外准备。
-6. 在“下载配置”选择 Stash 或 Shadowrocket，下载文件或生成固定更新链接。两个客户端独立检查和交付；各自的链接可轮换或撤销，不授予管理权限。Shadowrocket 的支持范围见[双客户端交付说明](docs/shadowrocket-delivery.md)。
+6. 在“下载配置”选择 Stash、Shadowrocket 或 Clash (Mihomo)，下载文件或生成固定更新链接。各客户端独立检查和交付；各自的链接可轮换或撤销，不授予管理权限。Shadowrocket 的支持范围见[双客户端交付说明](docs/shadowrocket-delivery.md)。
 
 ## 本地开发
 
@@ -31,7 +31,7 @@ STASH_ALLOW_INSECURE_LOCAL=1 npm run dev -- --port 3010
 
 资源名称、规则 payload、策略目标、Hosts 值、顺序和显示名称等关系字段为明文，受 0600 文件权限保护。`display_name` 是规则集的界面名称；Stash `name` 负责引用与 YAML 键。同名规则集重新导入时保留显示名，导入占位来源时保留同名 provider 的既有凭据。新写入记录兼容旧 v1 密文读取。
 
-SQLite `user_version` 当前为 7。v7 增加托管代理源授权及各客户端的手动发布记录。迁移不重写既有配置、订阅令牌或产物。v6 新增远程代理源的加密改写缓存。v5 将当前配置的已知通用字段和客户端扩展分开存储，并规范化规则匹配类型；历史修订兼容旧格式，下载产物和令牌不变。升级前请备份数据库与密钥；回退旧镜像需使用与之对应的数据库备份。详见[配置存储模型](docs/config-storage-model.md)。
+SQLite `user_version` 当前为 8。v8 增加 Mihomo 的交付产物、固定订阅和托管代理源，保留已有的发布记录 ID 和发布指针。v7 增加托管代理源授权及各客户端的手动发布记录。迁移不重写既有配置、订阅令牌或产物。v6 新增远程代理源的加密改写缓存。v5 将当前配置的已知通用字段和客户端扩展分开存储，并规范化规则匹配类型；历史修订兼容旧格式，下载产物和令牌不变。升级前请备份数据库与密钥；回退旧镜像需使用与之对应的数据库备份。详见[配置存储模型](docs/config-storage-model.md)。
 
 ## 规则检查
 
@@ -61,8 +61,8 @@ SQLite `user_version` 当前为 7。v7 增加托管代理源授权及各客户�
 | GET | `/api/profiles/:id/delivery` | 各客户端的编辑版、设备版、来源状态和发布记录；保留旧字段 |
 | GET | `/api/profiles/:id/delivery/:target/preview` | 管理员只读预览当前交付文件；返回原始文件及版本头，不刷新来源 |
 | POST | `/api/profiles/:id/delivery/:target/publication` | 设置手动/自动发布、发布当前版或回退该端的设备版 |
-| POST | `/api/profiles/:id/delivery/:target/check` | 检查 Shadowrocket 候选版的远程来源或 Stash 设备版的托管来源 |
-| POST / DELETE | `/api/profiles/:id/delivery/stash/sources/:sourceId` | 换发或启用 / 撤销独立的托管代理源链接 |
+| POST | `/api/profiles/:id/delivery/:target/check` | 检查 Shadowrocket 候选版的远程来源或 Stash / Mihomo 设备版的托管来源 |
+| POST / DELETE | `/api/profiles/:id/delivery/:target/sources/:sourceId` | Stash 或 Mihomo： 换发或启用 / 撤销独立的托管代理源链接 |
 | GET | `/api/profiles/:id/config_download` | 下载设备当前可用的完整 YAML；不接受 URL/模板参数 |
 | GET | `/api/profiles/:id/bundle` | 下载交付 ZIP |
 | POST / DELETE | `/api/profiles/:id/download-link` | 生成或轮换 / 撤销固定订阅链接 |
@@ -70,6 +70,9 @@ SQLite `user_version` 当前为 7。v7 增加托管代理源授权及各客户�
 | GET | `/api/profiles/:id/shadowrocket/config_download` | 管理员下载设备当前可用的 Shadowrocket .conf |
 | POST / DELETE | `/api/profiles/:id/shadowrocket/download-link` | 生成、轮换或撤销 Shadowrocket 固定链接 |
 | GET | `/api/config_download/:token/config.conf` | 设备下载 .conf，自动模式按需刷新来源，只接受 Shadowrocket 下载令牌 |
+| GET | `/api/profiles/:id/mihomo/config_download` | 管理员下载 Mihomo 当前交付版 YAML |
+| POST / DELETE | `/api/profiles/:id/mihomo/download-link` | 生成、轮换或撤销 Mihomo 固定链接 |
+| GET | `/api/config_download/:token/mihomo.yaml` | 设备下载 YAML，只接受 Mihomo 下载令牌 |
 | PUT | `/api/profiles/:id/rules/order` | 全部规则 ID 顺序，不重不漏 |
 | GET | `/api/profiles/:id/revisions?limit=50&before=120` | 历史分页，limit 1–100；返回 items、nextCursor |
 | POST | `/api/profiles/:id/revisions/:revision/restore` | 恢复并自动检查 |
@@ -163,17 +166,17 @@ CI 会独立构建并执行 Chromium 回归。
 
 表单使用载入时的修订；后台刷新不会给未保存的旧输入赋予更新的修订号。冲突时保留本页输入，可以明确放弃后读取最新配置。API 调用方需要先比较最新状态，再决定如何重新提交，不能自动取最新版本号重试覆盖。
 
-替换导入先调用 `POST /api/profiles/:id/import-preview`，请求 `{yaml}`，返回 currentRevision、previewFingerprint、脱敏语义差异及两端检查。工作台提交导入时使用该版本作为 If-Match，并原样传回 previewFingerprint；文本或托管绑定变化会使预览失效。YAML 会规范化，注释、原始排版和锚点写法不保留。`GET /api/profiles/:id/revisions/:revision/compare` 为历史恢复提供同样的只读差异预览。差异只列固定字段类别和脱敏标识，不返回连接参数原值。
+替换导入先调用 `POST /api/profiles/:id/import-preview`，请求 `{yaml}`，返回 currentRevision、previewFingerprint、脱敏语义差异及各客户端的检查结果。工作台提交导入时使用该版本作为 If-Match，并原样传回 previewFingerprint；文本或托管绑定变化会使预览失效。YAML 会规范化，注释、原始排版和锚点写法不保留。`GET /api/profiles/:id/revisions/:revision/compare` 为历史恢复提供同样的只读差异预览。差异只列固定字段类别和脱敏标识，不返回连接参数原值。
 
 `PUT /api/profiles/:id/rules/batch` 接收 `{ids, policy?, enabled?, move?}`；move 为 top/bottom/up/down，至少指定一项操作。所有 ID 必须属于当前配置且不重复，MATCH 不能批量停用或移动。整个操作只生成一个修订。
 
-每次成功写入后按 `STASH_REVISION_LIMIT` 清理更早历史，默认最近 200 版，当前版、两端最近成功版和保留的发布记录所对应的修订始终额外保留。升级后第一次写入即应用该策略，部署前请备份数据库和密钥。清理不影响成功下载产物或固定设备链接；SQLite 会重用释放的页，文件不会立即缩小。列表接口返回 retentionLimit、retainedCount 和 oldestRevision，页面明确展示保留边界。
+每次成功写入后按 `STASH_REVISION_LIMIT` 清理更早历史，默认最近 200 版，当前版、各客户端最近成功版和保留的发布记录所对应的修订始终额外保留。升级后第一次写入即应用该策略，部署前请备份数据库和密钥。清理不影响成功下载产物或固定设备链接；SQLite 会重用释放的页，文件不会立即缩小。列表接口返回 retentionLimit、retainedCount 和 oldestRevision，页面明确展示保留边界。
 
 代理源与规则集使用相同的来源字段协议：sourceUrl/sourceHeaders 仅写入，省略保留、clearSource/clearHeaders 显式清除。inline 规则集仅使用 behavior 和 entries；remote/local 不得混入 inline 字段。所有普通 CRUD、快照与恢复响应剥离来源 URL 和 headers，完整内容仅用于受控交付。旧成功产物会按当前编译语义检查，已知来源冲突的产物不会继续交付。
 
 ## 客户端发布与来源状态
 
-默认保存并检查配置后，各客户端自动提供自己的最近成功版本。在下载页启用某一端的手动发布会固定该端当前设备版；后续保存、导入和编辑历史恢复只更新候选。可发布已通过检查的当前编辑版，或回退到该端最近 20 条发布记录中的一条。现有设备订阅链接不变。Stash 仍由设备或托管来源服务更新外部节点与规则；手动发布固定的是主 YAML，不会冻结上游。Shadowrocket 手动模式提供已发布的完整 .conf 字节，检查候选版的远程来源不会修改设备版。
+默认保存并检查配置后，各客户端自动提供自己的最近成功版本。在下载页启用某一端的手动发布会固定该端当前设备版；后续保存、导入和编辑历史恢复只更新候选。可发布已通过检查的当前编辑版，或回退到该端最近 20 条发布记录中的一条。现有设备订阅链接不变。Stash 和 Mihomo 仍由设备或托管来源服务更新外部节点与规则；手动发布固定的是主 YAML，不会冻结上游。Shadowrocket 手动模式提供已发布的完整 .conf 字节，检查候选版的远程来源不会修改设备版。
 
 `targets` 中 `currentRevision` 是当前编辑版，`readyRevision` 是最近成功生成的候选，`compiledRevision` 是设备实际可下载版。管理下载、设备下载和导出预览的 `X-Config-Revision` 标识实际产物。「预览导出配置」只读当前交付版本；「下载此预览」保存刚才预览的相同字节。发布操作需传 `If-Match`、`expectedMode`、`expectedPublicationId`，回退另传目标 `publicationId`。管理端查看远程来源检查和缓存，不等同于设备已经更新或业务连通性通过。
 

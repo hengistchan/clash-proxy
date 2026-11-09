@@ -21,6 +21,9 @@ export function refreshStashConfig(
   try {
     const artifact = exportProfile(snapshot);
     db.transaction(() => {
+      // A status read may have compiled outside the write lock; do not publish a stale snapshot.
+      if (db.prepare('SELECT revision FROM profiles WHERE id = ?').pluck().get(snapshot.profile.id) !== snapshot.profile.revision) return;
+      const previous = stashCandidate(db, snapshot.profile.id);
       const saved = db.prepare(
         `INSERT INTO compiled_configs (profile_id, revision, artifact_ciphertext, created_at)
         VALUES (?, ?, ?, ?) ON CONFLICT(profile_id) DO UPDATE SET
@@ -35,7 +38,7 @@ export function refreshStashConfig(
       );
       if (!saved.changes) return;
       if (!deliveryMode(db, snapshot.profile.id, 'stash')) {
-        reconcileServedSources(db, snapshot.profile.id, managedSources(current), artifact.proxyRewrites?.sources ?? []);
+        reconcileServedSources(db, snapshot.profile.id, managedSources(previous), artifact.proxyRewrites?.sources ?? []);
       }
     }).immediate();
   } catch (error) {

@@ -2,24 +2,24 @@ import { createHash } from 'node:crypto';
 import { parseDocument } from 'yaml';
 import { decryptJson, encryptJson } from './crypto';
 import { getDb } from './db';
-import { managedSources, servedStashRecord } from './target-publication-store';
+import { managedSources, servedRecord } from './target-publication-store';
 import { sourceFingerprints } from './managed-source-health';
 import { absoluteDownloadUrl } from './download-response';
 import type { ExportResult } from './exporter';
-import { sourceCapability, verifySourceCapability } from './managed-source-access';
+import { managedSourceTables, sourceCapability, verifySourceCapability, type ManagedSourceTarget } from './managed-source-access';
 import { HttpError } from './http';
 import { transformProxySource } from './proxy-source-transform';
 import { downloadSource, type SourceDownload } from './upstream-download';
 
 const RETRY_MS = 60_000;
-export function materializeStashArtifact<T extends ExportResult>(artifact: T, request: Request): T {
+export function materializeYamlArtifact<T extends ExportResult>(artifact: T, request: Request, target: ManagedSourceTarget = 'stash'): T {
   const rewrites = artifact.proxyRewrites;
   if (!rewrites) return artifact;
   const origin = absoluteDownloadUrl(request, '/');
   const db = getDb();
   const document = parseDocument(artifact.yaml);
   for (const source of rewrites.sources) {
-    const capability = sourceCapability(db, rewrites.profileId, source.id);
+    const capability = sourceCapability(db, rewrites.profileId, source.id, target);
     document.setIn(['proxy-providers', source.name, 'url'], new URL(`/api/proxy-source/${capability}/proxies.yaml`, origin).href);
   }
   const yaml = document.toString({ lineWidth: 0 });
@@ -28,10 +28,13 @@ export function materializeStashArtifact<T extends ExportResult>(artifact: T, re
 }
 
 function resolveSource(capability: string) {
-  const { profileId, providerId } = verifySourceCapability(getDb(), capability);
-  const source = managedSources(servedStashRecord(getDb(), profileId)).find((item) => item.id === providerId);
-  if (!source) throw new HttpError(404, 'Proxy source link not found');
-  return { profileId, providerId, source };
+  const db = getDb();
+  return db.transaction(() => {
+    const { profileId, providerId, target } = verifySourceCapability(db, capability);
+    const source = managedSources(servedRecord(db, profileId, target)).find((item) => item.id === providerId);
+    if (!source) throw new HttpError(404, 'Proxy source link not found');
+    return { profileId, providerId, target, source };
+  })();
 }
 
 interface CacheRow {
@@ -46,10 +49,11 @@ interface CacheRow {
 const inFlight = new Map<string, Promise<void>>();
 
 export async function managedProxySource(capability: string, fetchSource: SourceDownload = downloadSource, now = Date.now) {
-  const { profileId, providerId, source } = resolveSource(capability);
+  const { profileId, providerId, target, source } = resolveSource(capability);
   const { sourceKey, specKey } = sourceFingerprints(source);
   const db = getDb();
-  const read = () => db.prepare('SELECT * FROM managed_proxy_source_cache WHERE profile_id = ? AND provider_id = ?')
+  const { cache } = managedSourceTables(target);
+  const read = () => db.prepare(`SELECT * FROM ${cache} WHERE profile_id = ? AND provider_id = ?`)
     .get(profileId, providerId) as CacheRow | undefined;
   const current = () => {
     const { source: latest } = resolveSource(capability);
@@ -59,7 +63,7 @@ export async function managedProxySource(capability: string, fetchSource: Source
   let deferred = false;
   const attemptAt = now();
   if (row?.attempt_fingerprint !== specKey || attemptAt - row.attempted_at >= RETRY_MS) {
-    const key = `${profileId}:${providerId}:${specKey}`;
+    const key = `${target}:${profileId}:${providerId}:${capability}:${specKey}`;
     let pending = inFlight.get(key);
     if (!pending && inFlight.size >= 8) {
       if (row?.source_fingerprint !== sourceKey || !row.yaml_ciphertext)
@@ -76,7 +80,7 @@ export async function managedProxySource(capability: string, fetchSource: Source
         }
         db.transaction(() => {
           if (!current()) throw new HttpError(503, 'Proxy source changed during refresh; try again shortly');
-          db.prepare(`INSERT INTO managed_proxy_source_cache
+          db.prepare(`INSERT INTO ${cache}
             (profile_id, provider_id, source_fingerprint, attempt_fingerprint, attempted_at, successful_fingerprint, successful_at, yaml_ciphertext)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(profile_id, provider_id) DO UPDATE SET
@@ -96,9 +100,11 @@ export async function managedProxySource(capability: string, fetchSource: Source
     }
     await pending;
   }
-  if (!current()) throw new HttpError(503, 'Proxy source changed during refresh; try again shortly');
-  const saved = read();
-  if (saved?.source_fingerprint !== sourceKey || !saved.yaml_ciphertext)
-    throw new HttpError(502, 'No successfully transformed proxy source is available');
-  return { yaml: decryptJson<string>(saved.yaml_ciphertext), stale: deferred || saved.successful_fingerprint !== specKey || saved.successful_at !== saved.attempted_at };
+  return db.transaction(() => {
+    if (!current()) throw new HttpError(503, 'Proxy source changed during refresh; try again shortly');
+    const saved = read();
+    if (saved?.source_fingerprint !== sourceKey || !saved.yaml_ciphertext)
+      throw new HttpError(502, 'No successfully transformed proxy source is available');
+    return { yaml: decryptJson<string>(saved.yaml_ciphertext), stale: deferred || saved.successful_fingerprint !== specKey || saved.successful_at !== saved.attempted_at };
+  })();
 }

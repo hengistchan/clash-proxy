@@ -1,4 +1,5 @@
 import { SERVICE_VERSION } from './version';
+import { configTargetIds } from './config-targets';
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const json = (schema: object) => ({ 'application/json': { schema } });
@@ -103,7 +104,7 @@ const paths: Record<string, object> = {
     parameters: [{ ...configToken, name: 'capability' }],
     get: {
       security: [],
-      summary: '用仅限该代理源的签名链接读取改写后的 Stash 节点',
+      summary: '用仅限该客户端和代理源的签名链接读取改写后的节点',
       responses: {
         '200': { description: '代理节点 YAML；X-Proxy-Source-Status 标明 fresh 或 stale',
           content: { 'application/yaml': { schema: { type: 'string' } } } },
@@ -131,11 +132,11 @@ const paths: Record<string, object> = {
   '/api/profiles/{profileId}/delivery': {
     parameters: [id],
     get: operation(
-      '读取两端编辑版、可发布产物、设备版本、来源状态与链接',
+      '读取各客户端的编辑版、可发布产物、设备版本、来源状态与链接',
       undefined,
       { allOf: [ref('Delivery'), { type: 'object', properties: {
         shadowrocket: ref('ShadowrocketDelivery'),
-        targets: { type: 'object', additionalProperties: ref('ShadowrocketDelivery') }
+        targets: { type: 'object', properties: { stash: ref('Delivery'), shadowrocket: ref('ShadowrocketDelivery'), mihomo: ref('Delivery') } }
       } }] }
     )
   },
@@ -196,13 +197,34 @@ const paths: Record<string, object> = {
   '/api/profiles/{profileId}/mihomo/config_download': {
     parameters: [id],
     get: {
-      summary: '从当前保存版本导出 Clash (Mihomo) YAML，无查询参数',
+      summary: '下载当前交付的 Clash (Mihomo) YAML，无查询参数',
       responses: {
         '200': {
           description: 'Mihomo YAML 附件；X-Config-Revision 表示源版本',
           content: { 'application/yaml': { schema: { type: 'string' } } }
         },
         ...errors
+      }
+    }
+  },
+  '/api/profiles/{profileId}/mihomo/download-link': {
+    parameters: [id],
+    post: operation('生成或轮换 Clash (Mihomo) 固定订阅链接', undefined, ref('Delivery')),
+    delete: {
+      summary: '撤销 Clash (Mihomo) 固定订阅链接',
+      responses: { '204': { description: '已撤销' }, ...errors }
+    }
+  },
+  '/api/config_download/{token}/mihomo.yaml': {
+    parameters: [configToken],
+    get: {
+      security: [],
+      summary: '用独立的 Mihomo 令牌读取当前设备交付版',
+      responses: {
+        '200': { description: 'Mihomo YAML；X-Config-Revision 表示交付版本',
+          content: { 'application/yaml': { schema: { type: 'string' } } } },
+        '404': { description: '链接不存在或已撤销' },
+        '409': { description: '没有可用的交付版本' }
       }
     }
   },
@@ -335,7 +357,7 @@ paths[
   delete: operation('删除 inline 条目')
 };
 paths['/api/profiles/{profileId}/import-preview'] = {
-  parameters: [id], post: operation('只读预览脱敏语义变化和两端兼容性；返回 currentRevision 与 previewFingerprint', { type: 'object', required: ['yaml'], properties: { yaml: { type: 'string' } } })
+  parameters: [id], post: operation('只读预览脱敏语义变化和各客户端的兼容性；返回 currentRevision 与 previewFingerprint', { type: 'object', required: ['yaml'], properties: { yaml: { type: 'string' } } })
 };
 paths['/api/profiles/{profileId}/revisions/{revision}/compare'] = {
   parameters: [id, { name: 'revision', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } }],
@@ -349,7 +371,7 @@ paths['/api/profiles/{profileId}/rules/batch'] = {
     }
   })
 };
-const target = { name: 'target', in: 'path', required: true, schema: { enum: ['stash', 'shadowrocket'] } };
+const target = { name: 'target', in: 'path', required: true, schema: { enum: configTargetIds } };
 paths['/api/profiles/{profileId}/delivery/{target}/preview'] = {
   parameters: [id, target],
   get: {
@@ -376,11 +398,11 @@ paths['/api/profiles/{profileId}/delivery/{target}/publication'] = {
   })
 };
 paths['/api/profiles/{profileId}/delivery/{target}/check'] = {
-  parameters: [id, target, { name: 'sourceId', in: 'query', schema: { type: 'integer', minimum: 1 }, description: '可选的 Stash 托管来源 ID' }],
-  post: operation('检查 Shadowrocket 候选来源或 Stash 设备版托管来源；手动发布指针不变')
+  parameters: [id, target, { name: 'sourceId', in: 'query', schema: { type: 'integer', minimum: 1 }, description: '可选的 Stash 或 Mihomo 托管来源 ID' }],
+  post: operation('检查 Shadowrocket 候选来源或 Stash / Mihomo 设备版托管来源；手动发布指针不变')
 };
 paths['/api/profiles/{profileId}/delivery/{target}/sources/{sourceId}'] = {
-  parameters: [id, { ...target, schema: { const: 'stash' } }, { name: 'sourceId', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } }],
+  parameters: [id, { ...target, schema: { enum: ['stash', 'mihomo'] } }, { name: 'sourceId', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } }],
   post: operation('为当前设备版的托管代理源换发链接；已撤销时重新启用'),
   delete: operation('撤销该托管代理源的链接，直到管理员重新启用')
 };
@@ -397,7 +419,7 @@ export const openapi = {
     title: 'Stash 配置管理 API',
     version: SERVICE_VERSION,
     description:
-      '保存后独立检查两端。默认自动交付最近成功产物，手动模式交付指定的发布记录。私人订阅 URL 绑定到各 provider，加密保存，普通响应不返回。配置写入必须携带基线 If-Match，缺失428，过期409。导入/恢复前可读取脱敏变化预览。旧 /api?url= 和导出时模板过滤已移除。'
+      '保存后独立检查各客户端。默认自动交付最近成功产物，手动模式交付指定的发布记录。私人订阅 URL 绑定到各 provider，加密保存，普通响应不返回。配置写入必须携带基线 If-Match，缺失428，过期409。导入/恢复前可读取脱敏变化预览。旧 /api?url= 和导出时模板过滤已移除。'
   },
   security: [{ BearerAuth: [] }, { AdminToken: [] }],
   paths,
@@ -418,6 +440,19 @@ export const openapi = {
           publications: { type: 'array', items: { type: 'object', properties: {
             id: { type: 'integer' }, revision: { type: 'integer' }, publishedAt: { type: 'string', format: 'date-time' }
           } } },
+          issues: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                severity: { enum: ['error', 'warning', 'info'] },
+                code: { type: 'string' },
+                message: { type: 'string' },
+                resource: { type: 'string' },
+                resourceId: { type: 'integer' }
+              }
+            }
+          },
           remoteState: { enum: ['none', 'pending', 'ready', 'failed'] },
           remoteCheckedAt: { type: ['integer', 'null'] },
           managedSources: { type: 'array', items: { type: 'object', properties: {
@@ -433,26 +468,13 @@ export const openapi = {
             description: '完整设备订阅链接，未启用时为 null'
           },
           subscriptionPath: { type: ['string', 'null'] },
-          managedProxySources: { type: 'boolean', description: 'Stash 最近成功的配置包含工作台改写来源' }
+          managedProxySources: { type: 'boolean', description: '当前交付版包含工作台改写来源' }
         }
       },
       ShadowrocketDelivery: {
         allOf: [ref('Delivery'), {
           type: 'object',
           properties: {
-            issues: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  severity: { enum: ['error', 'warning', 'info'] },
-                  code: { type: 'string' },
-                  message: { type: 'string' },
-                  resource: { type: 'string' },
-                  resourceId: { type: 'integer' }
-                }
-              }
-            },
             remoteSources: { type: 'boolean', description: '下载时会尝试刷新配置引用的远程来源' }
           }
         }]

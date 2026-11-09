@@ -5,12 +5,12 @@ export const dynamic = 'force-dynamic';
 type Context = { params: Promise<{ profileId: string }> };
 
 import { getLatestConfig } from '@/lib/delivery';
-import { materializeStashArtifact } from '@/lib/managed-proxy-source';
+import { materializeYamlArtifact } from '@/lib/managed-proxy-source';
 import { zipFiles } from '@/lib/zip';
 export async function GET(request: Request, context: Context) {
   try {
     requireAdmin(request);
-    const artifact = materializeStashArtifact(getLatestConfig(parseId((await context.params).profileId)), request);
+    const artifact = materializeYamlArtifact(getLatestConfig(parseId((await context.params).profileId)), request);
     const bytes = zipFiles({
       'config.yaml': artifact.yaml,
       'manifest.json': JSON.stringify(

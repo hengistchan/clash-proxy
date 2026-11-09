@@ -43,12 +43,17 @@ try {
   const delivered = await fetch(`${base}/api/profiles/${id}/config_download`, { headers });
   assert.equal(delivered.status, 200);
   assert.match(await delivered.text(), /container\.test/);
-  const linkResponse = await fetch(`${base}/api/profiles/${id}/download-link`, { method: 'POST', headers });
-  assert.equal(linkResponse.status, 200);
-  const link = await linkResponse.json();
-  assert.equal((await fetch(base + link.subscriptionPath)).status, 200);
-  assert.equal((await fetch(`${base}/api/profiles/${id}/download-link`, { method: 'DELETE', headers })).status, 204);
-  assert.equal((await fetch(base + link.subscriptionPath)).status, 404);
+  for (const target of ['', '/mihomo']) {
+    const endpoint = `${base}/api/profiles/${id}${target}/download-link`;
+    const linkResponse = await fetch(endpoint, { method: 'POST', headers });
+    assert.equal(linkResponse.status, 200);
+    const { subscriptionPath } = await linkResponse.json();
+    const subscription = await fetch(base + subscriptionPath);
+    assert.equal(subscription.status, 200);
+    assert.match(await subscription.text(), /container\.test/);
+    assert.equal((await fetch(endpoint, { method: 'DELETE', headers })).status, 204);
+    assert.equal((await fetch(base + subscriptionPath)).status, 404);
+  }
   console.log('PASS: real non-root/read-only production container, mandatory auth, atomic CAS, delivery and revocation');
 } finally {
   if (started) docker('rm', '--force', name);

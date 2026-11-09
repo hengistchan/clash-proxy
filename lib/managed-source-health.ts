@@ -2,7 +2,7 @@ import { createHmac } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { getEncryptionKey } from './crypto';
 import type { ManagedProxySource } from './exporter';
-import { invalidateSourceCapability } from './managed-source-access';
+import { invalidateSourceCapability, managedSourceTables, type ManagedSourceTarget } from './managed-source-access';
 
 const hash = (value: unknown) => createHmac('sha256', getEncryptionKey())
   .update('managed-proxy-source-cache:').update(JSON.stringify(value)).digest('hex');
@@ -12,14 +12,15 @@ export function sourceFingerprints(source: ManagedProxySource) {
   return { sourceKey, specKey: hash([sourceKey, source.rules]) };
 }
 
-export function managedSourceHealth(db: Database.Database, profileId: number, sources: ManagedProxySource[]) {
+export function managedSourceHealth(db: Database.Database, profileId: number, sources: ManagedProxySource[], target: ManagedSourceTarget = 'stash') {
+  const { cache, access } = managedSourceTables(target);
   const rows = db.prepare(`SELECT provider_id, attempt_fingerprint, attempted_at, source_fingerprint,
-    successful_fingerprint, successful_at FROM managed_proxy_source_cache WHERE profile_id = ?`).all(profileId) as Array<{
+    successful_fingerprint, successful_at FROM ${cache} WHERE profile_id = ?`).all(profileId) as Array<{
       provider_id: number; source_fingerprint: string; attempt_fingerprint: string;
       attempted_at: number; successful_fingerprint: string | null; successful_at: number | null;
     }>;
   const byId = new Map(rows.map((row) => [row.provider_id, row]));
-  const revoked = new Set((db.prepare('SELECT provider_id FROM managed_proxy_source_access WHERE profile_id = ? AND enabled = 0')
+  const revoked = new Set((db.prepare(`SELECT provider_id FROM ${access} WHERE profile_id = ? AND enabled = 0`)
     .all(profileId) as Array<{ provider_id: number }>).map(row => row.provider_id));
   return sources.map((source) => {
     const { sourceKey, specKey } = sourceFingerprints(source);
@@ -34,12 +35,13 @@ export function managedSourceHealth(db: Database.Database, profileId: number, so
 }
 
 export function reconcileServedSources(
-  db: Database.Database, profileId: number, before: ManagedProxySource[], after: ManagedProxySource[]
+  db: Database.Database, profileId: number, before: ManagedProxySource[], after: ManagedProxySource[], target: ManagedSourceTarget = 'stash'
 ) {
+  const { cache } = managedSourceTables(target);
   const retained = new Set(after.map(({ id }) => id));
   for (const { id } of before) {
     if (retained.has(id)) continue;
-    invalidateSourceCapability(db, profileId, id);
-    db.prepare('DELETE FROM managed_proxy_source_cache WHERE profile_id = ? AND provider_id = ?').run(profileId, id);
+    invalidateSourceCapability(db, profileId, id, target);
+    db.prepare(`DELETE FROM ${cache} WHERE profile_id = ? AND provider_id = ?`).run(profileId, id);
   }
 }

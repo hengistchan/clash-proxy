@@ -1,5 +1,6 @@
 import { safeChangeLabel } from './config-diff';
 import { stashTargetIssues } from './exporter';
+import { compileMihomo } from './mihomo-export';
 import { compileShadowrocket } from './shadowrocket';
 import { validateSnapshot } from './validation';
 import type { Snapshot, ValidationIssue } from './types';
@@ -18,6 +19,7 @@ export function checkDraft(
   const validation = validateSnapshot(snapshot);
   const stash = [...validation.issues, ...stashTargetIssues(snapshot)];
   const shadow = compileShadowrocket(snapshot, undefined, validation);
+  const mihomo = compileMihomo(snapshot);
   const report = (target: ConfigTarget, issues: ValidationIssue[], pending: boolean): DraftCheck => ({
     state: issues.some(issue => issue.severity === 'error') ? 'blocked' : pending ? 'pending' : 'ready',
     servedRevision: served[target] ?? null,
@@ -29,6 +31,7 @@ export function checkDraft(
   });
   return {
     stash: report('stash', stash, snapshot.proxyProviders.some(item => item.rewriteRules?.length)),
-    shadowrocket: report('shadowrocket', shadow.issues, shadow.sources.length > 0)
+    shadowrocket: report('shadowrocket', shadow.issues, shadow.sources.length > 0),
+    mihomo: report('mihomo', mihomo.issues, Boolean(mihomo.artifact?.proxyRewrites))
   };
 }

@@ -37,9 +37,21 @@ export function stashCandidate(db: Database.Database, profileId: number) {
     .get(profileId) as ArtifactRecord | undefined;
 }
 
+export function servedRecord(db: Database.Database, profileId: number, target: ConfigTarget) {
+  const mode = deliveryMode(db, profileId, target);
+  if (mode) return publicationRecord(db, profileId, target, mode.publication_id);
+  if (target === 'stash') return stashCandidate(db, profileId);
+  if (target === 'mihomo') return mihomoCandidate(db, profileId);
+  return shadowrocketCandidate(db, profileId);
+}
+
 export function servedStashRecord(db: Database.Database, profileId: number) {
-  const mode = deliveryMode(db, profileId, 'stash');
-  return mode ? publicationRecord(db, profileId, 'stash', mode.publication_id) : stashCandidate(db, profileId);
+  return servedRecord(db, profileId, 'stash');
+}
+
+export function mihomoCandidate(db: Database.Database, profileId: number) {
+  return db.prepare(`SELECT revision, artifact_ciphertext, created_at FROM mihomo_compilations
+    WHERE profile_id = ? AND revision IS NOT NULL AND artifact_ciphertext IS NOT NULL`).get(profileId) as ArtifactRecord | undefined;
 }
 
 export function managedSources(record: ArtifactRecord | undefined) {

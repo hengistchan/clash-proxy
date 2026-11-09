@@ -1,9 +1,8 @@
 import { posix, win32 } from 'node:path';
-import { assembleYamlConfig, serializeYamlConfig, yamlTargetIssues, type ManagedProxySource } from './exporter';
-import { HttpError } from './http';
+import { assembleYamlConfig, serializeYamlConfig, yamlTargetIssues, type ExportResult } from './exporter';
 import { isLogicalRuleType, splitTopLevel } from './rules';
 import { validateSnapshot } from './validation';
-import { isJsonObject, type JsonObject, type Snapshot } from './types';
+import { isJsonObject, type JsonObject, type Snapshot, type ValidationIssue } from './types';
 
 const STASH_SECTIONS = ['http', 'cron', 'script', 'script-providers'];
 const STASH_RULES = new Set(['SCRIPT', 'USER-AGENT', 'URL-REGEX', 'PROTOCOL']);
@@ -31,7 +30,7 @@ function mihomoCondition(type: string, payload: string, providers: Set<string>, 
   return [type, `(${conditions.join(',')})`];
 }
 
-export function exportMihomo(snapshot: Snapshot, managedUrl?: (source: ManagedProxySource) => string | undefined) {
+export function compileMihomo(snapshot: Snapshot): { artifact: ExportResult | null; issues: ValidationIssue[] } {
   const enabled = snapshot.rules.filter(rule => rule.enabled);
   const omitted = snapshot.advancedSections.filter(section => STASH_SECTIONS.includes(section.key));
   const compatible = {
@@ -44,9 +43,7 @@ export function exportMihomo(snapshot: Snapshot, managedUrl?: (source: ManagedPr
   const error = (code: string, message: string, resource: string, resourceId?: number) => {
     issues.push({ severity: 'error', code: `mihomo.${code}`, message, resource, resourceId });
   };
-  const assertCompatible = () => {
-    if (issues.length) throw new HttpError(409, '当前保存版本未通过 Mihomo 导出检查。', issues.slice(0, 100));
-  };
+  const blocked = () => ({ artifact: null, issues: issues.slice(0, 100) });
 
   const providerNames = new Set(snapshot.ruleProviders.map(provider => provider.name));
   compatible.rules = enabled.map(rule => {
@@ -70,7 +67,7 @@ export function exportMihomo(snapshot: Snapshot, managedUrl?: (source: ManagedPr
       error('empty-group', '请为此策略组添加节点或代理源。', 'proxy-group', group.id);
     }
   }
-  assertCompatible();
+  if (issues.length) return blocked();
 
   const { config, proxyRewrites } = assembleYamlConfig(compatible);
   const managedSources = new Map(proxyRewrites?.sources.map(source => [source.id, source]));
@@ -106,17 +103,11 @@ export function exportMihomo(snapshot: Snapshot, managedUrl?: (source: ManagedPr
     configureProvider(source, provider.sourceType === 'remote' ? 'http' : 'file', 'proxy-provider', provider.id);
     const managed = managedSources.get(provider.id);
     if (managed) {
-      const url = managedUrl?.(managed);
       if (Object.hasOwn(provider.config, 'header')) {
         error('managed-source-header', '改写代理源使用工作台保存的请求头，请在代理源表单中配置请求头。', 'proxy-provider', provider.id);
       }
-      if (!url) {
-        error('managed-source', '此改写代理源需要先在 Stash 交付中发布相同的来源和改写规则，并启用代理源链接。', 'proxy-provider', provider.id);
-      } else {
-        source.url = url;
-        // The workbench sends upstream credentials itself.
-        delete source.header;
-      }
+      // The shared delivery pipeline replaces the placeholder with a target-specific capability.
+      delete source.header;
     }
   }
   const ruleProviders = config['rule-providers'] as Record<string, JsonObject>;
@@ -143,12 +134,19 @@ export function exportMihomo(snapshot: Snapshot, managedUrl?: (source: ManagedPr
   if (!INBOUND_KEYS.some(key => Object.hasOwn(config, key)) && !(isJsonObject(config.tun) && config.tun.enable === true)) {
     config['mixed-port'] = 7890;
   }
-  assertCompatible();
+  if (issues.length) return blocked();
 
   const comments = ['Clash configuration for Mihomo'];
   if (omitted.length) comments.push(`未迁移的 Stash 专用区块：${omitted.map(section => section.key).join('、')}`);
   return {
-    ...serializeYamlConfig(config, `mihomo-${snapshot.profile.id}.yaml`, validation, comments),
-    revision: snapshot.profile.revision
+    artifact: {
+      ...serializeYamlConfig(config, `mihomo-${snapshot.profile.id}.yaml`, validation, comments),
+      ...(proxyRewrites ? { proxyRewrites } : {})
+    },
+    issues: omitted.length ? [{
+      severity: 'warning',
+      code: 'mihomo.omitted-sections',
+      message: `未迁移的 Stash 专用区块：${omitted.map(section => section.key).join('、')}`
+    }] : []
   };
 }

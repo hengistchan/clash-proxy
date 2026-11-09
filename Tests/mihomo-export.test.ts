@@ -5,12 +5,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, beforeEach, test } from 'node:test';
 import { parse } from 'yaml';
+import { GET as deviceDownload } from '../app/api/config_download/[token]/mihomo.yaml/route';
+import { POST as rotate, DELETE as revoke } from '../app/api/profiles/[profileId]/mihomo/download-link/route';
+import { GET as stashDownload } from '../app/api/profiles/[profileId]/config_download/route';
 import { GET as download } from '../app/api/profiles/[profileId]/mihomo/config_download/route';
 import { resetEncryptionCacheForTests } from '../lib/crypto';
 import { closeDbForTests, getDb } from '../lib/db';
-import { getLatestConfig } from '../lib/delivery';
+import { configForToken, getLatestConfig, rotateDownloadLink } from '../lib/delivery';
 import { setSourceAccess } from '../lib/managed-source-access';
-import { createProfile, createProxyProvider, getSnapshot, resetRepositoryForTests } from '../lib/repository';
+import { createProfile, createProxyProvider, getSnapshot, importYaml, resetRepositoryForTests, updateProxyProvider } from '../lib/repository';
+import { managedProxySource } from '../lib/managed-proxy-source';
+import { getMihomoStatus } from '../lib/mihomo-delivery';
+import { getShadowrocketStatus, rotateShadowrocketLink, shadowrocketConfigForToken } from '../lib/shadowrocket-delivery';
 import { changeTargetPublication } from '../lib/target-publication';
 
 const dir = mkdtempSync(join(tmpdir(), 'forge-mihomo-tests-'));
@@ -110,29 +116,144 @@ rules:
     issue.code === 'mihomo.rule' && issue.resourceId === rules[0].id));
 });
 
-test('rewritten providers use the enabled managed link and never fall back to the unmodified upstream', async () => {
+function profileContext(id: number) {
+  return { params: Promise.resolve({ profileId: String(id) }) };
+}
+function adminLinkRequest(id: number, authenticated = true) {
+  return new Request(`https://forge.example.test/api/profiles/${id}/mihomo/download-link`, {
+    headers: authenticated ? { 'X-Admin-Token': admin } : {}
+  });
+}
+function subscribe(url: string) {
+  const token = new URL(url).pathname.split('/')[3];
+  return deviceDownload(new Request(url), { params: Promise.resolve({ token }) });
+}
+
+test('fixed Mihomo link keeps the last good version, follows manual publishing, and rotates independently', async () => {
+  const { profile } = createProfile('Mihomo link lifecycle', 'rules: ["MATCH,DIRECT"]');
+  const id = profile.id;
+  const ctx = profileContext(id);
+  assert.equal((await rotate(adminLinkRequest(id, false), ctx)).status, 401);
+  assert.equal((await revoke(adminLinkRequest(id, false), ctx)).status, 401);
+  const stash = rotateDownloadLink(id).subscriptionPath!;
+  assert.equal((await subscribe(new URL(stash.replace('config.yaml', 'mihomo.yaml'), 'https://forge.example.test').href)).status, 404);
+  const response = await rotate(adminLinkRequest(id), ctx);
+  assert.equal(response.status, 200);
+  const { subscriptionUrl: url } = await response.json();
+  assert.match(url, /^https:\/\/forge\.example\.test\/api\/config_download\/[A-Za-z0-9_-]{43}\/mihomo\.yaml$/);
+  const first = await subscribe(url);
+  assert.equal(first.status, 200);
+  assert.equal(first.headers.get('Cache-Control'), 'no-store');
+  assert.equal(first.headers.get('Referrer-Policy'), 'no-referrer');
+  const original = await first.text();
+
+  importYaml(id, 'rules: ["DOMAIN,blocked.test,REJECT,pre-matching", "MATCH,DIRECT"]');
+  assert.equal(getMihomoStatus(id).current, false);
+  const fallback = await subscribe(url);
+  assert.equal(fallback.headers.get('X-Config-Revision'), String(profile.revision));
+  assert.equal(await fallback.text(), original);
+
+  changeTargetPublication(getDb(), id, 'mihomo', { action: 'manual', expectedMode: 'auto', expectedPublicationId: null });
+  const pinned = getMihomoStatus(id);
+  const fixed = importYaml(id, 'rules: ["DOMAIN,new.test,REJECT", "MATCH,DIRECT"]');
+  assert.equal(await (await subscribe(url)).text(), original);
+  changeTargetPublication(getDb(), id, 'mihomo', { action: 'publish', expectedMode: 'manual', expectedPublicationId: pinned.publicationId! });
+  const published = await subscribe(url);
+  assert.equal(published.headers.get('X-Config-Revision'), String(fixed.profile.revision));
+  assert.match(await published.text(), /DOMAIN,new\.test,REJECT/);
+  const latest = getMihomoStatus(id);
+  changeTargetPublication(getDb(), id, 'mihomo', { action: 'rollback', expectedMode: 'manual',
+    expectedPublicationId: latest.publicationId!, publicationId: pinned.publicationId! });
+  assert.equal(await (await subscribe(url)).text(), original);
+
+  const rotated = await rotate(adminLinkRequest(id), ctx);
+  const { subscriptionUrl: replacement } = await rotated.json();
+  assert.notEqual(replacement, url);
+  assert.equal((await subscribe(url)).status, 404);
+  assert.equal((await subscribe(replacement)).status, 200);
+  assert.equal((await revoke(adminLinkRequest(id), ctx)).status, 204);
+  assert.equal((await subscribe(replacement)).status, 404);
+  assert.equal(configForToken(stash.split('/')[3]).revision, fixed.profile.revision);
+});
+
+test('managed links and node caches are scoped to the published target', async () => {
   const { profile } = createProfile('Managed source');
-  const provider = createProxyProvider(profile.id, {
+  const id = profile.id;
+  const input = {
     name: 'managed',
     config: { type: 'http' },
     sourceUrl: 'https://provider.example.test/private-feed',
     sourceHeaders: { 'X-Test': 'private-fixture' },
-    rewriteRules: [{ matchName: '^HK-', operation: 'set', field: 'udp', value: true }]
-  });
-  const id = provider.id;
-  const response = await request(profile.id);
-  assert.equal(response.status, 200);
-  const yaml = await response.text();
-  const config = parse(yaml);
-  const url = config['proxy-providers'].managed.url;
-  assert.match(url, /^https:\/\/forge\.example\.test\/api\/proxy-source\//);
+    rewriteRules: [{ matchName: '^HK-', operation: 'set', field: 'udp', value: true }] as const
+  };
+  const provider = createProxyProvider(id, { ...input, rewriteRules: [...input.rewriteRules] });
+  const db = getDb();
+  changeTargetPublication(db, id, 'stash', { action: 'manual', expectedMode: 'auto', expectedPublicationId: null });
+  updateProxyProvider(id, provider.id, { ...input, rewriteRules: [{ ...input.rewriteRules[0], value: false }] });
+
+  const mihomo = await request(id);
+  assert.equal(mihomo.status, 200);
+  const yaml = await mihomo.text();
   assert.doesNotMatch(yaml, /private-feed|private-fixture|managed-source\.invalid/);
-  setSourceAccess(getDb(), profile.id, id, false);
-  const revoked = await request(profile.id);
-  assert.equal(revoked.status, 409);
-  assert.ok((await revoked.json()).issues.some((issue: { code: string }) => issue.code === 'mihomo.managed-source'));
-  setSourceAccess(getDb(), profile.id, id, true);
-  const rotated = await request(profile.id);
-  assert.equal(rotated.status, 200);
-  assert.notEqual(parse(await rotated.text())['proxy-providers'].managed.url, url);
+  const mihomoSource = new URL(parse(yaml)['proxy-providers'].managed.url).pathname.split('/')[3];
+  assert.match(mihomoSource, /^m2\./);
+  const stashFile = await stashDownload(adminLinkRequest(id), profileContext(id));
+  const stashSource = new URL(parse(await stashFile.text())['proxy-providers'].managed.url).pathname.split('/')[3];
+  assert.match(stashSource, /^m1\./);
+  const upstream = async () => 'proxies: [{name: HK-Node, type: socks5, server: 192.0.2.1, port: 1080}]';
+  const [stash, clash] = await Promise.all([
+    managedProxySource(stashSource, upstream),
+    managedProxySource(mihomoSource, upstream)
+  ]);
+  assert.equal(parse(stash.yaml).proxies[0].udp, true);
+  assert.equal(parse(clash.yaml).proxies[0].udp, false);
+  assert.equal(await managedProxySource(stashSource, upstream).then(x => x.yaml), stash.yaml);
+  assert.equal(await managedProxySource(mihomoSource, upstream).then(x => x.yaml), clash.yaml);
+  setSourceAccess(db, id, provider.id, false, 'mihomo');
+  await assert.rejects(managedProxySource(mihomoSource, upstream), { status: 404 });
+  assert.equal(await managedProxySource(stashSource, upstream).then(x => x.yaml), stash.yaml);
+
+  // Removing a served source invalidates its capability even if it is later added back.
+  setSourceAccess(db, id, provider.id, true, 'mihomo');
+  const enabled = await request(id);
+  const nextSource = new URL(parse(await enabled.text())['proxy-providers'].managed.url).pathname.split('/')[3];
+  updateProxyProvider(id, provider.id, { ...input, rewriteRules: [] });
+  updateProxyProvider(id, provider.id, { ...input, rewriteRules: [...input.rewriteRules] });
+  await assert.rejects(managedProxySource(nextSource, upstream), { status: 404 });
+  assert.equal(await managedProxySource(stashSource, upstream).then(x => x.yaml), stash.yaml);
+});
+
+test('v7 upgrade preserves publication IDs, current pointers, and pre-existing device links', async () => {
+  const { profile } = createProfile('Migrate v7 publication');
+  const id = profile.id;
+  const db = getDb();
+  const stash = rotateDownloadLink(id).subscriptionPath!;
+  const shadow = (await rotateShadowrocketLink(id)).subscriptionPath!;
+  for (const target of ['stash', 'shadowrocket'] as const) {
+    changeTargetPublication(db, id, target, { action: 'manual', expectedMode: 'auto', expectedPublicationId: null });
+  }
+  const expectedRows = db.prepare('SELECT * FROM target_publications ORDER BY id').all();
+  const expectedModes = db.prepare('SELECT * FROM target_delivery_modes ORDER BY target').all();
+  const highest = 50;
+  db.prepare("UPDATE sqlite_sequence SET seq = ? WHERE name = 'target_publications'").run(highest);
+  db.exec(`
+    DROP TABLE mihomo_proxy_source_access;
+    DROP TABLE mihomo_proxy_source_cache;
+    DROP TABLE mihomo_download_links;
+    DROP TABLE mihomo_compilations;
+    PRAGMA user_version = 7;
+  `);
+  closeDbForTests();
+  resetRepositoryForTests();
+
+  assert.equal(getDb().pragma('user_version', { simple: true }), 8);
+  assert.deepEqual(getDb().prepare('SELECT * FROM target_publications ORDER BY id').all(), expectedRows);
+  assert.deepEqual(getDb().prepare('SELECT * FROM target_delivery_modes ORDER BY target').all(), expectedModes);
+  assert.deepEqual(getDb().pragma('foreign_key_check'), []);
+  assert.equal(configForToken(stash.split('/')[3]).revision, profile.revision);
+  assert.equal((await shadowrocketConfigForToken(shadow.split('/')[3])).revision, profile.revision);
+  assert.equal(getShadowrocketStatus(id).deliveryMode, 'manual');
+  assert.equal(getMihomoStatus(id).compiledRevision, profile.revision);
+  changeTargetPublication(getDb(), id, 'mihomo', { action: 'manual', expectedMode: 'auto', expectedPublicationId: null });
+  assert.equal(getMihomoStatus(id).publicationId, highest + 1);
 });

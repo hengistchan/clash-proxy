@@ -108,7 +108,7 @@ export function DeliveryPublication({ profileId, revision, token, target, status
   </section>;
 }
 
-export function ManagedSourceControls({ profileId, token, status, delivery, disabled }: Controls) {
+export function ManagedSourceControls({ profileId, token, status, delivery, disabled, target }: Controls & { target: ConfigTarget }) {
   type Source = NonNullable<ConfigDeliveryStatus['managedSources']>[number];
   const [pending, setPending] = useState<{ source: Source; action: 'rotate' | 'revoke' }>();
   const [working, setWorking] = useState<number | null>(null);
@@ -122,7 +122,7 @@ export function ManagedSourceControls({ profileId, token, status, delivery, disa
     setError('');
     try {
       const path = action === 'check' ? `check?sourceId=${id}` : `sources/${id}`;
-      const response = await apiRequest<TargetResponse>(`/api/profiles/${profileId}/delivery/stash/${path}`, { method: action === 'revoke' ? 'DELETE' : 'POST', token });
+      const response = await apiRequest<TargetResponse>(`/api/profiles/${profileId}/delivery/${target}/${path}`, { method: action === 'revoke' ? 'DELETE' : 'POST', token });
       delivery.applyTargets(response.targets);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '操作失败');

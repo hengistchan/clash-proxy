@@ -3,11 +3,13 @@ import type { ConfigTarget } from './config-targets';
 import { decryptJson } from './crypto';
 import { assertArtifactSemantics } from './artifact-semantics';
 import { HttpError } from './http';
+import { isManagedSourceTarget } from './managed-source-access';
+import { mihomoIssues } from './mihomo-compilation';
 import { reconcileServedSources } from './managed-source-health';
 import type { ExportResult } from './exporter';
 import { SHADOWROCKET_COMPILER_VERSION } from './shadowrocket';
 import {
-  deliveryMode, managedSources, publicationRecord, servedStashRecord,
+  deliveryMode, managedSources, publicationRecord, servedRecord, mihomoCandidate,
   shadowrocketCandidate, stashCandidate, type ArtifactRecord
 } from './target-publication-store';
 
@@ -20,9 +22,11 @@ export function changeTargetPublication(db: Database.Database, profileId: number
   if ((mode ? 'manual' : 'auto') !== input.expectedMode || (mode?.publication_id ?? null) !== input.expectedPublicationId) {
     throw new HttpError(409, '此客户端的发布状态已改变，请刷新后重试。');
   }
-  const before = target === 'stash' ? servedStashRecord(db, profileId) : undefined;
+  const before = isManagedSourceTarget(target) ? servedRecord(db, profileId, target) : undefined;
   const reconcile = () => {
-    if (target === 'stash') reconcileServedSources(db, profileId, managedSources(before), managedSources(servedStashRecord(db, profileId)));
+    if (isManagedSourceTarget(target)) {
+      reconcileServedSources(db, profileId, managedSources(before), managedSources(servedRecord(db, profileId, target)), target);
+    }
   };
   if (input.action === 'auto') {
     db.prepare('DELETE FROM target_delivery_modes WHERE profile_id = ? AND target = ?').run(profileId, target);
@@ -43,6 +47,7 @@ export function changeTargetPublication(db: Database.Database, profileId: number
 
   const shadow = target === 'shadowrocket' ? shadowrocketCandidate(db, profileId) : undefined;
   let candidate: ArtifactRecord | undefined = target === 'stash' ? stashCandidate(db, profileId)
+    : target === 'mihomo' ? mihomoCandidate(db, profileId)
     : shadow && shadow.artifact_version >= 1 && shadow.artifact_version <= SHADOWROCKET_COMPILER_VERSION ? shadow : undefined;
   if (candidate && target === 'stash') {
     try { assertArtifactSemantics(decryptJson<ExportResult>(candidate.artifact_ciphertext)); }
@@ -55,7 +60,8 @@ export function changeTargetPublication(db: Database.Database, profileId: number
     const profile = db.prepare('SELECT revision FROM profiles WHERE id = ?').get(profileId) as { revision: number };
     const remote = target === 'shadowrocket' ? db.prepare('SELECT issues_json, remote_sources, remote_checked_at FROM shadowrocket_compilations WHERE profile_id = ?')
       .get(profileId) as { issues_json: string; remote_sources: number; remote_checked_at: number | null } | undefined : undefined;
-    if (candidate?.revision !== profile.revision || (remote && (Boolean(remote.remote_sources && remote.remote_checked_at === null) ||
+    if (candidate?.revision !== profile.revision ||
+      (target === 'mihomo' && mihomoIssues(db, profileId).some(issue => issue.severity === 'error')) || (remote && (Boolean(remote.remote_sources && remote.remote_checked_at === null) ||
       (JSON.parse(remote.issues_json) as Array<{ severity: string }>).some(i => i.severity === 'error')))) {
       throw new HttpError(409, '当前编辑版尚未通过该客户端的检查，设备版本保持不变。');
     }

@@ -1,5 +1,6 @@
-import { createHash, randomBytes } from 'node:crypto';
-import { decryptJson, encryptJson } from './crypto';
+import { configSubscriptionPath } from './config-targets';
+import { profileForTargetToken, readTargetToken, revokeTargetToken, rotateTargetToken } from './download-link-store';
+import { decryptJson } from './crypto';
 import { getDb } from './db';
 import { deliveryMode, publicationRecord, publicationStatus } from './target-publication-store';
 import { HttpError } from './http';
@@ -40,10 +41,6 @@ function isDeliverable(row: ArtifactRow | undefined): row is ArtifactRow & { rev
   // These revisions extend mappings without invalidating earlier complete output.
   return row?.artifact_version != null && row.artifact_version >= 1 && row.artifact_version <= SHADOWROCKET_COMPILER_VERSION &&
     row.revision !== null && row.artifact_ciphertext !== null;
-}
-
-function tokenHash(token: string) {
-  return createHash('sha256').update(token).digest('hex');
 }
 
 export async function refreshShadowrocketUpstream(profileId: number, fetchSource?: SourceDownload) {
@@ -88,10 +85,8 @@ function deliveredArtifact(profileId: number) {
 
 export function getShadowrocketStatus(profileId: number) {
   const { row, snapshot } = refresh(profileId);
-  const link = getDb().prepare('SELECT token_ciphertext FROM shadowrocket_download_links WHERE profile_id = ?')
-    .get(profileId) as { token_ciphertext: string } | undefined;
-  const token = link ? decryptJson<string>(link.token_ciphertext) : null;
   const db = getDb();
+  const token = readTargetToken(db, 'shadowrocket', profileId);
   const mode = deliveryMode(db, profileId, 'shadowrocket');
   const pinned = mode ? publicationRecord(db, profileId, 'shadowrocket', mode.publication_id) : undefined;
   const readyRevision = isDeliverable(row) ? row.revision : null;
@@ -115,7 +110,7 @@ export function getShadowrocketStatus(profileId: number) {
     remoteCheckedAt: row?.remote_checked_at ?? null,
     issues,
     remoteSources,
-    subscriptionPath: token ? `/api/config_download/${token}/config.conf` : null
+    subscriptionPath: configSubscriptionPath('shadowrocket', token)
   };
 }
 
@@ -132,26 +127,17 @@ export async function getLatestShadowrocketConfig(profileId: number, fetchSource
 
 export async function rotateShadowrocketLink(profileId: number, fetchSource?: SourceDownload) {
   await getLatestShadowrocketConfig(profileId, fetchSource);
-  const token = randomBytes(32).toString('base64url');
-  getDb().prepare(`INSERT INTO shadowrocket_download_links (profile_id, token_hash, token_ciphertext, created_at)
-    VALUES (?, ?, ?, ?) ON CONFLICT(profile_id) DO UPDATE SET
-      token_hash = excluded.token_hash, token_ciphertext = excluded.token_ciphertext, created_at = excluded.created_at`)
-    .run(profileId, tokenHash(token), encryptJson(token), new Date().toISOString());
+  rotateTargetToken(getDb(), 'shadowrocket', profileId);
   return getShadowrocketStatus(profileId);
 }
 
 export function revokeShadowrocketLink(profileId: number) {
   getCompilationSnapshot(profileId);
-  getDb().prepare('DELETE FROM shadowrocket_download_links WHERE profile_id = ?').run(profileId);
+  revokeTargetToken(getDb(), 'shadowrocket', profileId);
 }
 
 function linkForToken(token: string) {
-  const link = /^[A-Za-z0-9_-]{43}$/.test(token)
-    ? getDb().prepare('SELECT profile_id FROM shadowrocket_download_links WHERE token_hash = ?')
-      .get(tokenHash(token)) as { profile_id: number } | undefined
-    : undefined;
-  if (!link) throw new HttpError(404, 'Download link not found');
-  return link.profile_id;
+  return profileForTargetToken(getDb(), 'shadowrocket', token);
 }
 
 export async function shadowrocketConfigForToken(token: string, fetchSource?: SourceDownload) {

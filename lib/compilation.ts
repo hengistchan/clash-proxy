@@ -4,6 +4,8 @@ import { configTargetIds, type ConfigTarget } from './config-targets';
 import { refreshStashConfig, stashCompiledRevision } from './stash-compilation';
 import { refreshShadowrocketConfig, shadowrocketCompiledRevision } from './shadowrocket-compilation';
 
+import { refreshMihomoConfig, mihomoCompiledRevision } from './mihomo-compilation';
+
 interface CompileAdapter {
   refresh(db: Database.Database, snapshot: Snapshot): void;
   protectedRevision(db: Database.Database, profileId: number): number | null;
@@ -11,7 +13,8 @@ interface CompileAdapter {
 
 const compilers = {
   stash: { refresh: refreshStashConfig, protectedRevision: stashCompiledRevision },
-  shadowrocket: { refresh: refreshShadowrocketConfig, protectedRevision: shadowrocketCompiledRevision }
+  shadowrocket: { refresh: refreshShadowrocketConfig, protectedRevision: shadowrocketCompiledRevision },
+  mihomo: { refresh: refreshMihomoConfig, protectedRevision: mihomoCompiledRevision }
 } satisfies Record<ConfigTarget, CompileAdapter>;
 
 /** Each adapter owns its validation and publishes only a successful artifact. */

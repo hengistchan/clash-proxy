@@ -148,7 +148,7 @@ describe('seed and export', () => {
 describe('database and encrypted storage', () => {
   test('records the schema version and refuses to open a newer database', () => {
     const db = getDb();
-    assert.equal(Number(db.pragma('user_version', { simple: true })), 7);
+    assert.equal(Number(db.pragma('user_version', { simple: true })), 8);
     assert.ok(
       db
         .prepare('PRAGMA table_info(rule_providers)')
@@ -172,6 +172,10 @@ describe('database and encrypted storage', () => {
     process.env.STASH_DB_PATH = legacyPath;
     const legacyDb = getDb();
     legacyDb.exec(`
+      DROP TABLE mihomo_proxy_source_access;
+      DROP TABLE mihomo_proxy_source_cache;
+      DROP TABLE mihomo_download_links;
+      DROP TABLE mihomo_compilations;
       DROP TABLE target_delivery_modes;
       DROP TABLE target_publications;
       DROP TABLE managed_proxy_source_access;
@@ -186,7 +190,7 @@ describe('database and encrypted storage', () => {
     `);
     closeDbForTests();
     const migrated = getDb();
-    assert.equal(Number(migrated.pragma('user_version', { simple: true })), 7);
+    assert.equal(Number(migrated.pragma('user_version', { simple: true })), 8);
     assert.equal(
       (
         migrated.prepare('PRAGMA table_info(rule_providers)').all() as Array<{

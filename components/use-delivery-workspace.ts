@@ -11,6 +11,7 @@ export function useDeliveryWorkspace(profileId: number | undefined, revision: nu
   const [data, setData] = useState<{ key: string; targets: Targets }>({ key: '', targets: {} });
   const [failure, setFailure] = useState<{ key: string; error: string }>();
   const [pending, setPending] = useState(false);
+  const [previewEpoch, setPreviewEpoch] = useState(0);
   const request = useRef(0);
   const key = `${profileId}:${revision}`;
   const refresh = useCallback(async () => {
@@ -38,6 +39,7 @@ export function useDeliveryWorkspace(profileId: number | undefined, revision: nu
   useEffect(() => setTarget(DEFAULT_CONFIG_TARGET), [profileId]);
 
   function applyTargets(targets: Targets) {
+    setPreviewEpoch(epoch => epoch + 1);
     request.current++;
     setData({ key, targets });
     setPending(false);
@@ -56,7 +58,7 @@ export function useDeliveryWorkspace(profileId: number | undefined, revision: nu
 
   return {
     target, setTarget, targets: data.key === key ? data.targets : {},
-    error: failure?.key === key ? failure.error : '', pending, refresh, applyTargets, applyTarget
+    error: failure?.key === key ? failure.error : '', pending, refresh, applyTargets, applyTarget, previewEpoch
   };
 }
 

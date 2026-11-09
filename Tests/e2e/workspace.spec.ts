@@ -761,8 +761,8 @@ test('touch browsers can read and download a configuration preview at phone widt
   }
 });
 
-test('Clash (Mihomo) previews and downloads the same YAML and explains blocked rules', async ({ page, request }) => {
-  const initial = await create(request, 'mihomo-preview', `
+test('Clash (Mihomo) generates a fixed link, keeps the last good YAML, and revokes the old link', async ({ page, request }) => {
+  const initial = await create(request, 'mihomo-subscription', `
 http: {mitm: ["*.example.test"]}
 rules:
   - DOMAIN,clash.example.test,DIRECT
@@ -770,29 +770,46 @@ rules:
 `);
   await login(page, initial);
   await navigate(page, '下载配置');
-  const endpoint = `/api/profiles/${initial.profile.id}/mihomo/config_download`;
-  const loaded = page.waitForResponse(response => response.url().endsWith(endpoint));
   await page.getByRole('button', { name: 'Clash (Mihomo)', exact: true }).click();
-  const response = await loaded;
-  expect(response.status()).toBe(200);
+  await page.getByRole('button', { name: '生成固定订阅链接', exact: true }).click();
+  const link = page.getByRole('textbox', { name: '固定配置订阅链接' });
+  await expect(link).toHaveValue(/\/mihomo\.yaml$/);
+  const firstLink = await link.inputValue();
+
+  await page.getByRole('button', { name: '预览导出配置', exact: true }).click();
   const preview = page.getByLabel('导出配置预览', { exact: true });
   await expect(preview).toContainText(`版本 ${initial.profile.revision}`);
   await expect(preview.locator('.monaco-editor .view-lines')).toContainText('未迁移的 Stash 专用区块：http');
-  await expect(page.getByText('设备订阅链接', { exact: true })).toHaveCount(0);
   const pending = page.waitForEvent('download');
-  await preview.getByRole('button', { name: '下载 Mihomo YAML' }).click();
+  await preview.getByRole('button', { name: '下载此预览' }).click();
   const downloaded = await pending;
   expect(downloaded.suggestedFilename()).toBe(`mihomo-${initial.profile.id}.yaml`);
-  expect(createHash('sha256').update(readFileSync((await downloaded.path())!)).digest('hex'))
-    .toBe(response.headers()['x-config-sha256']);
+  const served = await request.get(firstLink);
+  expect(served.ok()).toBeTruthy();
+  expect(readFileSync((await downloaded.path())!)).toEqual(await served.body());
 
   const changed = await request.post(`/api/profiles/${initial.profile.id}/import`, {
     headers: { ...headers, 'If-Match': `"${initial.profile.revision}"` },
     data: { yaml: 'rules: ["DOMAIN,ads.example.test,REJECT,pre-matching", "MATCH,DIRECT"]' }
   });
   expect(changed.ok()).toBeTruthy();
-  await preview.getByRole('button', { name: '刷新预览' }).click();
-  await expect(preview.getByRole('alert')).toContainText('未通过 Mihomo 导出检查');
-  await expect(preview.getByText(/第 1 条规则的类型/)).toBeVisible();
-  await expect(preview.getByRole('button', { name: '下载 Mihomo YAML' })).toHaveCount(0);
+  await navigate(page, '总览');
+  await navigate(page, '下载配置');
+  await expect(page.getByText(/第 1 条规则的类型/)).toBeVisible();
+  await expect(link).toHaveValue(firstLink);
+  const fallback = await request.get(firstLink);
+  expect(fallback.headers()['x-config-revision']).toBe(String(initial.profile.revision));
+  expect(await fallback.body()).toEqual(await served.body());
+
+  await page.getByRole('button', { name: '更换链接', exact: true }).click();
+  await page.getByRole('dialog', { name: '更换固定订阅链接？' }).getByRole('button', { name: '更换', exact: true }).click();
+  await expect(link).toHaveValue(/\/mihomo\.yaml$/);
+  const replacement = await link.inputValue();
+  expect(replacement).not.toBe(firstLink);
+  expect((await request.get(firstLink)).status()).toBe(404);
+  expect((await request.get(replacement)).ok()).toBeTruthy();
+  await page.getByRole('button', { name: '撤销链接', exact: true }).click();
+  await page.getByRole('dialog', { name: '撤销固定订阅链接？' }).getByRole('button', { name: '撤销', exact: true }).click();
+  await expect(link).toHaveCount(0);
+  expect((await request.get(replacement)).status()).toBe(404);
 });

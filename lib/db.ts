@@ -229,6 +229,77 @@ const MIGRATIONS = [
         );
       `);
     }
+  },
+  {
+    version: 8,
+    apply(db: Database.Database) {
+      db.exec(`
+        CREATE TABLE mihomo_compilations (
+          profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+          checked_revision INTEGER NOT NULL,
+          compiler_version INTEGER NOT NULL,
+          issues_json TEXT NOT NULL,
+          revision INTEGER,
+          artifact_ciphertext TEXT,
+          created_at TEXT
+        );
+        CREATE TABLE mihomo_download_links (
+          profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+          token_hash TEXT NOT NULL UNIQUE,
+          token_ciphertext TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE TABLE mihomo_proxy_source_cache (
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          provider_id INTEGER NOT NULL,
+          source_fingerprint TEXT NOT NULL,
+          attempt_fingerprint TEXT NOT NULL,
+          attempted_at INTEGER NOT NULL,
+          successful_fingerprint TEXT,
+          successful_at INTEGER,
+          yaml_ciphertext TEXT,
+          PRIMARY KEY (profile_id, provider_id)
+        );
+        CREATE TABLE mihomo_proxy_source_access (
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          provider_id INTEGER NOT NULL,
+          generation TEXT NOT NULL,
+          enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+          PRIMARY KEY (profile_id, provider_id)
+        );
+
+        ALTER TABLE target_delivery_modes RENAME TO target_delivery_modes_v7;
+        ALTER TABLE target_publications RENAME TO target_publications_v7;
+        DROP INDEX target_publications_lookup;
+        CREATE TABLE target_publications (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          target TEXT NOT NULL CHECK (target IN ('stash', 'shadowrocket', 'mihomo')),
+          revision INTEGER NOT NULL,
+          artifact_ciphertext TEXT NOT NULL,
+          published_at TEXT NOT NULL
+        );
+        CREATE INDEX target_publications_lookup ON target_publications(profile_id, target, id DESC);
+        CREATE TABLE target_delivery_modes (
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          target TEXT NOT NULL CHECK (target IN ('stash', 'shadowrocket', 'mihomo')),
+          publication_id INTEGER REFERENCES target_publications(id),
+          PRIMARY KEY (profile_id, target)
+        );
+        INSERT INTO target_publications (id, profile_id, target, revision, artifact_ciphertext, published_at)
+          SELECT id, profile_id, target, revision, artifact_ciphertext, published_at FROM target_publications_v7;
+        INSERT INTO target_delivery_modes (profile_id, target, publication_id)
+          SELECT profile_id, target, publication_id FROM target_delivery_modes_v7;
+        INSERT INTO sqlite_sequence (name, seq)
+          SELECT 'target_publications', seq FROM sqlite_sequence WHERE name = 'target_publications_v7'
+          AND NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'target_publications');
+        UPDATE sqlite_sequence SET seq = MAX(seq, COALESCE(
+          (SELECT seq FROM sqlite_sequence WHERE name = 'target_publications_v7'), 0
+        )) WHERE name = 'target_publications';
+        DROP TABLE target_delivery_modes_v7;
+        DROP TABLE target_publications_v7;
+      `);
+    }
   }
 ] as const;
 

@@ -72,7 +72,7 @@ test('upgrading a version 3 database preserves the original Stash artifact and t
   const stashToken = tokenFrom(rotateDownloadLink(profile.id).subscriptionPath!);
   const db = getDb();
   // These are the only additions from v4; retain the original application data and key.
-  db.exec('DROP TABLE target_delivery_modes; DROP TABLE target_publications; DROP TABLE managed_proxy_source_access; DROP TABLE managed_proxy_source_cache; DROP TABLE shadowrocket_compilations; DROP TABLE shadowrocket_download_links; PRAGMA user_version = 3;');
+  db.exec('DROP TABLE target_delivery_modes; DROP TABLE target_publications; DROP TABLE managed_proxy_source_access; DROP TABLE managed_proxy_source_cache; DROP TABLE shadowrocket_compilations; DROP TABLE shadowrocket_download_links; DROP TABLE mihomo_proxy_source_access; DROP TABLE mihomo_proxy_source_cache; DROP TABLE mihomo_download_links; DROP TABLE mihomo_compilations; PRAGMA user_version = 3;');
   closeDbForTests();
   resetRepositoryForTests();
 
@@ -126,14 +126,14 @@ test('v4 data migrates into common fields and dialect extensions without changin
   const legacyRevision = encryptJson(before as unknown as JsonValue);
   db.prepare('UPDATE revisions SET config_ciphertext = ? WHERE profile_id = ? AND revision = ?')
     .run(legacyRevision, profile.id, profile.revision);
-  db.exec('DROP TABLE target_delivery_modes; DROP TABLE target_publications; DROP TABLE managed_proxy_source_access; DROP TABLE managed_proxy_source_cache; PRAGMA user_version = 4;');
+  db.exec('DROP TABLE target_delivery_modes; DROP TABLE target_publications; DROP TABLE managed_proxy_source_access; DROP TABLE managed_proxy_source_cache; DROP TABLE mihomo_proxy_source_access; DROP TABLE mihomo_proxy_source_cache; DROP TABLE mihomo_download_links; DROP TABLE mihomo_compilations; PRAGMA user_version = 4;');
   closeDbForTests();
   resetRepositoryForTests();
 
   assert.deepEqual(getCompilationSnapshot(profile.id), before);
   assert.equal(configForToken(stashToken).yaml, originalYaml);
   assert.deepEqual(await shadowrocketConfigForToken(shadowToken), originalConf);
-  assert.equal(getDb().pragma('user_version', { simple: true }), 7);
+  assert.equal(getDb().pragma('user_version', { simple: true }), 8);
   const stored = getDb().prepare('SELECT config_ciphertext FROM proxy_groups WHERE id = ?').pluck()
     .get(before.proxyGroups[0].id) as string;
   assert.match(stored, /^model1:v2\./);
@@ -656,7 +656,7 @@ test('platform-aware rules and direct-only configurations do not require demo gr
   assert.equal(getDeliveryStatus(p.id).current, true);
   assert.equal(simulateRouting(getSnapshot(p.id), {}).mode, 'direct');
   assert.equal(getCompilationSnapshot(p.id).profile.targetPlatform, 'ios');
-  assert.equal(getDb().pragma('user_version', { simple: true }), 7);
+  assert.equal(getDb().pragma('user_version', { simple: true }), 8);
 });
 
 test('supported HTTP and URL authentication sources are preserved while warnings stay redacted', () => {
@@ -1037,11 +1037,11 @@ test('database v6 upgrades without rotating existing device links or changing th
   const shadowToken = tokenFrom((await rotateShadowrocketLink(profile.id)).subscriptionPath!);
   const stash = configForToken(stashToken);
   const shadow = await shadowrocketConfigForToken(shadowToken);
-  getDb().exec('DROP TABLE target_delivery_modes; DROP TABLE target_publications; DROP TABLE managed_proxy_source_access; PRAGMA user_version = 6;');
+  getDb().exec('DROP TABLE target_delivery_modes; DROP TABLE target_publications; DROP TABLE managed_proxy_source_access; DROP TABLE mihomo_proxy_source_access; DROP TABLE mihomo_proxy_source_cache; DROP TABLE mihomo_download_links; DROP TABLE mihomo_compilations; PRAGMA user_version = 6;');
   closeDbForTests();
   resetRepositoryForTests();
   assert.deepEqual(configForToken(stashToken), stash);
   assert.deepEqual(await shadowrocketConfigForToken(shadowToken), shadow);
-  assert.equal(getDb().pragma('user_version', { simple: true }), 7);
+  assert.equal(getDb().pragma('user_version', { simple: true }), 8);
   assert.equal(getShadowrocketStatus(profile.id).deliveryMode, 'auto');
 });

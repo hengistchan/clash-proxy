@@ -6,7 +6,7 @@ import { pruneRevisionHistory, revisionRetentionLimit, revisionRetentionStatus }
 afterEach(() => { delete process.env.STASH_REVISION_LIMIT; });
 function fixture() {
   const db = new Database(':memory:');
-  db.exec('CREATE TABLE profiles(id INTEGER PRIMARY KEY,revision INTEGER); CREATE TABLE revisions(profile_id INTEGER,revision INTEGER,config_ciphertext TEXT); CREATE TABLE compiled_configs(profile_id INTEGER,revision INTEGER); CREATE TABLE shadowrocket_compilations(profile_id INTEGER,revision INTEGER); CREATE TABLE target_publications(profile_id INTEGER,revision INTEGER); INSERT INTO profiles VALUES(1,33),(2,33); INSERT INTO compiled_configs VALUES(1,2),(2,32);');
+  db.exec('CREATE TABLE profiles(id INTEGER PRIMARY KEY,revision INTEGER); CREATE TABLE revisions(profile_id INTEGER,revision INTEGER,config_ciphertext TEXT); CREATE TABLE compiled_configs(profile_id INTEGER,revision INTEGER); CREATE TABLE shadowrocket_compilations(profile_id INTEGER,revision INTEGER); CREATE TABLE mihomo_compilations(profile_id INTEGER,revision INTEGER,artifact_ciphertext TEXT,created_at TEXT); CREATE TABLE target_publications(profile_id INTEGER,revision INTEGER); INSERT INTO profiles VALUES(1,33),(2,33); INSERT INTO compiled_configs VALUES(1,2),(2,32);');
   const insert = db.prepare('INSERT INTO revisions VALUES(?,?,?)');
   for (let index = 1; index <= 33; index++) { insert.run(1, index, 'encrypted'); insert.run(2, index, 'encrypted'); }
   return db;
@@ -26,6 +26,9 @@ test('history retention bounds recent snapshots while protecting old successful 
     db.prepare('INSERT INTO shadowrocket_compilations VALUES (1,2)').run();
     assert.equal(pruneRevisionHistory(db, 1), 0);
     db.prepare('UPDATE shadowrocket_compilations SET revision=33 WHERE profile_id=1').run();
+    db.prepare("INSERT INTO mihomo_compilations VALUES (1,2,'encrypted','today')").run();
+    assert.equal(pruneRevisionHistory(db, 1), 0);
+    db.prepare('DELETE FROM mihomo_compilations').run();
     db.prepare('INSERT INTO target_publications VALUES (1,2)').run();
     assert.equal(pruneRevisionHistory(db, 1), 0);
     db.prepare('DELETE FROM target_publications').run();

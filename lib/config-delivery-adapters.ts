@@ -4,7 +4,10 @@ import {
   getLatestShadowrocketConfig, getShadowrocketStatus, readPersistedShadowrocketArtifact, revokeShadowrocketLink,
   rotateShadowrocketLink, shadowrocketConfigForToken
 } from './shadowrocket-delivery';
-import { materializeStashArtifact } from './managed-proxy-source';
+import {
+  getLatestMihomoConfig, getMihomoStatus, mihomoConfigForToken, readPersistedMihomoArtifact, revokeMihomoLink, rotateMihomoLink
+} from './mihomo-delivery';
+import { materializeYamlArtifact } from './managed-proxy-source';
 import { getDb } from './db';
 import { publicationsFor } from './target-publication-store';
 import { requireAdmin } from './auth';
@@ -26,12 +29,12 @@ interface ConfigDeliveryAdapter {
 const adapters = {
   stash: {
     status: getDeliveryStatus,
-    adminFile: (profileId, request) => yamlDownload(materializeStashArtifact(getLatestConfig(profileId), request)),
-    previewFile: (profileId, request) => yamlDownload(materializeStashArtifact(readPersistedStashArtifact(profileId), request)),
-    deviceFile: (token, request) => yamlDownload(
-      materializeStashArtifact(configForToken(token), request),
+    adminFile: (profileId, request) => yamlDownload(materializeYamlArtifact(getLatestConfig(profileId), request)),
+    previewFile: (profileId, request) => yamlDownload(materializeYamlArtifact(readPersistedStashArtifact(profileId), request)),
+    deviceFile: (token, request) => getDb().transaction(() => yamlDownload(
+      materializeYamlArtifact(configForToken(token), request),
       absoluteDownloadUrl(request, new URL(request.url).pathname)
-    ),
+    ))(),
     rotate: rotateDownloadLink,
     revoke: revokeDownloadLink
   },
@@ -42,6 +45,15 @@ const adapters = {
     deviceFile: async (token) => confDownload(await shadowrocketConfigForToken(token)),
     rotate: rotateShadowrocketLink,
     revoke: revokeShadowrocketLink
+  },
+  mihomo: {
+    status: getMihomoStatus,
+    adminFile: (profileId, request) => yamlDownload(materializeYamlArtifact(getLatestMihomoConfig(profileId), request, 'mihomo')),
+    previewFile: (profileId, request) => yamlDownload(materializeYamlArtifact(readPersistedMihomoArtifact(profileId), request, 'mihomo')),
+    deviceFile: (token, request) => getDb().transaction(() =>
+      yamlDownload(materializeYamlArtifact(mihomoConfigForToken(token), request, 'mihomo')))(),
+    rotate: rotateMihomoLink,
+    revoke: revokeMihomoLink
   }
 } satisfies Record<ConfigTarget, ConfigDeliveryAdapter>;
 
@@ -49,6 +61,13 @@ export function profileDeliveryTargets(request: Request, profileId: number) {
   return Object.fromEntries(configTargetIds.map((target) => [
     target, deliveryLinks(request, profileId, target, { ...adapters[target].status(profileId), publications: publicationsFor(getDb(), profileId, target) })
   ])) as Record<ConfigTarget, ConfigDeliveryStatus>;
+}
+
+function privateError(error: unknown) {
+  const response = jsonError(error);
+  response.headers.set('Cache-Control', 'no-store');
+  response.headers.set('Referrer-Policy', 'no-referrer');
+  return response;
 }
 
 export function previewDeliveredConfig(request: Request, params: { profileId: string; target: string }) {
@@ -65,7 +84,7 @@ export function previewDeliveredConfig(request: Request, params: { profileId: st
       return (adapters[target] as ConfigDeliveryAdapter).previewFile(profileId, request);
     })();
   } catch (error) {
-    return jsonError(error);
+    return privateError(error);
   }
 }
 
@@ -81,7 +100,7 @@ export function configTargetHandlers(target: ConfigTarget) {
         rejectLegacyParameters(request);
         return await adapter.adminFile(parseId((await context.params).profileId), request);
       } catch (error) {
-        return jsonError(error);
+        return privateError(error);
       }
     },
     async deviceDownload(request: Request, context: DeviceContext) {
@@ -89,22 +108,21 @@ export function configTargetHandlers(target: ConfigTarget) {
         rejectLegacyParameters(request);
         return await adapter.deviceFile((await context.params).token, request);
       } catch (error) {
-        const response = jsonError(error);
-        response.headers.set('Cache-Control', 'no-store');
-        response.headers.set('Referrer-Policy', 'no-referrer');
-        return response;
+        return privateError(error);
       }
     },
     async rotate(request: Request, context: ProfileContext) {
       try {
         requireAdmin(request);
         const profileId = parseId((await context.params).profileId);
+        // Validate the public origin before replacing an existing device credential.
+        absoluteDownloadUrl(request, '/');
         const status = await adapter.rotate(profileId);
         return Response.json(deliveryLinks(request, profileId, target, status), {
           headers: { 'Cache-Control': 'no-store' }
         });
       } catch (error) {
-        return jsonError(error);
+        return privateError(error);
       }
     },
     async revoke(request: Request, context: ProfileContext) {
@@ -113,7 +131,7 @@ export function configTargetHandlers(target: ConfigTarget) {
         await adapter.revoke(parseId((await context.params).profileId));
         return new Response(null, { status: 204 });
       } catch (error) {
-        return jsonError(error);
+        return privateError(error);
       }
     }
   };
