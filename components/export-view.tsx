@@ -114,6 +114,23 @@ export function ExportView({
     }
   }
 
+  async function copySubscription(url: string, message: string) {
+    setError('');
+    setNotice('');
+    try {
+      await navigator.clipboard.writeText(url);
+      setNotice(message);
+    } catch {
+      setError('复制失败，请手动选择链接复制。');
+    }
+  }
+
+  const subscriptionUrl = status?.subscriptionPath
+    ? status.subscriptionUrl || window.location.origin + status.subscriptionPath
+    : null;
+  const portableUrl = target === 'mihomo' && subscriptionUrl?.endsWith('/mihomo.yaml')
+    ? subscriptionUrl.slice(0, -'mihomo.yaml'.length) + 'mihomo-portable.yaml'
+    : null;
   const missing = snapshot.proxyProviders.filter((p) => !p.sourceConfigured);
   const compatibility = status?.issues ?? [];
   const canDownload = status?.compiledRevision != null || Boolean(status?.remoteSources && status.deliveryMode !== 'manual');
@@ -229,29 +246,19 @@ export function ExportView({
           <p className="delivery-note">
             将链接添加到 {client}。客户端更新时会获取上面显示的设备版本。持有此链接的人可下载完整私人配置。
           </p>
-          {status?.subscriptionPath ? (
+          {subscriptionUrl ? (
             <>
               <input
                 className="input mono"
                 aria-label="固定配置订阅链接"
                 readOnly
-                value={
-                  status.subscriptionUrl || window.location.origin + status.subscriptionPath
-                }
+                value={subscriptionUrl}
               />
               <div className="delivery-actions">
                 <button
                   className="button secondary"
                   disabled={busy}
-                  onClick={() =>
-                    void navigator.clipboard
-                      .writeText(
-                        status.subscriptionUrl ||
-                          window.location.origin + status.subscriptionPath
-                      )
-                      .then(() => setNotice('订阅链接已复制。'))
-                      .catch(() => setError('复制失败，请手动选择链接复制。'))
-                  }
+                  onClick={() => void copySubscription(subscriptionUrl, '订阅链接已复制。')}
                 >
                   复制链接
                 </button>
@@ -271,6 +278,19 @@ export function ExportView({
                   撤销链接
                 </button>
               </div>
+              {portableUrl ? <>
+                <label className="field" htmlFor="mihomo-portable-subscription">
+                  <span>单文件订阅链接</span>
+                  <input id="mihomo-portable-subscription" className="input mono" readOnly
+                    value={portableUrl} onFocus={event => event.currentTarget.select()} />
+                </label>
+                <div className="delivery-actions">
+                  <button type="button" className="button secondary" disabled={busy}
+                    onClick={() => void copySubscription(portableUrl, '单文件订阅链接已复制。')}>
+                    复制单文件订阅链接
+                  </button>
+                </div>
+              </> : null}
             </>
           ) : (
             <div className="delivery-actions">

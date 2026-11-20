@@ -5,7 +5,7 @@ import { compileMihomo } from './mihomo-export';
 import { deliveryMode, managedSources, mihomoCandidate } from './target-publication-store';
 import type { JsonValue, Snapshot, ValidationIssue } from './types';
 
-const COMPILER_VERSION = 1;
+const COMPILER_VERSION = 4;
 
 export function mihomoCompiledRevision(db: Database.Database, profileId: number) {
   return mihomoCandidate(db, profileId)?.revision ?? null;

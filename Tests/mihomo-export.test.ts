@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, beforeEach, test } from 'node:test';
@@ -15,6 +16,9 @@ import { configForToken, getLatestConfig, rotateDownloadLink } from '../lib/deli
 import { setSourceAccess } from '../lib/managed-source-access';
 import { createProfile, createProxyProvider, getSnapshot, importYaml, resetRepositoryForTests, updateProxyProvider } from '../lib/repository';
 import { managedProxySource } from '../lib/managed-proxy-source';
+import { mirroredRuleSource } from '../lib/public-rule-mirror';
+import { portableMihomoYaml } from '../lib/mihomo-portable';
+import { GET as portableDownload } from '../app/api/config_download/[token]/mihomo-portable.yaml/route';
 import { getMihomoStatus } from '../lib/mihomo-delivery';
 import { getShadowrocketStatus, rotateShadowrocketLink, shadowrocketConfigForToken } from '../lib/shadowrocket-delivery';
 import { changeTargetPublication } from '../lib/target-publication';
@@ -55,6 +59,10 @@ proxy-providers:
   remote:
     url: https://proxy.example.test/private-feed
     headers: { X-Test: proxy-fixture }
+    path: ./providers/remote.yaml
+    interval: 43200
+    benchmark-url: http://www.gstatic.com/generate_204
+    benchmark-timeout: 5
 proxy-groups:
   - {name: Outlet, type: select, proxies: [DIRECT], use: [remote]}
 rule-providers:
@@ -81,6 +89,16 @@ rules:
   assert.match(response.headers.get('Content-Disposition')!, /mihomo-\d+\.yaml/);
   const body = await response.text();
   assert.equal(response.headers.get('X-Config-SHA256'), createHash('sha256').update(body).digest('hex'));
+  if (process.env.MIHOMO_TEST_BIN) {
+    const work = mkdtempSync(join(dir, 'kernel-'));
+    const configFile = join(work, 'config.yaml');
+    writeFileSync(configFile, body);
+    const kernel = spawnSync(process.env.MIHOMO_TEST_BIN, ['-t', '-d', work, '-f', configFile], {
+      encoding: 'utf8', timeout: 20_000
+    });
+    assert.ifError(kernel.error);
+    assert.equal(kernel.status, 0, kernel.stdout + kernel.stderr);
+  }
   assert.match(body, /^# 未迁移的 Stash 专用区块：http$/m);
   const config = parse(body);
   assert.equal(config.http, undefined);
@@ -92,7 +110,9 @@ rules:
     'AND,((DOMAIN,foo.example.test),(SRC-IP-CIDR,192.0.2.0/24)),Outlet', 'RULE-SET,domains,REJECT', 'MATCH,DIRECT'
   ]);
   assert.deepEqual(config['proxy-providers'].remote, {
-    type: 'http', url: 'https://proxy.example.test/private-feed', header: { 'X-Test': ['proxy-fixture'] }
+    type: 'http', url: 'https://proxy.example.test/private-feed', header: { 'X-Test': ['proxy-fixture'] },
+    path: './providers/remote.yaml', interval: 43200,
+    'health-check': { enable: true, url: 'http://www.gstatic.com/generate_204', timeout: 5000 }
   });
   assert.equal(config['proxy-providers'][current.name].type, 'file');
   assert.deepEqual(config['rule-providers'].domains, { type: 'inline', behavior: 'domain', payload: ['+.example.test'] });
@@ -100,6 +120,74 @@ rules:
   assert.deepEqual(config['rule-providers'].remote.header, { 'X-Test': ['a', 'b'] });
   assert.equal(getLatestConfig(profile.id).sha256, old.sha256);
   assert.equal(getLatestConfig(profile.id).revision, old.revision);
+  assert.equal(parse(old.yaml)['proxy-providers'].remote['benchmark-timeout'], 5);
+});
+
+test('Mihomo preserves explicit provider health settings and reports invalid Stash latency settings', async () => {
+  const { profile } = createProfile('Provider health check', `
+proxy-providers:
+  native:
+    url: https://proxy.example.test/fixture
+    benchmark-url: http://www.gstatic.com/generate_204
+    benchmark-timeout: 5
+    health-check: {enable: false, url: https://example.test/health, timeout: 2500, interval: 42}
+rules: ["MATCH,DIRECT"]
+`);
+  const response = await request(profile.id);
+  assert.equal(response.status, 200);
+  const provider = parse(await response.text())['proxy-providers'].native;
+  assert.equal(Object.hasOwn(provider, 'benchmark-url'), false);
+  assert.equal(Object.hasOwn(provider, 'benchmark-timeout'), false);
+  assert.deepEqual(provider['health-check'], { enable: false, url: 'https://example.test/health', timeout: 2500, interval: 42 });
+
+  const invalid = createProfile('Invalid provider health check', `
+proxy-providers:
+  invalid: {url: https://proxy.example.test/fixture, benchmark-timeout: -1}
+rules: ["MATCH,DIRECT"]
+`);
+  const blocked = await request(invalid.profile.id);
+  assert.equal(blocked.status, 409);
+  const { issues } = await blocked.json();
+  assert.ok(issues.some((issue: { code: string }) => issue.code === 'mihomo.provider-benchmark'));
+});
+
+test('Mihomo mirrors public GitHub rulesets and preserves explicit provider and DNS choices', async () => {
+  const yaml = `
+dns:
+  nameserver: [223.5.5.5]
+  fallback: [https://1.1.1.1/dns-query, https://dns.example.test/dns-query]
+rule-providers:
+  github: {url: https://raw.githubusercontent.com/fixture/rules/main/sample.yaml, behavior: classical}
+  explicit: {url: https://raw.githubusercontent.com/fixture/rules/main/other.yaml, behavior: classical, proxy: REJECT}
+  other: {url: https://rules.example.test/fixture, behavior: classical}
+rules: ["MATCH,DIRECT"]
+`;
+  const { profile } = createProfile('Ruleset bootstrap', yaml);
+  const response = await request(profile.id);
+  assert.equal(response.status, 200);
+  const config = parse(await response.text());
+  assert.equal(config['rule-providers'].github.proxy, 'DIRECT');
+  const mirror = new URL(config['rule-providers'].github.url);
+  assert.equal(mirror.origin, 'https://forge.example.test');
+  const capability = mirror.pathname.split('/')[3];
+  assert.match(mirror.pathname, /^\/api\/proxy-source\/r1\.[\w-]+\.[a-f0-9]{64}\/rules\.yaml$/);
+  const contents = 'payload: ["DOMAIN,example.test"]';
+  assert.equal(await mirroredRuleSource(capability, async ({ url }) => {
+    assert.equal(url, 'https://raw.githubusercontent.com/fixture/rules/main/sample.yaml');
+    return contents;
+  }), contents);
+  const tampered = capability.slice(0, -1) + (capability.endsWith('0') ? '1' : '0');
+  await assert.rejects(mirroredRuleSource(tampered, async () => assert.fail('tampered path reached upstream')), { status: 404 });
+  assert.equal(config['rule-providers'].explicit.proxy, 'REJECT');
+  assert.equal(config['rule-providers'].other.proxy, undefined);
+  assert.equal(config.dns['nameserver-policy'], undefined);
+  assert.deepEqual(config.dns.nameserver, ['223.5.5.5', 'https://1.1.1.1/dns-query#DIRECT']);
+  assert.deepEqual(config.dns.fallback, ['https://1.1.1.1/dns-query', 'https://dns.example.test/dns-query']);
+  const custom = createProfile('Custom bootstrap DNS', yaml.replace('  fallback:', '  nameserver-policy: {raw.githubusercontent.com: 9.9.9.9}\n  fallback:'));
+  const customResponse = await request(custom.profile.id);
+  assert.equal(customResponse.status, 200);
+  assert.deepEqual(parse(await customResponse.text()).dns['nameserver-policy'], { 'raw.githubusercontent.com': '9.9.9.9' });
+  assert.equal(parse(getLatestConfig(profile.id).yaml)['rule-providers'].github.proxy, undefined);
 });
 
 test('incompatible routing returns a targeted diagnostic rather than a partially working file', async () => {
@@ -114,6 +202,41 @@ rules:
   const payload = await response.json();
   assert.ok(payload.issues.some((issue: { code: string; resourceId: number }) =>
     issue.code === 'mihomo.rule' && issue.resourceId === rules[0].id));
+});
+
+test('single-file subscriptions embed managed nodes and both YAML and text rulesets', async () => {
+  const origin = 'https://forge.example.test';
+  const yaml = `
+proxy-providers:
+  nodes:
+    type: http
+    url: ${origin}/api/proxy-source/m2.fixture/proxies.yaml
+    interval: 3600
+    health-check: {enable: true, timeout: 5000}
+rule-providers:
+  yaml-rules: {type: http, url: ${origin}/api/proxy-source/r1.yaml/rules.yaml, behavior: domain}
+  text-rules: {type: http, url: ${origin}/api/proxy-source/r1.text/rules.yaml, behavior: classical, format: text}
+rules: ["RULE-SET,yaml-rules,REJECT", "MATCH,DIRECT"]
+`;
+  const loaders = {
+    nodes: async () => 'proxies: [{name: fixture, type: http, server: example.test, port: 80}]',
+    rules: async (capability: string) => capability === 'r1.text'
+      ? '\uFEFF# comment\r\nDOMAIN,example.test\r\n' : 'payload: ["+.example.test"]'
+  };
+  const bundled = parse(await portableMihomoYaml(yaml, origin, loaders));
+  assert.deepEqual(bundled['proxy-providers'].nodes, {
+    type: 'inline', 'health-check': { enable: true, timeout: 5000 },
+    payload: [{ name: 'fixture', type: 'http', server: 'example.test', port: 80 }]
+  });
+  assert.deepEqual(bundled['rule-providers']['yaml-rules'], { type: 'inline', behavior: 'domain', payload: ['+.example.test'] });
+  assert.deepEqual(bundled['rule-providers']['text-rules'], { type: 'inline', behavior: 'classical', payload: ['DOMAIN,example.test'] });
+  assert.deepEqual(bundled.rules, ['RULE-SET,yaml-rules,REJECT', 'MATCH,DIRECT']);
+  await assert.rejects(portableMihomoYaml(yaml.replace(origin, 'https://other.example.test'), origin, loaders), { status: 409 });
+  const response = await portableDownload(new Request(origin + '/api/config_download/invalid/mihomo-portable.yaml'), {
+    params: Promise.resolve({ token: 'invalid' })
+  });
+  assert.equal(response.status, 404);
+  assert.equal(response.headers.get('Cache-Control'), 'no-store');
 });
 
 function profileContext(id: number) {

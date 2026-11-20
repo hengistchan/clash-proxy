@@ -1,12 +1,51 @@
 import { posix, win32 } from 'node:path';
+import { isIP } from 'node:net';
 import { assembleYamlConfig, serializeYamlConfig, yamlTargetIssues, type ExportResult } from './exporter';
 import { isLogicalRuleType, splitTopLevel } from './rules';
 import { validateSnapshot } from './validation';
+import { publicGitHubRuleUrl } from './public-rule-mirror';
 import { isJsonObject, type JsonObject, type Snapshot, type ValidationIssue } from './types';
 
 const STASH_SECTIONS = ['http', 'cron', 'script', 'script-providers'];
 const STASH_RULES = new Set(['SCRIPT', 'USER-AGENT', 'URL-REGEX', 'PROTOCOL']);
 const INBOUND_KEYS = ['port', 'socks-port', 'mixed-port', 'redir-port', 'tproxy-port', 'listeners'];
+const GITHUB_RULE_HOST = 'raw.githubusercontent.com';
+
+function httpsUrl(value: JsonObject[string]): URL | undefined {
+  if (typeof value !== 'string' || !URL.canParse(value)) return;
+  const url = new URL(value);
+  if (url.protocol === 'https:') return url;
+}
+
+function bootstrapResolvers(dns: JsonObject): string[] {
+  if (!Array.isArray(dns.fallback)) return [];
+  return dns.fallback.flatMap(server => {
+    const url = httpsUrl(server);
+    if (!url || url.hash || !isIP(url.hostname.replace(/^\[|\]$/g, ''))) return [];
+    url.hash = 'DIRECT';
+    return [url.href];
+  });
+}
+
+function convertProviderBenchmark(source: JsonObject): boolean {
+  if (!Object.hasOwn(source, 'benchmark-url') && !Object.hasOwn(source, 'benchmark-timeout')) return true;
+  const legacyUrl = source['benchmark-url'];
+  const legacyTimeout = source['benchmark-timeout'];
+  const existing = source['health-check'];
+  if (existing !== undefined && !isJsonObject(existing)) return false;
+  const healthCheck = { ...existing };
+  const url = healthCheck.url ?? legacyUrl ?? 'http://www.apple.com/';
+  if (typeof url !== 'string' || !/^https?:\/\//i.test(url) || !URL.canParse(url)) return false;
+  if (healthCheck.timeout === undefined && legacyTimeout !== undefined) {
+    if (typeof legacyTimeout !== 'number' || legacyTimeout <= 0 ||
+        !Number.isSafeInteger(legacyTimeout * 1000) || legacyTimeout * 1000 > 0xffffffff) return false;
+    healthCheck.timeout = legacyTimeout * 1000;
+  }
+  source['health-check'] = { ...healthCheck, url, enable: healthCheck.enable ?? true };
+  delete source['benchmark-url'];
+  delete source['benchmark-timeout'];
+  return true;
+}
 
 // Logic rules encode conditions without a policy. Translate source IP aliases at
 // each level and reject options Mihomo would otherwise silently ignore.
@@ -101,6 +140,9 @@ export function compileMihomo(snapshot: Snapshot): { artifact: ExportResult | nu
   for (const provider of snapshot.proxyProviders) {
     const source = proxies![provider.name];
     configureProvider(source, provider.sourceType === 'remote' ? 'http' : 'file', 'proxy-provider', provider.id);
+    if (!convertProviderBenchmark(source)) {
+      error('provider-benchmark', '代理源的测速设置无法转换为 Mihomo。请检查 HTTP(S) 测速地址、超时秒数和 health-check 格式。', 'proxy-provider', provider.id);
+    }
     const managed = managedSources.get(provider.id);
     if (managed) {
       if (Object.hasOwn(provider.config, 'header')) {
@@ -111,12 +153,38 @@ export function compileMihomo(snapshot: Snapshot): { artifact: ExportResult | nu
     }
   }
   const ruleProviders = config['rule-providers'] as Record<string, JsonObject>;
+  const publicRules: NonNullable<ExportResult['publicRules']> = [];
+  let directGitHubRuleProvider = false;
   for (const provider of snapshot.ruleProviders) {
     const type = provider.providerType === 'remote' ? 'http' : provider.providerType === 'local' ? 'file' : 'inline';
-    configureProvider(ruleProviders[provider.name], type, 'rule-provider', provider.id);
+    const source = ruleProviders[provider.name];
+    configureProvider(source, type, 'rule-provider', provider.id);
+    if (type === 'http' && httpsUrl(source.url)?.hostname === GITHUB_RULE_HOST && source.proxy === undefined) {
+      source.proxy = 'DIRECT';
+      const upstream = publicGitHubRuleUrl(source.url);
+      if (upstream && !Object.hasOwn(source, 'header') && !Object.hasOwn(source, 'headers') &&
+          (source.format === undefined || source.format === 'yaml' || source.format === 'text')) {
+        publicRules.push({ name: provider.name, upstream: upstream.href });
+      } else {
+        directGitHubRuleProvider = true;
+      }
+    }
   }
 
   const dns = isJsonObject(config.dns) ? { ...config.dns } : {};
+  const resolvers = bootstrapResolvers(dns);
+  if (publicRules.length && dns.enable !== false && resolvers.length) {
+    for (const key of ['nameserver', 'proxy-server-nameserver']) {
+      const configured = dns[key];
+      if (Array.isArray(configured) && configured.length && configured.every(server => typeof server === 'string' && isIP(server))) {
+        dns[key] = [...configured, ...resolvers];
+      }
+    }
+  }
+  if (directGitHubRuleProvider && dns.enable !== false && dns['nameserver-policy'] === undefined &&
+      dns['direct-nameserver'] === undefined) {
+    if (resolvers.length) dns['nameserver-policy'] = { [GITHUB_RULE_HOST]: resolvers };
+  }
   if (Object.hasOwn(dns, 'follow-rule')) {
     if (typeof dns['follow-rule'] !== 'boolean' || (dns['respect-rules'] !== undefined && dns['respect-rules'] !== dns['follow-rule'])) {
       error('dns-follow-rule', 'DNS 的 follow-rule 和 respect-rules 设置无效或冲突。', 'settings');
@@ -141,7 +209,8 @@ export function compileMihomo(snapshot: Snapshot): { artifact: ExportResult | nu
   return {
     artifact: {
       ...serializeYamlConfig(config, `mihomo-${snapshot.profile.id}.yaml`, validation, comments),
-      ...(proxyRewrites ? { proxyRewrites } : {})
+      ...(proxyRewrites ? { proxyRewrites } : {}),
+      ...(publicRules.length ? { publicRules } : {})
     },
     issues: omitted.length ? [{
       severity: 'warning',

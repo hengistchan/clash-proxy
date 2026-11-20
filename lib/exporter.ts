@@ -57,6 +57,7 @@ export interface ExportResult {
   ruleCount: number;
   validation: ReturnType<typeof validateSnapshot>;
   proxyRewrites?: { profileId: number; sources: ManagedProxySource[] };
+  publicRules?: Array<{ name: string; upstream: string }>;
 }
 
 export interface ManagedProxySource {

@@ -775,6 +775,17 @@ rules:
   const link = page.getByRole('textbox', { name: '固定配置订阅链接' });
   await expect(link).toHaveValue(/\/mihomo\.yaml$/);
   const firstLink = await link.inputValue();
+  const portableLink = page.getByRole('textbox', { name: '单文件订阅链接', exact: true });
+  const copyPortable = page.getByRole('button', { name: '复制单文件订阅链接', exact: true });
+  const firstPortable = firstLink.replace('/mihomo.yaml', '/mihomo-portable.yaml');
+  await expect(portableLink).toHaveValue(firstPortable);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await copyPortable.click();
+  await expect(page.getByRole('status').filter({ hasText: '单文件订阅链接已复制。' })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(firstPortable);
+  const portableResponse = await request.get(firstPortable);
+  expect(portableResponse.ok()).toBeTruthy();
+  expect(portableResponse.headers()['x-config-revision']).toBe(String(initial.profile.revision));
 
   await page.getByRole('button', { name: '预览导出配置', exact: true }).click();
   const preview = page.getByLabel('导出配置预览', { exact: true });
@@ -806,10 +817,15 @@ rules:
   await expect(link).toHaveValue(/\/mihomo\.yaml$/);
   const replacement = await link.inputValue();
   expect(replacement).not.toBe(firstLink);
+  const replacementPortable = replacement.replace('/mihomo.yaml', '/mihomo-portable.yaml');
+  await expect(portableLink).toHaveValue(replacementPortable);
+  expect((await request.get(firstPortable)).status()).toBe(404);
   expect((await request.get(firstLink)).status()).toBe(404);
   expect((await request.get(replacement)).ok()).toBeTruthy();
   await page.getByRole('button', { name: '撤销链接', exact: true }).click();
   await page.getByRole('dialog', { name: '撤销固定订阅链接？' }).getByRole('button', { name: '撤销', exact: true }).click();
   await expect(link).toHaveCount(0);
+  await expect(copyPortable).toHaveCount(0);
+  expect((await request.get(replacementPortable)).status()).toBe(404);
   expect((await request.get(replacement)).status()).toBe(404);
 });

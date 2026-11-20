@@ -10,20 +10,28 @@ import { managedSourceTables, sourceCapability, verifySourceCapability, type Man
 import { HttpError } from './http';
 import { transformProxySource } from './proxy-source-transform';
 import { downloadSource, type SourceDownload } from './upstream-download';
+import { publicGitHubRuleUrl, ruleMirrorCapability } from './public-rule-mirror';
 
 const RETRY_MS = 60_000;
 export function materializeYamlArtifact<T extends ExportResult>(artifact: T, request: Request, target: ManagedSourceTarget = 'stash'): T {
   const rewrites = artifact.proxyRewrites;
-  if (!rewrites) return artifact;
+  const publicRules = target === 'mihomo' ? artifact.publicRules : undefined;
+  if (!rewrites && !publicRules?.length) return artifact;
   const origin = absoluteDownloadUrl(request, '/');
-  const db = getDb();
   const document = parseDocument(artifact.yaml);
-  for (const source of rewrites.sources) {
-    const capability = sourceCapability(db, rewrites.profileId, source.id, target);
-    document.setIn(['proxy-providers', source.name, 'url'], new URL(`/api/proxy-source/${capability}/proxies.yaml`, origin).href);
+  if (rewrites) {
+    const db = getDb();
+    for (const source of rewrites.sources) {
+      const capability = sourceCapability(db, rewrites.profileId, source.id, target);
+      document.setIn(['proxy-providers', source.name, 'url'], new URL(`/api/proxy-source/${capability}/proxies.yaml`, origin).href);
+    }
+  }
+  for (const source of publicRules ?? []) {
+    const upstream = publicGitHubRuleUrl(source.upstream);
+    if (upstream) document.setIn(['rule-providers', source.name, 'url'], new URL(`/api/proxy-source/${ruleMirrorCapability(upstream)}/rules.yaml`, origin).href);
   }
   const yaml = document.toString({ lineWidth: 0 });
-  const { proxyRewrites: _private, ...result } = artifact;
+  const { proxyRewrites: _private, publicRules: _publicRules, ...result } = artifact;
   return { ...result, yaml, sha256: createHash('sha256').update(yaml).digest('hex') } as T;
 }
 

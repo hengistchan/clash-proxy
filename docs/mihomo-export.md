@@ -2,6 +2,8 @@
 
 在工作台打开「下载配置 → Clash (Mihomo)」。可预览、下载 YAML，或点「生成固定订阅链接」并把链接添加到使用 Mihomo 内核的客户端。预览、下载和设备订阅提供同一交付版本，预览会显示版本号。
 
+已生成固定订阅后，可点「复制单文件订阅链接」。它将托管代理源和托管规则集嵌入 YAML，这些内容随整份订阅刷新。单文件地址以 `/mihomo-portable.yaml` 结尾，与普通链接一同更换或撤销。含本地文件或未托管远程来源的配置，请使用普通订阅链接。
+
 默认自动交付最近通过检查的版本。新编辑版未通过时，链接继续提供上一版，页面会显示兼容性问题。启用手动发布后可固定版本、发布当前版或回退到此前发布的版本。更换或撤销 Mihomo 链接只影响 Mihomo 的整份配置订阅；托管代理源链接可分别管理。
 
 管理员 API：`GET /api/profiles/{profileId}/mihomo/config_download` 下载交付版；`POST` / `DELETE /api/profiles/{profileId}/mihomo/download-link` 生成、更换或撤销链接。设备通过 `GET /api/config_download/{token}/mihomo.yaml` 更新。下载无查询参数，成功响应包括 `X-Config-Revision`、`X-Config-SHA256` 和 `X-Rule-Count`。尚无可用版本时返回 `409`。
