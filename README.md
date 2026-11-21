@@ -20,7 +20,9 @@
 - 检查规则顺序、MATCH 终位、策略组成员、循环引用、CIDR、端口、平台兼容性等问题。
 - 各客户端分别检查兼容性与来源状态。默认自动交付最近成功版本，也可为指定客户端固定设备版，手动发布和回退。
 - 导出 Stash YAML 和 ZIP，或在「下载配置」切换到 Shadowrocket 查看兼容性并下载 .conf。也可切换到 [Clash (Mihomo)](docs/mihomo-export.md)，预览、下载 YAML 或生成独立的固定订阅链接。
-- 提供 REST API 和机器可读 OpenAPI 文档。
+- 提供 REST API、机器可读 OpenAPI 文档和管理员可见的脱敏运行统计。
+- 支持在线备份、完整性与配对密钥验证，以及恢复到新目录；命令见 [SERVICE.md](SERVICE.md)。
+- 路由解释可使用近期检查过的远程规则快照；大规则列表分页显示，批量操作覆盖全部筛选结果。
 
 可以导入 [双客户端示例](examples/DualClient.yaml) 查看两种输出。示例节点使用文档占位地址。Shadowrocket 的支持范围和设备验收步骤见[双客户端交付说明](docs/shadowrocket-delivery.md)。
 

@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import { Download, FileCode2, Link2, RefreshCw } from 'lucide-react';
 import type { Snapshot, ValidationIssue } from '@/lib/types';
 import {
+  apiFetch,
   apiRequest,
   downloadBlob,
   filenameFromDisposition
@@ -52,12 +53,7 @@ export function ExportView({
     setBusy(true);
     setError('');
     try {
-      const response = await fetch(
-        `${targetApi}/${bundle ? 'bundle' : 'config_download'}`,
-        {
-          headers: token ? { 'X-Admin-Token': token } : {}
-        }
-      );
+      const response = await apiFetch(`${targetApi}/${bundle ? 'bundle' : 'config_download'}`, { token });
       if (!response.ok)
         throw new Error((await response.json()).detail || '下载失败');
       downloadBlob(

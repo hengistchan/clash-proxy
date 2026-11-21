@@ -1,5 +1,7 @@
 import { isIP } from 'node:net';
 import type { Snapshot, StashRule, ValidationIssue } from './types';
+import { splitTopLevel } from './rules';
+import { RE2JS } from 're2js';
 
 export interface MatchInput {
   host?: string;
@@ -67,24 +69,45 @@ function glob(pattern: string, value: string): boolean {
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
     .replace(/\*/g, '.*')
     .replace(/\?/g, '.');
-  return new RegExp(`^${escaped}$`, 'i').test(value);
+  return RE2JS.compile(`^${escaped}$`, RE2JS.CASE_INSENSITIVE).matcher(value).matches();
 }
 function domainEntry(value: string, host: string): boolean {
   const entry = value.toLowerCase().replace(/\.$/, '');
   if (entry.startsWith('+.'))
     return host === entry.slice(2) || host.endsWith('.' + entry.slice(2));
   if (entry.startsWith('.')) return host.endsWith(entry);
+  if (!entry.includes('*') && !entry.includes('?')) return host === entry;
   return glob(entry, host);
 }
 export function matchesRule(
   rule: Pick<StashRule, 'type' | 'payload'>,
   input: MatchInput,
-  snapshot: Snapshot
+  snapshot: Snapshot,
+  context = { depth: 0, remaining: 100_000 }
 ): MatchState {
+  if (context.depth > 32 || --context.remaining < 0) return 'unknown';
   const host = input.host?.toLowerCase().replace(/\.$/, '');
   const payload = rule.payload.toLowerCase();
   const result = (value: boolean): MatchState => (value ? 'yes' : 'no');
   switch (rule.type) {
+    case 'AND':
+    case 'OR':
+    case 'NOT': {
+      if (!rule.payload.startsWith('(') || !rule.payload.endsWith(')')) return 'unknown';
+      const parts = splitTopLevel(rule.payload.slice(1, -1));
+      if (!parts.length || (rule.type === 'NOT' && parts.length !== 1)) return 'unknown';
+      const states = parts.map(part => {
+        if (!part.startsWith('(') || !part.endsWith(')')) return 'unknown' as const;
+        const [type, payload, ...options] = splitTopLevel(part.slice(1, -1));
+        if (!type || !payload || type === 'RULE-SET' || options.some(option => option !== 'no-resolve')) return 'unknown' as const;
+        context.depth++;
+        try { return matchesRule({ type, payload }, input, snapshot, context); }
+        finally { context.depth--; }
+      });
+      if (rule.type === 'NOT') return states[0] === 'unknown' ? 'unknown' : states[0] === 'yes' ? 'no' : 'yes';
+      return rule.type === 'AND' ? states.includes('no') ? 'no' : states.includes('unknown') ? 'unknown' : 'yes'
+        : states.includes('yes') ? 'yes' : states.includes('unknown') ? 'unknown' : 'no';
+    }
     case 'MATCH':
       return 'yes';
     case 'DOMAIN':
@@ -96,7 +119,11 @@ export function matchesRule(
     case 'DOMAIN-KEYWORD':
       return host ? result(host.includes(payload)) : 'unknown';
     case 'DOMAIN-WILDCARD':
+      if (rule.payload.length > 4096) return 'unknown';
       return host ? result(glob(payload, host)) : 'unknown';
+    case 'DOMAIN-REGEX':
+      if (!host || rule.payload.length > 512) return 'unknown';
+      try { return result(RE2JS.compile(rule.payload).matcher(host).find()); } catch { return 'unknown'; }
     case 'IP-CIDR':
     case 'IP-CIDR6':
       return input.ip
@@ -117,6 +144,7 @@ export function matchesRule(
     }
     case 'PROCESS-NAME':
     case 'PROCESS-PATH':
+      if (rule.payload.length > 4096) return 'unknown';
       if (['ios', 'tvos'].includes(snapshot.profile.targetPlatform))
         return 'no';
       return input.process
@@ -127,16 +155,27 @@ export function matchesRule(
         (item) => item.name === rule.payload
       );
       if (!provider || provider.providerType !== 'inline') return 'unknown';
-      if (provider.behavior === 'domain')
-        return host
-          ? result(provider.entries.some((e) => domainEntry(e.value, host)))
-          : 'unknown';
-      if (provider.behavior === 'ipcidr')
-        return input.ip
-          ? result(
-              provider.entries.some((e) => cidrContains(e.value, input.ip!))
-            )
-          : 'unknown';
+      if (provider.behavior === 'domain' || provider.behavior === 'ipcidr') {
+        if (provider.behavior === 'domain' ? !host : !input.ip) return 'unknown';
+        for (const entry of provider.entries) {
+          if (--context.remaining < 0 || entry.value.length > 4096) return 'unknown';
+          if (provider.behavior === 'domain' ? domainEntry(entry.value, host!) : cidrContains(entry.value, input.ip!)) return 'yes';
+        }
+        return 'no';
+      }
+      if (provider.behavior === 'classical') {
+        let unknown = false;
+        for (const entry of provider.entries) {
+          if (--context.remaining < 0) return 'unknown';
+          const [type, payload, ...options] = splitTopLevel(entry.value);
+          if (!type || !payload || ['RULE-SET', 'MATCH', 'SUB-RULE'].includes(type) || options.some(option => option !== 'no-resolve')) { unknown = true; continue; }
+          const match = matchesRule({ type, payload }, input, snapshot, context);
+          if (match === 'yes') return 'yes';
+          if (match === 'unknown') unknown = true;
+          if (context.remaining <= 0) return 'unknown';
+        }
+        return unknown ? 'unknown' : 'no';
+      }
       return 'unknown';
     }
     default:
@@ -159,11 +198,12 @@ export function simulateRouting(snapshot: Snapshot, input: MatchInput) {
     snapshot.rules
       .filter((r) => r.enabled && r.options.includes('pre-matching'))
       .map((r) => ({ id: r.id, priority: r.priority, type: 'pre-matching' }));
+  const context = { depth: 0, remaining: 100_000 };
   for (const rule of [...snapshot.rules]
     .filter((r) => r.enabled)
     .sort((a, b) => a.priority - b.priority)) {
     if (rule.options.includes('pre-matching')) continue;
-    const match = matchesRule(rule, input, snapshot);
+    const match = matchesRule(rule, input, snapshot, context);
     if (match === 'unknown')
       uncertainRules.push({
         id: rule.id,
@@ -199,6 +239,11 @@ function terms(
   const provider = snapshot.ruleProviders.find((p) => p.name === rule.payload);
   if (!provider || provider.providerType !== 'inline') return [];
   return provider.entries.slice(0, 2000).map((e) => {
+    if (provider.behavior === 'classical') {
+      const [type, value, ...options] = splitTopLevel(e.value);
+      return ['DOMAIN', 'DOMAIN-SUFFIX', 'IP-CIDR', 'IP-CIDR6'].includes(type) && value && options.every(option => option === 'no-resolve')
+        ? { type, value: value.toLowerCase() } : { type: 'UNKNOWN', value: '' };
+    }
     const suffix = e.value.startsWith('+.');
     return {
       type:

@@ -63,7 +63,7 @@ export const proxySchema = z.object({
 export const proxyProviderSchema = z.object({
   name,
   config: jsonObject.default({}),
-  sourceType: z.enum(['remote', 'local']).optional(),
+  sourceType: z.enum(['remote', 'local', 'inline']).optional(),
   sourceUrl: z.string().max(16384).optional(),
   sourceHeaders: z
     .record(z.string(), z.union([z.string(), z.array(z.string())]))

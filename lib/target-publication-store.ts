@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { createHash } from 'node:crypto';
 import type { ConfigTarget } from './config-targets';
 import { decryptJson } from './crypto';
 import type { ExportResult } from './exporter';
@@ -7,6 +8,10 @@ export interface ArtifactRecord {
   revision: number;
   artifact_ciphertext: string;
   created_at: string;
+}
+
+export function candidateFingerprint(candidate: ArtifactRecord) {
+  return createHash('sha256').update(candidate.artifact_ciphertext).digest('hex');
 }
 
 export interface Publication {

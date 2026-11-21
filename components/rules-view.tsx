@@ -53,6 +53,8 @@ export function RulesView({
   onChanged: (message: string) => Promise<void>;
 }) {
   const [query, setQuery] = useState('');
+  const [page, setPage] = useState(0);
+  const pageSize = 100;
   const [busy, setBusy] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<number[]>([]);
@@ -105,9 +107,14 @@ export function RulesView({
     const available = new Set(snapshot.rules.filter((rule) => rule.type !== 'MATCH').map((rule) => rule.id));
     setSelected((current) => current.filter((id) => available.has(id)));
   }, [snapshot.rules]);
-  const selectedIds = snapshot.rules.filter((rule) => selected.includes(rule.id) && rule.type !== 'MATCH').map((rule) => rule.id);
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
+  const positions = useMemo(() => new Map(snapshot.rules.map((rule, index) => [rule.id, index])), [snapshot.rules]);
+  const selectedIds = snapshot.rules.filter((rule) => selectedSet.has(rule.id) && rule.type !== 'MATCH').map((rule) => rule.id);
   const visibleIds = rules.filter((rule) => rule.type !== 'MATCH').map((rule) => rule.id);
-  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.includes(id));
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedSet.has(id));
+  const pageCount = Math.max(1, Math.ceil(rules.length / pageSize));
+  const currentPage = Math.min(page, pageCount - 1);
+  const pagedRules = rules.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
   const policyOptions = Array.from(new Set([...BUILTIN_POLICIES, ...snapshot.proxies.map((item) => item.name), ...snapshot.proxyGroups.map((item) => item.name)]));
 
   async function batch(action: { policy?: string; enabled?: boolean; move?: 'top' | 'bottom' | 'up' | 'down' }) {
@@ -200,7 +207,7 @@ export function RulesView({
       </div>
 
       <RoutingSimulator
-        key={snapshot.profile.revision}
+        key={`${profileId}:${snapshot.profile.revision}`}
         profileId={profileId}
         token={token}
       />
@@ -209,7 +216,7 @@ export function RulesView({
           <Search size={15} />
           <input
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => { setQuery(event.target.value); setPage(0); }}
             placeholder="搜索域名、策略、类型、备注"
           />
         </label>
@@ -234,9 +241,9 @@ export function RulesView({
         </div> : null}
       </div>
       <div className="rules-stack">
-        {rules.map((rule) => {
+        {pagedRules.map((rule) => {
           const locked = rule.type === 'MATCH';
-          const index = snapshot.rules.findIndex((item) => item.id === rule.id);
+          const index = positions.get(rule.id)!;
           const issues = issuesByRule.get(rule.id) || [];
           const hasError = issues.some((issue) => issue.severity === 'error');
           return (
@@ -247,7 +254,7 @@ export function RulesView({
               key={rule.id}
             >
               <div className="priority-block">
-                {!locked ? <label className="rule-select-target"><input type="checkbox" aria-label={`选择规则 ${rule.priority}`} checked={selected.includes(rule.id)} disabled={busy !== null} onChange={(event) => setSelected((current) => event.target.checked ? [...current, rule.id] : current.filter((id) => id !== rule.id))} /></label> : null}
+                {!locked ? <label className="rule-select-target"><input type="checkbox" aria-label={`选择规则 ${rule.priority}`} checked={selectedSet.has(rule.id)} disabled={busy !== null} onChange={(event) => setSelected((current) => event.target.checked ? [...current, rule.id] : current.filter((id) => id !== rule.id))} /></label> : null}
                 <strong>{String(rule.priority).padStart(2, '0')}</strong>
                 <span>顺序</span>
               </div>
@@ -339,6 +346,11 @@ export function RulesView({
           );
         })}
       </div>
+      <nav className="list-toolbar" aria-label="规则分页">
+        <button className="button secondary small" disabled={busy !== null || currentPage === 0} onClick={() => setPage(currentPage - 1)}>上一页</button>
+        <span>第 {currentPage + 1} / {pageCount} 页 · 每页 {pageSize} 条；批量选择包含全部筛选结果</span>
+        <button className="button secondary small" disabled={busy !== null || currentPage + 1 >= pageCount} onClick={() => setPage(currentPage + 1)}>下一页</button>
+      </nav>
       {error ? <pre className="inline-error">{error}</pre> : null}
       <Modal
         open={pendingRemove !== null}

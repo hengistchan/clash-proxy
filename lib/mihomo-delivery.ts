@@ -8,15 +8,15 @@ import { managedSourceHealth } from './managed-source-health';
 import { mihomoCompiledRevision, mihomoIssues, refreshMihomoConfig } from './mihomo-compilation';
 import { getCompilationSnapshot } from './repository';
 import { managedSources, publicationStatus, servedRecord } from './target-publication-store';
+import type { Snapshot } from './types';
 
-function prepareMihomo(profileId: number) {
-  const snapshot = getCompilationSnapshot(profileId);
+function prepareMihomo(profileId: number, snapshot = getCompilationSnapshot(profileId)) {
   refreshMihomoConfig(getDb(), snapshot);
   return snapshot.profile.revision;
 }
 
-export function getMihomoStatus(profileId: number): ConfigDeliveryStatus {
-  const currentRevision = prepareMihomo(profileId);
+export function getMihomoStatus(profileId: number, sharedSnapshot?: Snapshot): ConfigDeliveryStatus {
+  const currentRevision = prepareMihomo(profileId, sharedSnapshot);
   const db = getDb();
   const served = servedRecord(db, profileId, 'mihomo');
   const sources = managedSources(served);

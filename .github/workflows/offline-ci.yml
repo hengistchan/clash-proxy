@@ -34,7 +34,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install pinned Mihomo validation core
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl --fail --location --retry 3 --connect-timeout 15 --max-time 120 \
+            https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-linux-amd64-compatible-v1.19.33.gz \
+            --output mihomo.gz
+          echo '386508bfb1c72c43b6a0eda73708ecdce82546581b0ebcb16366c53757c622b6  mihomo.gz' | sha256sum --check
+          gzip -d mihomo.gz
+          chmod 755 mihomo
+
       - name: Typecheck and run service tests
+        env:
+          MIHOMO_TEST_BIN: ${{ runner.temp }}/mihomo
         run: npm run check
 
       - name: Build production bundle

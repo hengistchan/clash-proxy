@@ -69,7 +69,7 @@ function mihomoCondition(type: string, payload: string, providers: Set<string>, 
   return [type, `(${conditions.join(',')})`];
 }
 
-export function compileMihomo(snapshot: Snapshot): { artifact: ExportResult | null; issues: ValidationIssue[] } {
+export function compileMihomo(snapshot: Snapshot, checked?: ExportResult['validation']): { artifact: ExportResult | null; issues: ValidationIssue[] } {
   const enabled = snapshot.rules.filter(rule => rule.enabled);
   const omitted = snapshot.advancedSections.filter(section => STASH_SECTIONS.includes(section.key));
   const compatible = {
@@ -77,7 +77,7 @@ export function compileMihomo(snapshot: Snapshot): { artifact: ExportResult | nu
     rules: enabled,
     advancedSections: snapshot.advancedSections.filter(section => !STASH_SECTIONS.includes(section.key))
   };
-  const validation = validateSnapshot({ ...snapshot, rules: enabled });
+  const validation = checked && enabled.length === snapshot.rules.length ? checked : validateSnapshot({ ...snapshot, rules: enabled });
   const issues = [...validation.issues.filter(issue => issue.severity === 'error'), ...yamlTargetIssues(compatible, 'mihomo')];
   const error = (code: string, message: string, resource: string, resourceId?: number) => {
     issues.push({ severity: 'error', code: `mihomo.${code}`, message, resource, resourceId });
@@ -139,7 +139,7 @@ export function compileMihomo(snapshot: Snapshot): { artifact: ExportResult | nu
   const proxies = config['proxy-providers'] as Record<string, JsonObject> | undefined;
   for (const provider of snapshot.proxyProviders) {
     const source = proxies![provider.name];
-    configureProvider(source, provider.sourceType === 'remote' ? 'http' : 'file', 'proxy-provider', provider.id);
+    configureProvider(source, provider.sourceType === 'inline' ? 'inline' : provider.sourceType === 'remote' ? 'http' : 'file', 'proxy-provider', provider.id);
     if (!convertProviderBenchmark(source)) {
       error('provider-benchmark', '代理源的测速设置无法转换为 Mihomo。请检查 HTTP(S) 测速地址、超时秒数和 health-check 格式。', 'proxy-provider', provider.id);
     }

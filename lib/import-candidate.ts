@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3';
 import type { ImportedDocument } from './yaml-import';
 import type { Profile, Snapshot } from './types';
 import { HttpError } from './http';
+import { proxySourceType } from './client-capabilities';
 import { managedSourceReference, verifySourceCapability } from './managed-source-access';
 import { managedSources, servedRecord } from './target-publication-store';
 
@@ -77,11 +78,11 @@ export function importedSnapshot(profile: Profile, document: PreparedDocument): 
     },
     proxies: document.proxies.map((item, index) => ({ ...item, ...order(index) })),
     proxyProviders: document.proxyProviders.map(({ retainedId, ...item }, index) => {
-      const sourceType = item.requiresUrl || item.config.url ? 'remote' : 'local';
+      const sourceType = proxySourceType(item.config, item.requiresUrl);
       return {
         ...item, ...order(index), id: retainedId ?? -(index + 1), sourceType,
         requiresUrl: sourceType === 'remote' && !item.config.url,
-        sourceConfigured: Boolean(sourceType === 'remote' ? item.config.url : item.config.path),
+        sourceConfigured: sourceType === 'inline' ? Boolean(Array.isArray(item.config.payload) && item.config.payload.length) : Boolean(sourceType === 'remote' ? item.config.url : item.config.path),
         headersConfigured: Boolean(item.config.headers && Object.keys(item.config.headers).length)
       };
     }),

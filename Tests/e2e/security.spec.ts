@@ -182,3 +182,60 @@ test('phone layout keeps primary controls usable and avoids horizontal page over
     expect(bounds?.width).toBeGreaterThanOrEqual(44);
   }
 });
+
+test('gateway login interruptions stop source checks without forwarding credentials or replaying writes', async ({ page, request }) => {
+  const initial = await create(request, 'site-access-expired');
+  const profileId = initial.profile.id;
+  const root = `/api/profiles/${profileId}`;
+  const created = await request.post(root + '/proxy-providers', {
+    headers: { ...headers, 'If-Match': `"${initial.profile.revision}"` },
+    data: {
+      name: 'gateway-check-fixture', sourceUrl: 'http://127.0.0.1:3117/api/meta',
+      config: { type: 'http' }, rewriteRules: [{ matchName: '', operation: 'fill', field: 'udp', value: true }]
+    }
+  });
+  expect(created.status()).toBe(201);
+  const configured = await snapshot(request, profileId);
+  const sourceId = configured.proxyProviders[0].id;
+  const check = root + `/delivery/stash/check?sourceId=${sourceId}`;
+  const gateway = 'https://access.example.test/cdn-cgi/access/login/fixture';
+  let gatewayRequests = 0;
+  let checkRequests = 0;
+  await page.route(gateway, async route => { gatewayRequests++; await route.abort(); });
+  await page.route(url => url.pathname + url.search === check, async route => {
+    expect(route.request().method()).toBe('POST');
+    expect(route.request().headers()['x-requested-with']).toBe('XMLHttpRequest');
+    checkRequests++;
+    if (checkRequests === 1) {
+      await route.fulfill({ status: 302, headers: { Location: gateway }, body: '' });
+    } else if (checkRequests === 2) {
+      await route.fulfill({ status: 401, headers: { 'WWW-Authenticate': 'Cloudflare-Access' }, body: 'Login required' });
+    } else {
+      await route.continue();
+    }
+  });
+
+  await login(page, configured);
+  await navigate(page, '下载配置');
+  const source = page.getByLabel('托管代理源');
+  const button = source.getByRole('button', { name: '检查来源', exact: true });
+  const dialog = page.getByRole('dialog', { name: '需要重新登录站点' });
+  for (const expected of [1, 2]) {
+    await button.click();
+    await expect(dialog).toBeVisible();
+    const loginLink = dialog.getByRole('link', { name: '打开站点重新登录' });
+    await expect(loginLink).toHaveAttribute('href', '/');
+    await expect(loginLink).toHaveAttribute('target', '_blank');
+    await expect(page.getByRole('heading', { name: '进入配置控制台' })).toHaveCount(0);
+    await dialog.getByRole('button', { name: '返回工作台' }).click();
+    await expect(dialog).toBeHidden();
+    await expect(source.getByText('待检查', { exact: true })).toBeVisible();
+    expect(checkRequests).toBe(expected);
+    expect(gatewayRequests).toBe(0);
+  }
+  await button.click();
+  await expect(source.getByText('检查失败，无可用缓存', { exact: true })).toBeVisible();
+  await expect(dialog).toBeHidden();
+  expect(checkRequests).toBe(3);
+  expect((await snapshot(request, profileId)).profile.revision).toBe(configured.profile.revision);
+});

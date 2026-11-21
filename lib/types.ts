@@ -42,7 +42,7 @@ export interface ProxyProvider {
   name: string;
   config: JsonObject;
   requiresUrl: boolean;
-  sourceType: 'remote' | 'local';
+  sourceType: 'remote' | 'local' | 'inline';
   sourceConfigured: boolean;
   headersConfigured: boolean;
   sortOrder: number;

@@ -174,6 +174,14 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
   }
 
   for (const provider of snapshot.proxyProviders) {
+    if (provider.sourceType === 'inline') {
+      const payload = provider.config.payload;
+      if (!Array.isArray(payload) || !payload.length || payload.length > 2000 || !payload.every(node => isJsonObject(node) && typeof node.name === 'string' && node.name.trim() && typeof node.type === 'string' && node.type.trim())) {
+        issue(issues, 'error', 'proxy-provider.inline-invalid', '内联代理源需要 1–2000 个含名称和协议的节点。', 'proxy-provider', provider.id);
+      }
+      if (['url', 'headers', 'header', 'path', 'interval'].some(key => provider.config[key] !== undefined)) issue(issues, 'error', 'proxy-provider.inline-conflict', '内联代理源不能同时配置远程或文件来源。', 'proxy-provider', provider.id);
+      continue;
+    }
     const hasUrl =
       (provider.sourceType === 'remote' && provider.sourceConfigured) ||
       (typeof provider.config.url === 'string' &&
@@ -397,19 +405,6 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
         'error',
         'rule-provider.behavior',
         `Rule provider “${provider.name}” has unsupported behavior ${provider.behavior}`,
-        'rule-provider',
-        provider.id
-      );
-    }
-    if (
-      provider.providerType === 'inline' &&
-      !['domain', 'ipcidr'].includes(provider.behavior)
-    ) {
-      issue(
-        issues,
-        'error',
-        'rule-provider.inline-behavior',
-        `Inline rule provider “${provider.name}” must use domain or ipcidr behavior`,
         'rule-provider',
         provider.id
       );

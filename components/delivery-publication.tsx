@@ -1,10 +1,11 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { ConfigDeliveryStatus, ConfigTarget } from '@/lib/config-targets';
 import type { PublicationAction } from '@/lib/target-publication';
 import { CONFIG_TARGETS } from '@/lib/config-targets';
 import { apiRequest } from './api-client';
+import { PublicationCandidatePreview } from './candidate-preview';
 import type { DeliveryWorkspace } from './use-delivery-workspace';
 import { Modal, StatusBadge } from './ui';
 import { useUnsavedChanges } from './unsaved-changes';
@@ -27,32 +28,41 @@ const dateLabel = (value: number | string) => new Date(value).toLocaleString('zh
 export function DeliveryPublication({ profileId, revision, token, target, status, delivery, disabled }: Controls & {
   target: ConfigTarget; revision: number;
 }) {
-  const [pending, setPending] = useState<{ action: PublicationAction; publicationId?: number; version?: number }>();
+  const [pending, setPending] = useState<{ action: PublicationAction; publicationId?: number; version?: number; fingerprint?: string }>();
   const [working, setWorking] = useState(false);
   const [error, setError] = useState('');
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [review, setReview] = useState<{ key: string; fingerprint: string }>();
   const lock = useRef(false);
   const mode = status.deliveryMode ?? 'auto';
   const client = CONFIG_TARGETS[target].label;
   const root = `/api/profiles/${profileId}/delivery/${target}`;
+  const previewKey = `${profileId}:${target}:${revision}:${status.publicationId}:${delivery.previewEpoch}`;
+  const reviewed = review?.key === previewKey ? review.fingerprint : undefined;
+  const onReviewed = useCallback((fingerprint: string | undefined) => {
+    setReview(fingerprint ? { key: previewKey, fingerprint } : undefined);
+  }, [previewKey]);
   useUnsavedChanges(false, working);
 
-  async function run(check: boolean) {
+  async function run(check: boolean, candidate = false) {
     if (lock.current || (!check && !pending)) return;
     lock.current = true;
     setWorking(true);
     setError('');
     try {
-      const response = await apiRequest<TargetResponse>(`${root}/${check ? 'check' : 'publication'}`, {
+      const response = await apiRequest<TargetResponse>(`${root}/${check ? `check${candidate ? '?scope=candidate' : ''}` : 'publication'}`, {
         method: 'POST', token,
         ...(check ? {} : {
           expectedRevision: revision,
           body: JSON.stringify({
             action: pending!.action, publicationId: pending!.publicationId,
+            expectedCandidateFingerprint: pending!.fingerprint,
             expectedMode: mode, expectedPublicationId: status.publicationId ?? null
           })
         })
       });
       delivery.applyTargets(response.targets);
+      if (!check) setPreviewOpen(false);
       setPending(undefined);
     } catch (caught) {
       setPending(undefined);
@@ -63,9 +73,11 @@ export function DeliveryPublication({ profileId, revision, token, target, status
     }
   }
 
-  const canPublish = status.readyRevision === revision && status.remoteState !== 'pending' &&
+  const canPreview = status.readyRevision === revision && status.remoteState !== 'pending' &&
     !status.issues?.some(issue => issue.severity === 'error') &&
     (status.compiledRevision !== revision || status.remoteState === 'ready');
+  const sourceCheck = status.candidateSources;
+  const canPublish = canPreview && (!sourceCheck || ['none', 'ready'].includes(sourceCheck.state));
   return <section className="delivery-subsection" aria-label={`${client} 发布设置`}>
     <div className="section-rule"><span>发布方式</span></div>
     <p className="delivery-note">当前编辑版 {revision} · 设备{status.compiledRevision == null ? '暂无可下载版本' : `可下载版 ${status.compiledRevision}`}</p>
@@ -81,10 +93,22 @@ export function DeliveryPublication({ profileId, revision, token, target, status
     </div> : null}
     <div className="delivery-actions">
       {mode === 'manual' ? <>
-        <button className="button secondary small" disabled={working || disabled || !canPublish} onClick={() => setPending({ action: 'publish', version: revision })}>{names.publish}</button>
+        <button type="button" className="button secondary small" disabled={working || disabled || !canPreview}
+          aria-expanded={previewOpen && canPreview} aria-controls="publication-candidate-preview"
+          onClick={() => { setReview(undefined); setPreviewOpen(open => !open); }}>{previewOpen && canPreview ? '关闭待发布版预览' : '预览待发布版'}</button>
+        <button className="button secondary small" disabled={working || disabled || !canPublish || (previewOpen && !reviewed)}
+          onClick={() => setPending({ action: 'publish', version: revision, fingerprint: previewOpen ? reviewed : undefined })}>{names.publish}</button>
         <button className="button secondary small" disabled={working || disabled} onClick={() => setPending({ action: 'auto' })}>{names.auto}</button>
       </> : <button className="button secondary small" disabled={working || disabled} onClick={() => setPending({ action: 'manual' })}>{names.manual}</button>}
     </div>
+    {mode === 'manual' && sourceCheck && sourceCheck.state !== 'none' ? <div className="delivery-subsection" aria-label="候选版来源检查">
+      <p className="delivery-note">待发布版托管来源：{({ pending: '待检查', ready: '检查成功', failed: '检查失败', stale: '检查已过期' } as const)[sourceCheck.state]}
+        {sourceCheck.checkedAt ? ` · ${dateLabel(sourceCheck.checkedAt)}` : ''}。结果有效期为 10 分钟，编辑后需要重新检查。</p>
+      <button type="button" className="button secondary small" disabled={working || disabled || status.readyRevision !== revision} onClick={() => void run(true, true)}>{working ? '检查中…' : '检查待发布版来源'}</button>
+    </div> : null}
+    {previewOpen && mode === 'manual' && canPreview ? <PublicationCandidatePreview
+      key={previewKey} endpoint={`${root}/candidate`} token={token}
+      language={target === 'shadowrocket' ? 'ini' : 'yaml'} onReviewed={onReviewed} /> : null}
     {mode === 'manual' && status.publications?.some(row => row.id !== status.publicationId) ? <details className="export-contract">
       <summary>查看已发布版本</summary>
       <ul className="delivery-release-list">

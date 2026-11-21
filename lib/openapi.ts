@@ -42,6 +42,8 @@ const shadowrocketFile = {
   content: { 'text/plain': { schema: { type: 'string' } } }
 };
 const paths: Record<string, object> = {
+  '/api/diagnostics': { get: operation('读取当前进程的脱敏编译与来源下载统计（需要管理员认证）') },
+  '/api/profiles/{profileId}/simulate/sources': { parameters: [id], post: operation('主动检查路由引用的远程 YAML／文本规则集；保存加密快照供 15 分钟内的路由解释使用') },
   '/api/profiles': {
     get: operation('列出配置'),
     post: {
@@ -125,7 +127,7 @@ const paths: Record<string, object> = {
   '/api/profiles/{profileId}/simulate': {
     parameters: [id],
     post: operation(
-      '静态解释首条可确定的候选匹配；远程与脚本等标为不确定',
+      '解释首条可确定匹配；可选使用近期检查过的远程规则快照，脚本等仍标为不确定',
       ref('MatchInput')
     )
   },
@@ -385,6 +387,10 @@ paths['/api/profiles/{profileId}/delivery/{target}/preview'] = {
     }
   }
 };
+paths['/api/profiles/{profileId}/delivery/{target}/candidate'] = {
+  parameters: [id, target],
+  get: operation('只读预览可手动发布的当前编辑版，返回候选内容、设备版本号及脱敏编辑差异')
+};
 paths['/api/profiles/{profileId}/delivery/{target}/publication'] = {
   parameters: [id, target],
   post: operation('独立启用手动发布、恢复自动、发布当前版或回退设备版', {
@@ -393,12 +399,13 @@ paths['/api/profiles/{profileId}/delivery/{target}/publication'] = {
       action: { enum: ['manual', 'auto', 'publish', 'rollback'] },
       expectedMode: { enum: ['auto', 'manual'] },
       expectedPublicationId: { type: ['integer', 'null'], minimum: 1 },
-      publicationId: { type: 'integer', minimum: 1, description: 'rollback 时指定的发布记录 ID' }
+      publicationId: { type: 'integer', minimum: 1, description: 'rollback 时指定的发布记录 ID' },
+      expectedCandidateFingerprint: { type: 'string', pattern: '^[0-9a-f]{64}$', description: 'publish 时可传回候选预览的 fingerprint，以确认发布的是刚预览的候选' }
     }
   })
 };
 paths['/api/profiles/{profileId}/delivery/{target}/check'] = {
-  parameters: [id, target, { name: 'sourceId', in: 'query', schema: { type: 'integer', minimum: 1 }, description: '可选的 Stash 或 Mihomo 托管来源 ID' }],
+  parameters: [id, target, { name: 'scope', in: 'query', schema: { enum: ['device', 'candidate'] }, description: 'candidate 检查 Stash / Mihomo 待发布版托管来源；结果有效 10 分钟且绑定产物指纹' }, { name: 'sourceId', in: 'query', schema: { type: 'integer', minimum: 1 }, description: '可选的 Stash 或 Mihomo 托管来源 ID' }],
   post: operation('检查 Shadowrocket 候选来源或 Stash / Mihomo 设备版托管来源；手动发布指针不变')
 };
 paths['/api/profiles/{profileId}/delivery/{target}/sources/{sourceId}'] = {
@@ -407,7 +414,7 @@ paths['/api/profiles/{profileId}/delivery/{target}/sources/{sourceId}'] = {
   delete: operation('撤销该托管代理源的链接，直到管理员重新启用')
 };
 for (const [path, value] of Object.entries(paths)) {
-  if (!path.startsWith('/api/profiles/{profileId}') || ['/simulate', '/download-link', '/import-preview', '/check', '/sources/{sourceId}'].some(suffix => path.endsWith(suffix))) continue;
+  if (!path.startsWith('/api/profiles/{profileId}') || ['/simulate', '/simulate/sources', '/download-link', '/import-preview', '/check', '/sources/{sourceId}'].some(suffix => path.endsWith(suffix))) continue;
   for (const [method, operation] of Object.entries(value as Record<string, unknown>)) {
     if (!['put', 'post', 'delete', 'patch'].includes(method) || !operation || typeof operation !== 'object') continue;
     Object.assign(operation, { parameters: [{ name: 'If-Match', in: 'header', required: true, description: '编辑基线版本的强 ETag，从 snapshot 响应读取；冲突返回409且不写入', schema: { type: 'string', example: '"12"' } }] });
@@ -437,6 +444,7 @@ export const openapi = {
           readyRevision: { type: ['integer', 'null'], description: '最近成功生成的候选修订' },
           deliveryMode: { enum: ['auto', 'manual'] },
           publicationId: { type: ['integer', 'null'] },
+          candidateSources: { type: 'object', description: '候选版托管来源检查状态与检查时间；发布要求 none 或 ready', properties: { state: { enum: ['none', 'pending', 'ready', 'failed', 'stale'] }, checkedAt: { type: ['integer', 'null'] }, sources: { type: 'array', items: object } } },
           publications: { type: 'array', items: { type: 'object', properties: {
             id: { type: 'integer' }, revision: { type: 'integer' }, publishedAt: { type: 'string', format: 'date-time' }
           } } },
@@ -536,7 +544,7 @@ export const openapi = {
         required: ['name'],
         properties: {
           name,
-          sourceType: { enum: ['remote', 'local'] },
+          sourceType: { enum: ['remote', 'local', 'inline'] },
           sourceUrl: {
             type: 'string',
             format: 'uri',
@@ -623,6 +631,7 @@ export const openapi = {
       MatchInput: {
         type: 'object',
         properties: {
+          useCheckedSources: { type: 'boolean', default: false },
           host: { type: 'string' },
           ip: { type: 'string' },
           network: { enum: ['tcp', 'udp'] },

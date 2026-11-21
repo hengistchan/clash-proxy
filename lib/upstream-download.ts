@@ -3,6 +3,7 @@ import { request as httpRequest, validateHeaderName, validateHeaderValue } from 
 import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
 import { validateSubscriptionUrl } from './provider-source';
+import { recordOperation } from './telemetry';
 import { isJsonObject, type JsonObject } from './types';
 
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -145,7 +146,7 @@ async function get(target: URL, headers: Record<string, string | string[]>, sign
 
 export type SourceDownload = (config: JsonObject, signal: AbortSignal) => Promise<string>;
 
-export const downloadSource: SourceDownload = async (config, signal) => {
+const fetchSource: SourceDownload = async (config, signal) => {
   if (typeof config.url !== 'string') throw new Error('Missing source URL');
   let target = new URL(validateSubscriptionUrl(config.url));
   const custom = sourceHeaders(config.headers);
@@ -166,4 +167,11 @@ export const downloadSource: SourceDownload = async (config, signal) => {
     target = redirected;
   }
   throw new Error('Too many upstream redirects');
+};
+
+export const downloadSource: SourceDownload = async (config, signal) => {
+  const started = performance.now();
+  let success = false;
+  try { const text = await fetchSource(config, signal); success = true; return text; }
+  finally { recordOperation('source.download', performance.now() - started, success); }
 };

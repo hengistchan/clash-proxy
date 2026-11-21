@@ -1,4 +1,5 @@
 import { decryptJson, encryptJson } from './crypto';
+import { canonicalSourceConfig } from './source-credentials';
 import { isJsonObject, type ClientOptions, type JsonObject, type JsonValue, type ProxyRewriteRule, type Snapshot } from './types';
 
 export type StoredResourceKind = 'settings' | 'node' | 'nodeSource' | 'policyGroup' | 'ruleSource' | 'extension';
@@ -84,11 +85,12 @@ function projectResource(kind: StoredResourceKind, stored: JsonValue): JsonValue
 }
 
 export function encryptResource(kind: StoredResourceKind, value: JsonValue, options?: ClientOptions) {
+  if ((kind === 'nodeSource' || kind === 'ruleSource') && isJsonObject(value)) value = canonicalSourceConfig(value);
   return PREFIX + encryptJson(storeResource(kind, value, options));
 }
 
 function storedNodeSource(value: JsonObject, rules: ProxyRewriteRule[] | undefined): JsonObject {
-  const stored = storeResource('nodeSource', value) as JsonObject;
+  const stored = storeResource('nodeSource', canonicalSourceConfig(value)) as JsonObject;
   if (rules?.length && isJsonObject(stored.common)) stored.common.nodeTransforms = rules.map((rule) => ({ ...rule }));
   return stored;
 }
@@ -127,7 +129,7 @@ export function decryptResource(kind: StoredResourceKind, ciphertext: unknown): 
 export function decryptResourceObject(kind: Exclude<StoredResourceKind, 'extension'>, ciphertext: unknown): JsonObject {
   const value = decryptResource(kind, ciphertext);
   if (!isJsonObject(value)) throw new Error('Expected a configuration mapping');
-  return value;
+  return kind === 'nodeSource' || kind === 'ruleSource' ? canonicalSourceConfig(value, false) : value;
 }
 
 // Routing identifiers in storage describe semantics, not the syntax emitted by

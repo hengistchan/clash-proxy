@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { HttpError } from './http';
 import { validateSubscriptionUrl } from './provider-source';
+import { SHADOWROCKET_NODE_TYPES } from './client-capabilities';
+import { parseExtendedNode } from './shadowrocket-node-codec';
 import { PROXY_GROUP_TYPES, RULE_TYPES, RULE_OPTIONS, type JsonObject, type ProxyGroupType } from './types';
 import type { ImportedDocument } from './yaml-import';
 
@@ -116,11 +118,16 @@ export function parseShadowrocketDocument(text: string): ImportedDocument {
     const { name, value } = assignment(line);
     const [type, server, rawPort, ...parts] = tokens(value);
     const port = Number(rawPort);
-    if (!['ss', 'socks5', 'http'].includes(type) || !server || !Number.isInteger(port) || port < 1 || port > 65535) {
-      invalid(line, '暂只支持 SS、SOCKS5 和 HTTP 节点，且地址和端口必须有效。');
+    if (!SHADOWROCKET_NODE_TYPES.some(value => value === type) || !server || !Number.isInteger(port) || port < 1 || port > 65535) {
+      invalid(line, '支持 SS、SOCKS5、HTTP、Trojan 和 VMess 节点，且地址和端口必须有效。');
     }
     const config: JsonObject = { server, port };
     const { options, members } = optionPairs(parts, line);
+    if (type === 'trojan' || type === 'vmess') {
+      const extended = parseExtendedNode(type, options, members);
+      if (!extended) invalid(line, 'Trojan／VMess 参数无法无损转换。支持 TCP、TLS 和基础 WebSocket；请检查认证与传输参数。');
+      return { name, type, config: { ...config, ...extended } };
+    }
     if (members.length) {
       if (type === 'ss' || members.length !== 2 || options.has('username') || options.has('password')) invalid(line, '无法识别节点认证参数。');
       config.username = members[0];

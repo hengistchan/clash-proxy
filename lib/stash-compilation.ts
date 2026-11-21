@@ -14,12 +14,13 @@ export function stashCompiledRevision(db: Database.Database, profileId: number) 
 
 export function refreshStashConfig(
   db: Database.Database,
-  snapshot: Snapshot
+  snapshot: Snapshot,
+  validation?: ExportResult['validation']
 ): void {
   const current = stashCandidate(db, snapshot.profile.id);
   if (current && (current.revision > snapshot.profile.revision || (current.revision === snapshot.profile.revision && decryptJson<ExportResult>(current.artifact_ciphertext).compilerVersion === CONFIG_COMPILER_VERSION))) return;
   try {
-    const artifact = exportProfile(snapshot);
+    const artifact = exportProfile(snapshot, validation);
     db.transaction(() => {
       // A status read may have compiled outside the write lock; do not publish a stale snapshot.
       if (db.prepare('SELECT revision FROM profiles WHERE id = ?').pluck().get(snapshot.profile.id) !== snapshot.profile.revision) return;

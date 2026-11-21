@@ -3,9 +3,9 @@ import { encryptJson } from './crypto';
 import { reconcileServedSources } from './managed-source-health';
 import { compileMihomo } from './mihomo-export';
 import { deliveryMode, managedSources, mihomoCandidate } from './target-publication-store';
-import type { JsonValue, Snapshot, ValidationIssue } from './types';
+import type { JsonValue, Snapshot, ValidationIssue, ValidationResult } from './types';
 
-const COMPILER_VERSION = 4;
+const COMPILER_VERSION = 5;
 
 export function mihomoCompiledRevision(db: Database.Database, profileId: number) {
   return mihomoCandidate(db, profileId)?.revision ?? null;
@@ -26,10 +26,10 @@ export function mihomoIssues(db: Database.Database, profileId: number): Validati
   return check ? JSON.parse(check.issues_json) : [];
 }
 
-export function refreshMihomoConfig(db: Database.Database, snapshot: Snapshot) {
+export function refreshMihomoConfig(db: Database.Database, snapshot: Snapshot, validation?: ValidationResult) {
   const { id, revision } = snapshot.profile;
   if (upToDate(mihomoCheck(db, id), revision)) return;
-  const { artifact, issues } = compileMihomo(snapshot);
+  const { artifact, issues } = compileMihomo(snapshot, validation);
   db.transaction(() => {
     const currentRevision = db.prepare('SELECT revision FROM profiles WHERE id = ?').pluck().get(id);
     if (currentRevision !== revision || upToDate(mihomoCheck(db, id), revision)) return;

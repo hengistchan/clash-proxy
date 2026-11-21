@@ -31,7 +31,7 @@ COPY --from=builder --chown=10001:10001 /app/.next/standalone ./
 COPY --from=builder --chown=10001:10001 /app/.next/static ./.next/static
 COPY --from=builder --chown=10001:10001 /app/public ./public
 COPY --from=builder --chown=10001:10001 /app/examples ./examples
-COPY --from=builder --chown=10001:10001 /app/Scripts/runtime-security.mjs /app/Scripts/start-container.mjs ./Scripts/
+COPY --from=builder --chown=10001:10001 /app/Scripts/runtime-security.mjs /app/Scripts/start-container.mjs /app/Scripts/manage-backup.mjs ./Scripts/
 
 USER 10001:10001
 EXPOSE 8080

@@ -14,7 +14,8 @@ const input = z.object({
   action: z.enum(['manual', 'auto', 'publish', 'rollback']),
   expectedMode: z.enum(['auto', 'manual']),
   expectedPublicationId: z.number().int().positive().nullable(),
-  publicationId: z.number().int().positive().optional()
+  publicationId: z.number().int().positive().optional(),
+  expectedCandidateFingerprint: z.string().regex(/^[0-9a-f]{64}$/).optional()
 });
 
 export async function POST(request: Request, context: { params: Promise<{ profileId: string; target: string }> }) {

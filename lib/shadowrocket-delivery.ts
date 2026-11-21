@@ -8,7 +8,7 @@ import { getCompilationSnapshot } from './repository';
 import { compileShadowrocket, SHADOWROCKET_COMPILER_VERSION, type ShadowrocketArtifact } from './shadowrocket';
 import { refreshShadowrocketConfig, storeShadowrocketRefresh } from './shadowrocket-compilation';
 import { readRemoteSources } from './shadowrocket-sources';
-import type { ValidationIssue } from './types';
+import type { Snapshot, ValidationIssue } from './types';
 import type { SourceDownload } from './upstream-download';
 
 const REFRESH_MS = 60_000;
@@ -31,8 +31,7 @@ function getRow(profileId: number) {
     .get(profileId) as ArtifactRow | undefined;
 }
 
-function refresh(profileId: number) {
-  const snapshot = getCompilationSnapshot(profileId);
+function refresh(profileId: number, snapshot = getCompilationSnapshot(profileId)) {
   refreshShadowrocketConfig(getDb(), snapshot);
   return { snapshot, row: getRow(profileId) };
 }
@@ -83,8 +82,8 @@ function deliveredArtifact(profileId: number) {
   return record ? { ...decryptJson<ShadowrocketArtifact>(record.artifact_ciphertext), revision: record.revision } : null;
 }
 
-export function getShadowrocketStatus(profileId: number) {
-  const { row, snapshot } = refresh(profileId);
+export function getShadowrocketStatus(profileId: number, sharedSnapshot?: Snapshot) {
+  const { row, snapshot } = refresh(profileId, sharedSnapshot);
   const db = getDb();
   const token = readTargetToken(db, 'shadowrocket', profileId);
   const mode = deliveryMode(db, profileId, 'shadowrocket');

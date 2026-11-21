@@ -2,6 +2,8 @@ import { parseYamlDocument } from './yaml-import';
 import { isShadowrocketDocument, parseShadowrocketDocument } from './shadowrocket-import';
 import { storeResource, type StoredResourceKind } from './config-storage-model';
 import { isJsonObject, type JsonValue } from './types';
+import { MIHOMO_SECTIONS } from './client-capabilities';
+import { parseDocument } from 'yaml';
 
 export function parseConfigDocument(text: string) {
   return isShadowrocketDocument(text) ? parseShadowrocketDocument(text) : parseYamlDocument(text);
@@ -9,6 +11,13 @@ export function parseConfigDocument(text: string) {
 
 export function classifyConfig(text: string, doc = parseConfigDocument(text)) {
   const shadowrocket = isShadowrocketDocument(text);
+  const raw = shadowrocket ? null : parseDocument(text, { logLevel: 'silent' });
+  const mihomoFields = raw ? [
+    ...MIHOMO_SECTIONS.filter(key => raw.hasIn([key])),
+    ...(['respect-rules'].filter(key => raw.hasIn(['dns', key]))),
+    ...(doc.proxyProviders.some(source => source.config.type === 'inline') ? ['内联代理源'] : []),
+    ...(raw.hasIn(['proxy-providers']) && doc.proxyProviders.some(source => raw.hasIn(['proxy-providers', source.name, 'header'])) ? ['来源 header'] : [])
+  ] : [];
   const common = new Set<string>();
   const stash = new Set<string>();
   const native = new Set<string>();
@@ -55,5 +64,5 @@ export function classifyConfig(text: string, doc = parseConfigDocument(text)) {
     const names = options.sections.flatMap((section) => isJsonObject(section) && typeof section.name === 'string' ? [section.name] : []);
     native.add(`专用区块（${names.join('、')}）`);
   }
-  return { format: shadowrocket ? 'shadowrocket' : 'stash', common: [...common], stash: [...stash], shadowrocket: [...native] } as const;
+  return { format: shadowrocket ? 'shadowrocket' : mihomoFields.length ? 'mihomo' : 'stash', common: [...common], stash: [...stash], shadowrocket: [...native], mihomo: mihomoFields } as const;
 }

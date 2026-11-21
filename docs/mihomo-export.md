@@ -13,4 +13,11 @@
 - 配置了 DNS 且未指定 `enable` 时启用 Mihomo DNS。`follow-rule` 转为 `respect-rules`，开启时需要单独设置 `proxy-server-nameserver`。
 - Stash 的 `http`、`cron`、`script`、`script-providers` 区块不会迁移，预览顶部会列出实际省略的区块。依赖脚本的路由、`relay` 策略组和无法映射的规则选项会阻止导出。
 
-服务执行静态检查；不同版本的客户端、节点协议、远程规则集和本地文件仍需在实际环境中验证。可以使用 `mihomo -t -d <工作目录> -f <配置文件>` 检查，首版用 Mihomo v1.19.33 验证。
+CI 使用固定版本 Mihomo v1.19.33 校验实际导出的测试配置，覆盖 DNS、逻辑规则和来源定义。设置 `MIHOMO_TEST_BIN` 为内核的绝对路径后运行 `npm run check` 可在本地复跑。实际节点、上游和客户端运行行为仍需要设备验收。
+
+
+导入原生 Mihomo YAML 时，代理源支持 `type: inline` 和 `payload`，并保留组的 `use` 引用。内联 classical 规则集可交付给 Mihomo／兼容的 Shadowrocket；Stash 仍要求将 classical 改成远程或本地来源。内联代理源不会被当成缺少订阅地址的远程来源；Stash 会提示不兼容并保留先前成功产物。
+
+来源的原生 `header` 会统一成工作台的私有 `headers` 字段，加密保存且不在普通管理 API 中回显；Mihomo 导出时转回 `header`。两种拼写同时存在且值不同会拒绝导入或保存。「清除请求头」覆盖两种拼写，旧数据也采用同一规则。[Mihomo 来源字段规范](https://wiki.metacubex.one/config/proxy-providers/)。
+
+手动发布包含托管代理源的候选版时，需要先检查候选来源。检查结果绑定候选产物、有效 10 分钟，不会改变设备正在使用的来源缓存。

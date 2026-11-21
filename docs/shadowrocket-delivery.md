@@ -6,13 +6,13 @@
 
 规则集可以有独立的 Shadowrocket 地址。例如通用地址提供 Stash YAML，Shadowrocket 地址提供原生文本列表。专用地址加密保存、不会回显；留空保存会保留已有地址，明确清除后才回退到通用地址。
 
-Shadowrocket 导入目前支持基础 SS、SOCKS5、HTTP、常用策略组、可识别的分流规则和原生 RULE-SET / DOMAIN-SET 引用。支持的重写、脚本和 MITM 区块按 Shadowrocket 专用内容保存，只写入对应交付文件。注释和排版不保留；原 `update-url` 由工作台交付链接取代。尚未支持的节点协议、选项和区块会报行号，避免静默丢失。原生规则集由客户端读取；通用规则集仍可在下载时由服务展开。
+Shadowrocket 导入目前支持基础 SS、SOCKS5、HTTP，以及 Trojan、AEAD VMess 的 TCP／TLS／基础 WebSocket 子集和常用策略组、可识别的分流规则和原生 RULE-SET / DOMAIN-SET 引用。支持的重写、脚本和 MITM 区块按 Shadowrocket 专用内容保存，只写入对应交付文件。注释和排版不保留；原 `update-url` 由工作台交付链接取代。尚未支持的节点协议、选项和区块会报行号，避免静默丢失。原生规则集由客户端读取；通用规则集仍可在下载时由服务展开。
 
 Shadowrocket 支持范围：
 
 | 资源 | 首版可转换 |
 | --- | --- |
-| 节点 | 基础 Shadowsocks（常用 AEAD 加密，可带 simple-obfs 的 HTTP/TLS 模式）、HTTP（无 TLS）、SOCKS5（无 TLS）。Shadowrocket .conf 的 Shadowsocks UoT 参数仍待验证。 |
+| 节点 | 基础 Shadowsocks（常用 AEAD 加密，可带 simple-obfs 的 HTTP/TLS 模式）、HTTP（无 TLS）、SOCKS5（无 TLS）。新增 Trojan 和 AEAD VMess（UUID、alterId=0、auto 加密）的 TCP／TLS／基础 WebSocket 导入与导出，保留 SNI、证书校验、UDP 和 TFO；WebSocket 支持 path 与单个 Host 请求头。gRPC、Reality、其他自定义传输和 Shadowsocks UoT 继续拦截，避免丢失行为。 |
 | 策略组 | 手动选择、自动测速、故障转移，以及一致性哈希负载均衡。支持引用其他组或通过 `use` 引用远程 YAML 节点列表。来源与策略组正则均按原节点名筛选，保留成员顺序。测速地址和超时一致时合并为组级设置。按需测速和实际哈希结果可能不同，下载页会提示；暂不自动纳入全部来源。 |
 | 路由 | 域名、后缀、关键词、IPv4/IPv6 CIDR、GeoIP、ASN、单端口和 TCP/UDP，以及 DIRECT / REJECT 和自定义策略。保留规则顺序，把 MATCH 转为 FINAL。明确目标是 iOS/tvOS 时，Stash 本来就不生效的进程规则会带提示省略；跨平台配置继续拦截。 |
 | 规则集 | 展开引用的内联或远程规则集，保留其位置、顺序与策略。远程支持 YAML `payload:` 或文本列表，按 `domain`、`ipcidr`、`classical` 解析。展开后最多 50,000 条规则。 |
@@ -52,3 +52,5 @@ rules:
 实现参考：[ios_rule_script 的 Clash GitHub.yaml](https://github.com/blackmatrix7/ios_rule_script/blob/master/rule/Clash/GitHub/GitHub.yaml)和[同一规则集的 Shadowrocket .list](https://github.com/blackmatrix7/ios_rule_script/blob/master/rule/Shadowrocket/GitHub/GitHub.list)展示了同一规则内容如何按客户端发布；[subconverter 的规则转换器](https://github.com/tindy2013/subconverter/blob/master/src/generator/config/ruleconvert.cpp)展示了按规则类型解析、添加策略及把 MATCH 映射到 FINAL 的方式。
 
 [subconverter-ng 的 Shadowrocket 导出器](https://github.com/Jungley8/subconverter-ng/blob/main/internal/generator/surge.go)同样先展开节点和规则，再为目标客户端输出。它可以跳过不支持的条目并把空组改为 DIRECT；本项目会报告差异，可能改变规则去向时保留旧产物。GEOSITE 应先用核对过版本和条目类型的规则集替换；不能用 GeoIP 或宽泛的域名后缀近似。
+
+新增协议转换已用往返测试验证；没有将其表述为真机运行验收。原生字段映射参考上文链接的 subconverter-ng 实现。

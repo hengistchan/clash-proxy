@@ -19,7 +19,7 @@ export function checkDraft(
   const validation = validateSnapshot(snapshot);
   const stash = [...validation.issues, ...stashTargetIssues(snapshot)];
   const shadow = compileShadowrocket(snapshot, undefined, validation);
-  const mihomo = compileMihomo(snapshot);
+  const mihomo = compileMihomo(snapshot, validation);
   const report = (target: ConfigTarget, issues: ValidationIssue[], pending: boolean): DraftCheck => ({
     state: issues.some(issue => issue.severity === 'error') ? 'blocked' : pending ? 'pending' : 'ready',
     servedRevision: served[target] ?? null,

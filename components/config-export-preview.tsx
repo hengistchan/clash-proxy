@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Download, RefreshCw, Search } from 'lucide-react';
 import type { ValidationIssue } from '@/lib/types';
 import { ValidationIssues } from './validation-issues';
-import { downloadBlob, filenameFromDisposition } from './api-client';
+import { apiFetch, downloadBlob, filenameFromDisposition } from './api-client';
 import type { mountPreviewEditor } from './config-preview-monaco';
 
 interface PreviewFile {
@@ -14,7 +14,7 @@ interface PreviewFile {
   revision: string;
 }
 
-function CodePreview({ file, language, downloadLabel }: { file: PreviewFile; language: 'yaml' | 'ini'; downloadLabel: string }) {
+export function CodePreview({ text, language, download }: { text: string; language: 'yaml' | 'ini'; download?: { blob: Blob; filename: string; label: string } }) {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<ReturnType<typeof mountPreviewEditor>>(null);
   const [enhanced, setEnhanced] = useState(false);
@@ -24,7 +24,7 @@ function CodePreview({ file, language, downloadLabel }: { file: PreviewFile; lan
     let active = true;
     void import('./config-preview-monaco').then(({ mountPreviewEditor }) => {
       if (!active || !host.current) return;
-      editor.current = mountPreviewEditor(host.current, file.text, language);
+      editor.current = mountPreviewEditor(host.current, text, language);
       setEnhanced(true);
     }).catch(() => { /* The read-only text remains available if the editor cannot load. */ });
     return () => {
@@ -32,20 +32,20 @@ function CodePreview({ file, language, downloadLabel }: { file: PreviewFile; lan
       editor.current?.dispose();
       editor.current = null;
     };
-  }, [file.text, language]);
+  }, [text, language]);
 
   return <>
     <div className="delivery-actions">
       {enhanced ? <button type="button" className="button secondary small" onClick={() => editor.current?.find()}>
         <Search size={15} />搜索配置
       </button> : null}
-      <button type="button" className="button secondary small" onClick={() => downloadBlob(file.blob, file.filename)}>
-        <Download size={15} />{downloadLabel}
-      </button>
+      {download ? <button type="button" className="button secondary small" onClick={() => downloadBlob(download.blob, download.filename)}>
+        <Download size={15} />{download.label}
+      </button> : null}
     </div>
     <div className="config-preview-code">
       <div ref={host} className="config-preview-monaco" aria-hidden={!enhanced} />
-      {!enhanced ? <textarea className="config-preview-text" aria-label="导出配置内容（只读）" readOnly value={file.text} /> : null}
+      {!enhanced ? <textarea className="config-preview-text" aria-label="导出配置内容（只读）" readOnly value={text} /> : null}
     </div>
   </>;
 }
@@ -66,10 +66,8 @@ export function ConfigExportPreview({
     const controller = new AbortController();
     async function load() {
       try {
-        const response = await fetch(endpoint, {
-          headers: token ? { 'X-Admin-Token': token } : {},
-          cache: 'no-store',
-          signal: controller.signal
+        const response = await apiFetch(endpoint, {
+          token, signal: controller.signal
         });
         if (!response.ok) {
           const error = await response.json().catch(() => null);
@@ -117,7 +115,8 @@ export function ConfigExportPreview({
       </>
       : current?.file ? <>
         <p className="delivery-note">只读预览。文件可能包含私人地址和认证信息。</p>
-        <CodePreview key={attempt} file={current.file} language={language} downloadLabel={downloadLabel} />
+        <CodePreview key={attempt} text={current.file.text} language={language}
+          download={{ blob: current.file.blob, filename: current.file.filename, label: downloadLabel }} />
       </> : <p className="delivery-note" role="status">正在读取导出配置…</p>}
   </section>;
 }

@@ -5,14 +5,15 @@ import { ImportChecks } from './import-checks';
 import type { inspectNewImport } from '@/lib/revision-comparison';
 import type { classifyConfig } from '@/lib/config-import';
 import { apiRequest } from './api-client';
+import { CONFIG_FORMAT_LABELS } from '@/lib/client-capabilities';
 
 export type ImportClassification = ReturnType<typeof classifyConfig>;
 
 export function ImportClassificationView({ result }: { result: ImportClassification }) {
   return <div className="wide import-preview" aria-label="字段分类">
-    <strong>识别为 {result.format === 'stash' ? 'Stash YAML' : 'Shadowrocket .conf'}</strong>
+    <strong>识别为 {CONFIG_FORMAT_LABELS[result.format]}</strong>
     {([
-      ['通用配置', result.common], ['Stash 专用', result.stash], ['Shadowrocket 专用', result.shadowrocket]
+      ['通用配置', result.common], ['Stash 专用或扩展参数', result.stash], ['Mihomo 专用', result.mihomo], ['Shadowrocket 专用', result.shadowrocket]
     ] as const).map(([label, items]) => <p key={label} className="delivery-note">
       <strong>{label}：</strong>{items.length ? items.join('、') : '无'}
     </p>)}

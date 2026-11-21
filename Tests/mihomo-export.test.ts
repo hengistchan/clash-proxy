@@ -360,6 +360,8 @@ test('v7 upgrade preserves publication IDs, current pointers, and pre-existing d
   const highest = 50;
   db.prepare("UPDATE sqlite_sequence SET seq = ? WHERE name = 'target_publications'").run(highest);
   db.exec(`
+    DROP TABLE candidate_source_checks;
+    DROP TABLE rule_source_checks;
     DROP TABLE mihomo_proxy_source_access;
     DROP TABLE mihomo_proxy_source_cache;
     DROP TABLE mihomo_download_links;
@@ -369,7 +371,7 @@ test('v7 upgrade preserves publication IDs, current pointers, and pre-existing d
   closeDbForTests();
   resetRepositoryForTests();
 
-  assert.equal(getDb().pragma('user_version', { simple: true }), 8);
+  assert.equal(getDb().pragma('user_version', { simple: true }), 9);
   assert.deepEqual(getDb().prepare('SELECT * FROM target_publications ORDER BY id').all(), expectedRows);
   assert.deepEqual(getDb().prepare('SELECT * FROM target_delivery_modes ORDER BY target').all(), expectedModes);
   assert.deepEqual(getDb().pragma('foreign_key_check'), []);

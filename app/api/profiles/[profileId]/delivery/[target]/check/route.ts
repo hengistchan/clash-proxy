@@ -7,6 +7,8 @@ import { isManagedSourceTarget, sourceCapability } from '@/lib/managed-source-ac
 import { getCompilationSnapshot } from '@/lib/repository';
 import { refreshShadowrocketUpstream } from '@/lib/shadowrocket-delivery';
 import { managedSources, servedRecord } from '@/lib/target-publication-store';
+import { checkCandidateSources } from '@/lib/candidate-source-check';
+import { publishableCandidate } from '@/lib/target-publication';
 
 export const runtime = 'nodejs';
 
@@ -15,8 +17,14 @@ export async function POST(request: Request, context: { params: Promise<{ profil
     requireAdmin(request);
     const { profileId, target } = await context.params;
     const id = parseId(profileId);
-    getCompilationSnapshot(id);
-    if (target === 'shadowrocket') await refreshShadowrocketUpstream(id);
+    const query = new URL(request.url).searchParams;
+    const scope = query.get('scope') ?? 'device';
+    if (!['device', 'candidate'].includes(scope) || (scope === 'candidate' && query.has('sourceId'))) throw new HttpError(400, '检查范围无效；候选检查不接受设备来源 ID。');
+    const snapshot = getCompilationSnapshot(id);
+    if (scope === 'candidate' && isManagedSourceTarget(target)) {
+      profileDeliveryTargets(request, id);
+      await checkCandidateSources(getDb(), id, target, publishableCandidate(getDb(), id, target, snapshot.profile.revision));
+    } else if (target === 'shadowrocket') await refreshShadowrocketUpstream(id);
     else if (isManagedSourceTarget(target)) {
       const db = getDb();
       const sources = managedSources(servedRecord(db, id, target));

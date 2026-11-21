@@ -65,6 +65,7 @@ function itemType(item: ResourceItem, kind: ResourceKind): string {
     return `${source} · ${behavior}`;
   }
   if (kind === 'proxy-providers') {
+    if ((item as ProxyProvider).sourceType === 'inline') return '内联节点';
     return (item as ProxyProvider).sourceConfigured
       ? '来源已配置'
       : '来源待填写';
@@ -85,6 +86,7 @@ function itemSummary(item: ResourceItem, kind: ResourceKind): string[] {
   }
   if (kind === 'proxy-providers') {
     const provider = item as ProxyProvider;
+    if (provider.sourceType === 'inline') return [`${Array.isArray(provider.config.payload) ? provider.config.payload.length : 0} 个节点 · 用于 Mihomo`];
     return Object.entries(provider.config)
       .slice(0, 4)
       .map(([key, value]) => `${key}: ${String(value)}`);

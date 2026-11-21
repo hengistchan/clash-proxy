@@ -5,11 +5,13 @@ export const dynamic = 'force-dynamic';
 type Context = { params: Promise<{ profileId: string }> };
 
 import { readJson } from '@/lib/http';
-import { getSnapshot } from '@/lib/repository';
+import { getCompilationSnapshot } from '@/lib/repository';
+import { checkedRoutingSnapshot } from '@/lib/checked-rule-sources';
 import { simulateRouting } from '@/lib/routing-analysis';
 import { z } from 'zod';
 import { isIP } from 'node:net';
 const input = z.object({
+  useCheckedSources: z.boolean().optional(),
   host: z.string().max(253).optional(),
   ip: z
     .string()
@@ -24,11 +26,11 @@ const input = z.object({
 export async function POST(request: Request, context: Context) {
   try {
     requireAdmin(request);
+    const options = input.parse(await readJson(request));
+    const snapshot = getCompilationSnapshot(parseId((await context.params).profileId));
+    const checked = options.useCheckedSources ? checkedRoutingSnapshot(snapshot) : { snapshot, sourceSnapshots: [] };
     return Response.json(
-      simulateRouting(
-        getSnapshot(parseId((await context.params).profileId)),
-        input.parse(await readJson(request))
-      )
+      { ...simulateRouting(checked.snapshot, options), sourceSnapshots: checked.sourceSnapshots }
     );
   } catch (error) {
     return jsonError(error);

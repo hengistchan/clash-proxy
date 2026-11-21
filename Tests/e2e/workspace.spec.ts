@@ -2,7 +2,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import type { Snapshot } from '../../lib/types';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { parse } from 'yaml';
+import { parse, stringify } from 'yaml';
 
 const testToken = ['browser', 'test', 'admin'].join('-');
 const headers = { 'X-Admin-Token': testToken };
@@ -680,8 +680,32 @@ test('manual Stash publication and rollback leave Shadowrocket and the saved dra
   expect(await servedRevision(stashLink)).toBe(initial.profile.revision);
   expect(await servedRevision(shadowLink)).toBe(updated);
 
+  const candidatePath = root + '/delivery/stash/candidate';
+  expect((await request.get(candidatePath)).status()).toBe(401);
+  await page.getByRole('button', { name: '预览待发布版', exact: true }).click();
+  const candidate = page.getByRole('region', { name: '待发布版预览' });
+  await expect(candidate.getByRole('heading', { name: `待发布版 ${updated}` })).toBeVisible();
+  await expect(candidate.getByText(`设备当前可下载版 ${initial.profile.revision}`, { exact: false })).toBeVisible();
+  await expect(candidate.getByText('新增 1 项 · 删除 0 项 · 修改 0 项')).toBeVisible();
+  const candidateResponse = await request.get(candidatePath, { headers });
+  expect(candidateResponse.ok()).toBeTruthy();
+  expect(candidateResponse.headers()['cache-control']).toBe('no-store');
+  const { fingerprint, content } = await candidateResponse.json();
+  expect(content).toContain('DOMAIN,publish-fixture.test,REJECT');
+  const deliveryState = (await (await request.get(root + '/delivery', { headers })).json()).targets.stash;
+  const mismatched = await request.post(publishPath, {
+    headers: { ...headers, 'If-Match': `"${updated}"` },
+    data: { action: 'publish', expectedMode: 'manual', expectedPublicationId: deliveryState.publicationId,
+      expectedCandidateFingerprint: '0'.repeat(64) }
+  });
+  expect(mismatched.status()).toBe(409);
+  expect(await servedRevision(stashLink)).toBe(initial.profile.revision);
+
+  const publishRequest = page.waitForRequest(req => req.method() === 'POST' && new URL(req.url()).pathname === publishPath);
   await confirm('发布当前编辑版', '发布当前编辑版？');
+  expect((await publishRequest).postDataJSON().expectedCandidateFingerprint).toBe(fingerprint);
   expect(await servedRevision(stashLink)).toBe(updated);
+  await expect(candidate).toBeHidden();
   const downloaded = page.waitForEvent('download');
   await page.getByRole('button', { name: '下载 YAML', exact: true }).click();
   await downloaded;
@@ -828,4 +852,59 @@ rules:
   await expect(copyPortable).toHaveCount(0);
   expect((await request.get(replacementPortable)).status()).toBe(404);
   expect((await request.get(replacement)).status()).toBe(404);
+});
+
+test('large rule lists paginate while search and batch selection still cover the complete filtered result', async ({ page, request }) => {
+  const rules = Array.from({ length: 250 }, (_, index) => `DOMAIN,paged-${String(index).padStart(4, '0')}.example.test,REJECT`);
+  const initial = await create(request, 'paged-rules', stringify({ rules: [...rules, 'MATCH,DIRECT'] }));
+  await login(page, initial);
+  await navigate(page, '路由规则');
+  await expect(page.locator('.rule-card')).toHaveCount(100);
+  const pagination = page.getByRole('navigation', { name: '规则分页' });
+  await expect(pagination).toContainText('第 1 / 3 页');
+  await page.getByLabel('选择筛选后的全部普通规则').check();
+  await expect(page.getByText('已选 250 条（MATCH 受保护）')).toBeVisible();
+  await pagination.getByRole('button', { name: '下一页' }).click();
+  await expect(pagination).toContainText('第 2 / 3 页');
+  await expect(page.locator('.rule-card')).toHaveCount(100);
+  await pagination.getByRole('button', { name: '下一页' }).click();
+  await expect(page.locator('.rule-card')).toHaveCount(51);
+  await expect(page.locator('.rule-card').last()).toContainText('MATCH');
+  await page.getByPlaceholder('搜索域名、策略、类型、备注').fill('paged-0249');
+  await expect(page.locator('.rule-card')).toHaveCount(1);
+  await expect(pagination).toContainText('第 1 / 1 页');
+  await expect(page.locator('.rule-card')).toContainText('paged-0249.example.test');
+});
+
+test('manual publication exposes a separate candidate-source check and keeps device output when that check fails', async ({ page, request }) => {
+  const initial = await create(request, 'candidate-preflight');
+  const root = `/api/profiles/${initial.profile.id}`;
+  const manual = await request.post(root + '/delivery/stash/publication', {
+    headers: { ...headers, 'If-Match': `"${initial.profile.revision}"` },
+    data: { action: 'manual', expectedMode: 'auto', expectedPublicationId: null }
+  });
+  expect(manual.status()).toBe(200);
+  const source = await request.post(root + '/proxy-providers', {
+    headers: { ...headers, 'If-Match': `"${initial.profile.revision}"` },
+    data: { name: 'candidate-source', config: {}, sourceUrl: 'http://127.0.0.1:9/blocked', rewriteRules: [{ operation: 'fill', field: 'udp', value: true }] }
+  });
+  expect(source.status()).toBe(201);
+  const current = await snapshot(request, initial.profile.id);
+  const metrics = await request.get('/api/diagnostics', { headers });
+  expect(metrics.status()).toBe(200);
+  expect((await metrics.json()).operations['compile.stash'].count).toBeGreaterThan(0);
+  await login(page, current);
+  await navigate(page, '下载配置');
+  const candidate = page.getByLabel('候选版来源检查');
+  await expect(candidate).toContainText('待检查');
+  await expect(page.getByRole('button', { name: '发布当前编辑版', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '预览待发布版', exact: true })).toBeEnabled();
+  await candidate.getByRole('button', { name: '检查待发布版来源' }).click();
+  await expect(candidate).toContainText('检查失败');
+  const delivered = await request.get(root + '/config_download', { headers });
+  expect(delivered.headers()['x-config-revision']).toBe(String(initial.profile.revision));
+  expect((await request.post(root + '/delivery/stash/publication', {
+    headers: { ...headers, 'If-Match': `"${current.profile.revision}"` },
+    data: { action: 'publish', expectedMode: 'manual', expectedPublicationId: (await manual.json()).targets.stash.publicationId }
+  })).status()).toBe(409);
 });

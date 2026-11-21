@@ -9,16 +9,21 @@ import {
 } from './mihomo-delivery';
 import { materializeYamlArtifact } from './managed-proxy-source';
 import { getDb } from './db';
+import { previewPublicationCandidate } from './candidate-preview';
+import { candidateSourceStatus } from './candidate-source-check';
+import { isManagedSourceTarget } from './managed-source-access';
 import { publicationsFor } from './target-publication-store';
 import { requireAdmin } from './auth';
 import { getProfileRow } from './repository-shared';
 import { HttpError, jsonError, parseId } from './http';
 import { configTargetIds, type ConfigDeliveryStatus, type ConfigTarget } from './config-targets';
+import { getCompilationSnapshot } from './repository';
+import type { Snapshot } from './types';
 
 type MaybePromise<T> = T | Promise<T>;
 
 interface ConfigDeliveryAdapter {
-  status(profileId: number): ConfigDeliveryStatus;
+  status(profileId: number, snapshot?: Snapshot): ConfigDeliveryStatus;
   adminFile(profileId: number, request: Request): MaybePromise<Response>;
   previewFile(profileId: number, request: Request): Response;
   deviceFile(token: string, request: Request): MaybePromise<Response>;
@@ -58,8 +63,9 @@ const adapters = {
 } satisfies Record<ConfigTarget, ConfigDeliveryAdapter>;
 
 export function profileDeliveryTargets(request: Request, profileId: number) {
+  const snapshot = getCompilationSnapshot(profileId);
   return Object.fromEntries(configTargetIds.map((target) => [
-    target, deliveryLinks(request, profileId, target, { ...adapters[target].status(profileId), publications: publicationsFor(getDb(), profileId, target) })
+    target, deliveryLinks(request, profileId, target, { ...adapters[target].status(profileId, snapshot), publications: publicationsFor(getDb(), profileId, target), ...(isManagedSourceTarget(target) ? { candidateSources: candidateSourceStatus(getDb(), profileId, target) } : {}) })
   ])) as Record<ConfigTarget, ConfigDeliveryStatus>;
 }
 
@@ -82,6 +88,25 @@ export function previewDeliveredConfig(request: Request, params: { profileId: st
     return db.transaction(() => {
       getProfileRow(db, profileId);
       return (adapters[target] as ConfigDeliveryAdapter).previewFile(profileId, request);
+    })();
+  } catch (error) {
+    return privateError(error);
+  }
+}
+
+export function previewCandidateConfig(request: Request, params: { profileId: string; target: string }) {
+  try {
+    requireAdmin(request);
+    rejectLegacyParameters(request);
+    const target = configTargetIds.find(candidate => candidate === params.target);
+    if (!target) throw new HttpError(404, 'Unknown client');
+    const profileId = parseId(params.profileId);
+    const db = getDb();
+    return db.transaction(() => {
+      const profile = getProfileRow(db, profileId);
+      return Response.json(previewPublicationCandidate(profileId, target, Number(profile.revision)), {
+        headers: { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }
+      });
     })();
   } catch (error) {
     return privateError(error);

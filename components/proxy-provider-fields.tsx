@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react';
 import { ConfigFields } from './config-fields';
 import { SelectField, SwitchField } from './ui';
+import { PROXY_SOURCE_OPTIONS } from '@/lib/client-capabilities';
 
 type TextChange = (text: string) => void;
 type Toggle = (enabled: boolean) => void;
@@ -31,10 +32,7 @@ export function ProxyProviderFields({
         label="来源方式"
         value={sourceType}
         onValueChange={setSourceType}
-        options={[
-          { value: 'remote', label: '远程订阅（加密保存 URL）' },
-          { value: 'local', label: 'Stash 本地文件（使用 path）' }
-        ]}
+        options={PROXY_SOURCE_OPTIONS}
         wide
       />
       <label className="field wide">
@@ -43,7 +41,7 @@ export function ProxyProviderFields({
           className="input mono"
           type="password"
           autoComplete="new-password"
-          disabled={sourceType === 'local' || clearSource}
+          disabled={sourceType !== 'remote' || clearSource}
           value={sourceUrl}
           onChange={(event) => setSourceUrl(event.target.value)}
           placeholder={

@@ -14,7 +14,7 @@ import type {
   Snapshot,
   StashRule
 } from '@/lib/types';
-import { splitClientFields } from '@/lib/config-client-fields';
+import { parseObject, textArray, configWithout, snapshotResources, resourceEditorDraft } from './resource-editor-draft';
 import { BUILTIN_POLICIES, SHADOWROCKET_BUILTINS } from '@/lib/types';
 
 import { ApiError, apiRequest } from './api-client';
@@ -39,37 +39,6 @@ type EditableResource =
   | StashRule
   | HostEntry
   | null;
-
-function parseObject(text: string, label: string): JsonObject {
-  let value: unknown;
-  try {
-    value = JSON.parse(text || '{}');
-  } catch {
-    throw new Error(`${label}不是合法 JSON`);
-  }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`${label}必须是 JSON 对象`);
-  }
-  return value as JsonObject;
-}
-
-function textArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.map(String) : [];
-}
-
-function configWithout(config: JsonObject, keys: string[]): JsonObject {
-  return Object.fromEntries(
-    Object.entries(config).filter(([key]) => !keys.includes(key))
-  ) as JsonObject;
-}
-
-function snapshotResources(snapshot: Snapshot, resource: ResourceKind) {
-  return {
-    proxies: snapshot.proxies, 'proxy-providers': snapshot.proxyProviders,
-    'proxy-groups': snapshot.proxyGroups, 'rule-providers': snapshot.ruleProviders,
-    rules: snapshot.rules, hosts: snapshot.hosts
-  }[resource];
-}
 
 export function EditorDialog({
   open,
@@ -189,64 +158,7 @@ export function EditorDialog({
     setRevisionConflict(false);
     const latest = existing ? snapshotResources(snapshot, resource).find((entry) => entry.id === existing.id) : null;
     if (existing && !latest) setError('该资源已被其他会话删除或由导入替换。请关闭编辑器并从最新列表重新打开资源。');
-    const item = (latest || existing) as Record<string, unknown> | null;
-    const config = (item?.config || {}) as JsonObject;
-    const scoped = resource === 'proxy-groups' || resource === 'rule-providers';
-    const separated = scoped ? splitClientFields(resource, config) : { common: config, stash: {} };
-    const clients = item?.clientOptions as { shadowrocket?: JsonObject } | undefined;
-    const itemType = String(item?.type || '');
-    const itemPayload = String(item?.payload || initialValues?.payload || '');
-    const terminal = snapshot.rules.at(-1);
-    const defaultPriority = terminal?.type === 'MATCH'
-      ? terminal.priority
-      : snapshot.rules.length + 1;
-    const draft = {
-      name: String(item?.name || item?.pattern || ''),
-      displayName: String(item?.displayName || ''),
-      type: String(
-        item?.type ||
-          initialValues?.type ||
-          (resource === 'rules'
-            ? 'DOMAIN'
-            : resource === 'proxy-groups'
-              ? 'select'
-              : '')
-      ),
-      configText: JSON.stringify(
-        resource === 'proxy-groups' ? configWithout(separated.common, ['proxies', 'use', 'filter']) : separated.common,
-        null, 2
-      ),
-      stashText: JSON.stringify(configWithout(separated.stash, resource === 'rule-providers' ? ['type', 'payload', 'behavior'] : []), null, 2),
-      shadowrocketText: JSON.stringify(scoped ? clients?.shadowrocket ?? {} : {}, null, 2),
-      shadowrocketSourceUrl: '',
-      clearShadowrocketSource: false,
-      sourceType: String(item?.sourceType || 'remote'),
-      sourceUrl: '',
-      sourceHeaders: '',
-      clearSource: false,
-      clearHeaders: false,
-      rewriteRules: (item?.rewriteRules as ProxyRewriteRule[] | undefined) ?? [],
-      providerBehavior: String(item?.behavior || 'domain'),
-      providerType: String(item?.providerType || 'inline'),
-      entriesText: Array.isArray(item?.entries)
-        ? (item.entries as Array<{ value: string }>)
-            .map((entry) => entry.value)
-            .join('\n')
-        : '',
-      groupProxies: (initialValues?.groupProxies || textArray(config.proxies)).join('\n'),
-      groupUse: (initialValues?.groupUse || textArray(config.use)).join('\n'),
-      groupFilter: String(config.filter || ''),
-      rulePayload: itemType === 'RULE-SET' && !itemPayload
-        ? snapshot.ruleProviders[0]?.name || ''
-        : itemPayload,
-      rulePolicy: String(item?.policy || initialValues?.policy || 'DIRECT'),
-      ruleOptions: Array.isArray(item?.options) ? (item.options as string[]) : [],
-      ruleEnabled: item?.enabled === undefined ? true : Boolean(item.enabled),
-      ruleNote: String(item?.note || ''),
-      rulePriority: String(item?.priority || defaultPriority),
-      hostPattern: String(item?.pattern || ''),
-      hostValue: String(item?.value || '')
-    };
+    const draft = resourceEditorDraft(snapshot, resource, latest || existing, initialValues);
     setName(draft.name);
     setDisplayName(draft.displayName);
     setType(draft.type);

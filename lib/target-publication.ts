@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { assertCandidateSources } from './candidate-source-check';
 import type { ConfigTarget } from './config-targets';
 import { decryptJson } from './crypto';
 import { assertArtifactSemantics } from './artifact-semantics';
@@ -10,13 +11,49 @@ import type { ExportResult } from './exporter';
 import { SHADOWROCKET_COMPILER_VERSION } from './shadowrocket';
 import {
   deliveryMode, managedSources, publicationRecord, servedRecord, mihomoCandidate,
-  shadowrocketCandidate, stashCandidate, type ArtifactRecord
+  shadowrocketCandidate, stashCandidate, candidateFingerprint, type ArtifactRecord
 } from './target-publication-store';
 
 export type PublicationAction = 'manual' | 'auto' | 'publish' | 'rollback';
 
+export { candidateFingerprint } from './target-publication-store';
+
+function readCandidate(db: Database.Database, profileId: number, target: ConfigTarget): ArtifactRecord | undefined {
+  if (target === 'mihomo') return mihomoCandidate(db, profileId);
+  if (target === 'shadowrocket') {
+    const candidate = shadowrocketCandidate(db, profileId);
+    return candidate && candidate.artifact_version >= 1 && candidate.artifact_version <= SHADOWROCKET_COMPILER_VERSION
+      ? candidate : undefined;
+  }
+  const candidate = stashCandidate(db, profileId);
+  if (candidate) {
+    try {
+      assertArtifactSemantics(decryptJson<ExportResult>(candidate.artifact_ciphertext));
+    } catch (error) {
+      if (!(error instanceof HttpError) || error.status !== 409) throw error;
+      return undefined;
+    }
+  }
+  return candidate;
+}
+
+export function publishableCandidate(db: Database.Database, profileId: number, target: ConfigTarget, revision: number) {
+  const candidate = readCandidate(db, profileId, target);
+  const remote = target === 'shadowrocket' ? db.prepare(
+    'SELECT issues_json, remote_sources, remote_checked_at FROM shadowrocket_compilations WHERE profile_id = ?'
+  ).get(profileId) as { issues_json: string; remote_sources: number; remote_checked_at: number | null } | undefined : undefined;
+  if (candidate?.revision !== revision ||
+    (target === 'mihomo' && mihomoIssues(db, profileId).some(issue => issue.severity === 'error')) ||
+    (remote && ((remote.remote_sources && remote.remote_checked_at === null) ||
+      (JSON.parse(remote.issues_json) as Array<{ severity: string }>).some(issue => issue.severity === 'error')))) {
+    throw new HttpError(409, '当前编辑版尚未通过该客户端的检查，设备版本保持不变。');
+  }
+  return candidate;
+}
+
 export function changeTargetPublication(db: Database.Database, profileId: number, target: ConfigTarget, input: {
   action: PublicationAction; expectedMode: 'auto' | 'manual'; expectedPublicationId: number | null; publicationId?: number;
+  expectedCandidateFingerprint?: string;
 }) {
   const mode = deliveryMode(db, profileId, target);
   if ((mode ? 'manual' : 'auto') !== input.expectedMode || (mode?.publication_id ?? null) !== input.expectedPublicationId) {
@@ -45,27 +82,14 @@ export function changeTargetPublication(db: Database.Database, profileId: number
     return;
   }
 
-  const shadow = target === 'shadowrocket' ? shadowrocketCandidate(db, profileId) : undefined;
-  let candidate: ArtifactRecord | undefined = target === 'stash' ? stashCandidate(db, profileId)
-    : target === 'mihomo' ? mihomoCandidate(db, profileId)
-    : shadow && shadow.artifact_version >= 1 && shadow.artifact_version <= SHADOWROCKET_COMPILER_VERSION ? shadow : undefined;
-  if (candidate && target === 'stash') {
-    try { assertArtifactSemantics(decryptJson<ExportResult>(candidate.artifact_ciphertext)); }
-    catch (error) {
-      if (!(error instanceof HttpError) || error.status !== 409) throw error;
-      candidate = undefined;
-    }
+  const candidate = input.action === 'publish'
+    ? publishableCandidate(db, profileId, target, Number(db.prepare('SELECT revision FROM profiles WHERE id = ?').pluck().get(profileId)))
+    : readCandidate(db, profileId, target);
+  if (input.action === 'publish' && candidate && input.expectedCandidateFingerprint &&
+      candidateFingerprint(candidate) !== input.expectedCandidateFingerprint) {
+    throw new HttpError(409, '待发布配置已变化，请刷新预览后重试。');
   }
-  if (input.action === 'publish') {
-    const profile = db.prepare('SELECT revision FROM profiles WHERE id = ?').get(profileId) as { revision: number };
-    const remote = target === 'shadowrocket' ? db.prepare('SELECT issues_json, remote_sources, remote_checked_at FROM shadowrocket_compilations WHERE profile_id = ?')
-      .get(profileId) as { issues_json: string; remote_sources: number; remote_checked_at: number | null } | undefined : undefined;
-    if (candidate?.revision !== profile.revision ||
-      (target === 'mihomo' && mihomoIssues(db, profileId).some(issue => issue.severity === 'error')) || (remote && (Boolean(remote.remote_sources && remote.remote_checked_at === null) ||
-      (JSON.parse(remote.issues_json) as Array<{ severity: string }>).some(i => i.severity === 'error')))) {
-      throw new HttpError(409, '当前编辑版尚未通过该客户端的检查，设备版本保持不变。');
-    }
-  }
+  if (input.action === 'publish' && candidate && isManagedSourceTarget(target)) assertCandidateSources(db, profileId, target, candidate);
   const publicationId = candidate ? Number(db.prepare(`INSERT INTO target_publications
     (profile_id, target, revision, artifact_ciphertext, published_at) VALUES (?, ?, ?, ?, ?)`)
     .run(profileId, target, candidate.revision, candidate.artifact_ciphertext, new Date().toISOString()).lastInsertRowid) : null;

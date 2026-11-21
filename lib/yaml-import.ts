@@ -3,6 +3,7 @@ import { LineCounter, parseDocument } from 'yaml';
 import { HttpError } from './http';
 import { parseRuleLine } from './rules';
 import { ruleProviderConflict } from './rule-provider-source';
+import { canonicalSourceConfig } from './source-credentials';
 import {
   PROXY_GROUP_TYPES,
   RESERVED_TOP_LEVEL_KEYS,
@@ -144,19 +145,24 @@ function documentFromYaml(value: unknown): ImportedDocument {
     return { name, type, config };
   });
   const proxyProviders = Object.entries(optionalMapping(source, 'proxy-providers')).map(([name, raw], index) => {
-    const field = `proxy-providers[${index}]`, item = mapping(raw, field);
+    const field = `proxy-providers[${index}]`, item = canonicalSourceConfig(mapping(raw, field));
     requiredString(name, `${field}.name`);
     optionalString(item, 'url', field);
     optionalString(item, 'path', field);
     headers(item, field);
     const config = { ...item };
+    if (item.type === 'inline') {
+      if (!Array.isArray(item.payload) || !item.payload.length || !item.payload.every(node => isJsonObject(node) && typeof node.name === 'string' && typeof node.type === 'string')) invalid(field, 'inline sources require a non-empty node payload');
+      if (['url', 'headers', 'path', 'interval'].some(key => item[key] !== undefined)) invalid(field, 'inline sources cannot contain remote or file fields');
+      return { name, config, requiresUrl: false };
+    }
     const url = typeof config.url === 'string' ? config.url : '';
     const placeholder = !url || url.startsWith('https://example.invalid/');
     if (placeholder) delete config.url;
     return { name, config, requiresUrl: placeholder && (typeof item.url === 'string' || !config.path) };
   });
   const ruleProviders = Object.entries(optionalMapping(source, 'rule-providers')).map(([name, raw], index) => {
-    const field = `rule-providers[${index}]`, item = mapping(raw, field);
+    const field = `rule-providers[${index}]`, item = canonicalSourceConfig(mapping(raw, field));
     requiredString(name, `${field}.name`);
     for (const key of ['behavior', 'type', 'url', 'path']) optionalString(item, key, field);
     headers(item, field);

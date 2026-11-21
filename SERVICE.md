@@ -31,7 +31,7 @@ STASH_ALLOW_INSECURE_LOCAL=1 npm run dev -- --port 3010
 
 资源名称、规则 payload、策略目标、Hosts 值、顺序和显示名称等关系字段为明文，受 0600 文件权限保护。`display_name` 是规则集的界面名称；Stash `name` 负责引用与 YAML 键。同名规则集重新导入时保留显示名，导入占位来源时保留同名 provider 的既有凭据。新写入记录兼容旧 v1 密文读取。
 
-SQLite `user_version` 当前为 8。v8 增加 Mihomo 的交付产物、固定订阅和托管代理源，保留已有的发布记录 ID 和发布指针。v7 增加托管代理源授权及各客户端的手动发布记录。迁移不重写既有配置、订阅令牌或产物。v6 新增远程代理源的加密改写缓存。v5 将当前配置的已知通用字段和客户端扩展分开存储，并规范化规则匹配类型；历史修订兼容旧格式，下载产物和令牌不变。升级前请备份数据库与密钥；回退旧镜像需使用与之对应的数据库备份。详见[配置存储模型](docs/config-storage-model.md)。
+SQLite `user_version` 当前为 9。v9 增加绑定产物指纹的候选来源检查，以及加密的路由规则来源快照；不改写现有资源、历史或设备令牌。v8 增加 Mihomo 的交付产物、固定订阅和托管代理源，保留已有的发布记录 ID 和发布指针。v7 增加托管代理源授权及各客户端的手动发布记录。迁移不重写既有配置、订阅令牌或产物。v6 新增远程代理源的加密改写缓存。v5 将当前配置的已知通用字段和客户端扩展分开存储，并规范化规则匹配类型；历史修订兼容旧格式，下载产物和令牌不变。升级前请备份数据库与密钥；回退旧镜像需使用与之对应的数据库备份。详见[配置存储模型](docs/config-storage-model.md)。
 
 ## 规则检查
 
@@ -97,6 +97,17 @@ provider 请求例子（两个来源需各自提交，地址不会作为下载�
 YAML 响应包含 `X-Config-Revision`、`X-Config-SHA256`、`X-Rule-Count`，并禁止缓存。没有成功版本时下载返回 409；草稿错误不会覆盖上次成功版本。管理请求支持 `Authorization: Bearer ...` 或 `X-Admin-Token`。未配置 `STASH_ADMIN_TOKEN` 时生产启动及管理请求均拒绝；免认证只允许显式开启的本机开发模式。公开部署还需 HTTPS。固定设备链接持有者可读取完整私人配置。
 
 ## 部署与备份
+
+新增在线备份工具使用 SQLite Backup API，包含 WAL 中已提交的数据，不需要停服。命令从项目根目录运行，使用与服务一致的 `STASH_DB_PATH`、`STASH_KEY_PATH` 或 `STASH_SECRET_KEY`：
+
+```bash
+npm run backup -- create /absolute/path/backups/2026-11-21
+npm run backup -- verify /absolute/path/backups/2026-11-21
+npm run backup -- restore /absolute/path/backups/2026-11-21 /absolute/path/restored-data
+```
+
+目标必须是尚不存在的目录，不覆盖运行数据。备份同时保存数据库、配对密钥与校验清单，目录权限 700、文件 600；应按私人凭据保存整个目录。验证会检查文件 SHA-256、SQLite 完整性、外键及所有加密列的可解密性。恢复只写入新的目录；停服后将服务的数据库与密钥路径指向恢复目录，再启动并验证。若通过环境变量提供密钥，恢复时仍需使用匹配密钥。以下停服复制方式继续可用。
+
 
 本机生产运行可执行 `npm run build` 后，在设置 `STASH_ADMIN_TOKEN` 的环境中执行 `npm start`。未配置令牌时启动器会在打开数据库和监听端口前拒绝启动。启动器会在切换到 standalone
 目录前，将数据库、密钥与示例目录解析为绝对路径；默认仍使用仓库根目录的
@@ -180,6 +191,8 @@ CI 会独立构建并执行 Chromium 回归。
 
 `targets` 中 `currentRevision` 是当前编辑版，`readyRevision` 是最近成功生成的候选，`compiledRevision` 是设备实际可下载版。管理下载、设备下载和导出预览的 `X-Config-Revision` 标识实际产物。「预览导出配置」只读当前交付版本；「下载此预览」保存刚才预览的相同字节。发布操作需传 `If-Match`、`expectedMode`、`expectedPublicationId`，回退另传目标 `publicationId`。管理端查看远程来源检查和缓存，不等同于设备已经更新或业务连通性通过。
 
+手动发布时，「预览待发布版」展示通过检查的当前编辑版、相对设备版本的脱敏编辑差异，以及候选配置文本。`GET /api/profiles/:id/delivery/:target/candidate` 需要管理员认证，只读取已生成的候选，不检查上游。候选里托管来源的 URL 是占位地址，设备下载时才写入交付链接。工作台发布已预览的候选时会附上 `expectedCandidateFingerprint`，候选内容更新后需重新预览。
+
 容器验收可独立执行，不接触现有服务或数据：
 
 ```bash
@@ -188,3 +201,15 @@ node Tests/docker-smoke.mjs stash-config-forge:audit
 ```
 
 脚本使用临时只读容器、独立内存数据目录和随机测试凭据，验证后清理容器。
+
+如果工作台部署在 Cloudflare Access 后，站点登录和应用的管理员令牌是两层独立认证。登录提示出现时，在同一浏览器的新标签页完成站点登录，再回到工作台手动重试。管理请求使用同源 Cookie 和 AJAX 标识；遇到访问网关的重定向时不会转发管理员令牌，也不会自动重发原操作。
+
+## 候选来源检查、路由快照与运维诊断
+
+Stash / Mihomo 手动发布版包含托管代理源时，先点击「检查待发布版来源」。结果有效 10 分钟，并绑定候选产物指纹；修改、编译更新、过期或检查失败后需要重新检查。接口为 `POST /api/profiles/:id/delivery/:target/check?scope=candidate`，不会写入设备来源缓存或更换链接。`scope` 省略时保留设备版检查行为。这里只检查来源格式与改写，不测试节点连通性。
+
+「解释一次路由匹配」可主动检查被路由引用的远程 YAML／文本规则集，保存加密快照。`POST /api/profiles/:id/simulate/sources` 检查，随后模拟请求传 `useCheckedSources: true`；快照有效 15 分钟，来源参数变化后不再使用。失败、过期、MRS、GeoIP 或脚本仍保持不确定。支持内联／已检查 classical 条目、逻辑规则及域名 RE2 正则，并设置分析预算。
+
+`GET /api/diagnostics` 需要管理员认证，返回当前进程的各端编译耗时、未生成当前版的次数，以及来源下载耗时和失败次数。统计在进程重启后重置，不含来源地址、资源名称、节点信息或请求头。未知 API 异常返回 `requestId` 和 `X-Request-ID`，服务日志只记录同一编号与固定错误类别，便于关联排障。
+
+`npm run benchmark` 在内存中测量 1,000／10,000 条规则的导入、公共校验和三端编译，不连接上游、不读取用户数据库；结果是本机基准，不代表生产并发或设备性能。规则页每页最多渲染 100 条；搜索和批量选择仍覆盖全部筛选结果。

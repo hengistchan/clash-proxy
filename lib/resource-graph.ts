@@ -57,7 +57,7 @@ export function buildResourceGraph(snapshot: Snapshot): ResourceGraph {
       add(
         'proxy-providers',
         p,
-        p.sourceConfigured ? '订阅来源已配置' : '订阅来源待配置'
+        p.sourceType === 'inline' ? '内联节点' : p.sourceConfigured ? '订阅来源已配置' : '订阅来源待配置'
       )
     );
   for (const p of snapshot.proxies)

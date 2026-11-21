@@ -300,6 +300,26 @@ const MIGRATIONS = [
         DROP TABLE target_publications_v7;
       `);
     }
+  },
+  {
+    version: 9,
+    apply(db: Database.Database) {
+      db.exec(`
+        CREATE TABLE candidate_source_checks (
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          target TEXT NOT NULL CHECK (target IN ('stash', 'mihomo')),
+          fingerprint TEXT NOT NULL, checked_at INTEGER NOT NULL, sources_json TEXT NOT NULL,
+          PRIMARY KEY (profile_id, target)
+        );
+        CREATE TABLE rule_source_checks (
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          provider_id INTEGER NOT NULL REFERENCES rule_providers(id) ON DELETE CASCADE,
+          fingerprint TEXT NOT NULL, checked_at INTEGER NOT NULL,
+          entries_ciphertext TEXT NOT NULL,
+          PRIMARY KEY (profile_id, provider_id)
+        );
+      `);
+    }
   }
 ] as const;
 

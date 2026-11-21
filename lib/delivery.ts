@@ -10,9 +10,9 @@ import { publicationStatus, servedStashRecord, stashCandidate } from './target-p
 import { managedSourceHealth } from './managed-source-health';
 import { validateSnapshot } from './validation';
 import { assertArtifactSemantics } from './artifact-semantics';
+import type { Snapshot } from './types';
 
-function artifactRow(profileId: number) {
-  const snapshot = getCompilationSnapshot(profileId);
+function artifactRow(profileId: number, snapshot = getCompilationSnapshot(profileId)) {
   const db = getDb();
   refreshStashConfig(db, snapshot);
   const row = servedStashRecord(db, profileId);
@@ -27,8 +27,8 @@ function artifactRow(profileId: number) {
   }
   return { snapshot, row: undefined };
 }
-export function getDeliveryStatus(profileId: number) {
-  const { snapshot, row, artifact } = artifactRow(profileId);
+export function getDeliveryStatus(profileId: number, sharedSnapshot?: Snapshot) {
+  const { snapshot, row, artifact } = artifactRow(profileId, sharedSnapshot);
   const token = readDownloadToken(profileId);
   const db = getDb();
   const issues = [...validateSnapshot(snapshot).issues, ...stashTargetIssues(snapshot)];

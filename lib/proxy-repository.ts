@@ -4,6 +4,7 @@ import { transaction } from './db';
 import { encryptResource, decryptResourceObject, readClientOptions, encryptNodeSource, readNodeSourceRewriteRules } from './config-storage-model';
 import { HttpError } from './http';
 import { validateSubscriptionUrl } from './provider-source';
+import { canonicalSourceConfig } from './source-credentials';
 import type {
   ClientOptions,
   JsonObject,
@@ -31,7 +32,7 @@ interface ProxyProviderInput {
   rewriteRules?: ProxyRewriteRule[];
   name: string;
   config: JsonObject;
-  sourceType?: 'remote' | 'local';
+  sourceType?: 'remote' | 'local' | 'inline';
   sourceUrl?: string;
   sourceHeaders?: JsonObject;
   clearSource?: boolean;
@@ -42,7 +43,10 @@ export function providerConfig(
   input: Omit<ProxyProviderInput, 'name' | 'rewriteRules'>,
   current: JsonObject = {}
 ): JsonObject {
-  const config = { ...input.config };
+  const incoming = { ...input.config };
+  if (input.clearHeaders) { delete incoming.headers; delete incoming.header; }
+  const config = canonicalSourceConfig(incoming);
+  current = input.clearHeaders ? current : canonicalSourceConfig(current);
   if (input.clearSource) delete config.url;
   else if (input.sourceUrl !== undefined)
     config.url = validateSubscriptionUrl(input.sourceUrl);
@@ -54,7 +58,14 @@ export function providerConfig(
     config.headers = input.sourceHeaders;
   else if (config.headers === undefined && current.headers)
     config.headers = current.headers;
-  if (input.sourceType === 'local') delete config.url;
+  if (input.sourceType === 'local') { delete config.url; delete config.headers; }
+  if (input.sourceType === 'inline') {
+    config.type = 'inline';
+    for (const key of ['url', 'headers', 'path', 'interval']) delete config[key];
+  } else if (input.sourceType && config.type === 'inline') {
+    delete config.type;
+    delete config.payload;
+  }
   return config;
 }
 
@@ -146,7 +157,7 @@ export function createProxyRepository({
       const config = providerConfig(input);
       const requiresUrl = input.sourceType
         ? input.sourceType === 'remote'
-        : Boolean(config.url) || !config.path;
+        : config.type === 'inline' ? false : Boolean(config.url) || !config.path;
       const rules = requiresUrl ? input.rewriteRules ?? [] : [];
       validateProxyRewrites(rules);
       const result = db

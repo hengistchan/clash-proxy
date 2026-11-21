@@ -15,24 +15,43 @@ export class ApiError extends Error {
   }
 }
 
-export async function apiRequest<T>(
-  path: string,
-  options: RequestInit & { token?: string; expectedRevision?: number } = {}
-): Promise<T> {
-  const headers = new Headers(options.headers || {});
+export const SITE_ACCESS_REQUIRED = 'forge:site-access-required';
+
+export type ApiOptions = RequestInit & { token?: string; expectedRevision?: number };
+
+export async function apiFetch(path: string, options: ApiOptions = {}): Promise<Response> {
+  const { token, expectedRevision, ...requestOptions } = options;
+  const headers = new Headers(requestOptions.headers);
   if (options.body && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
-  if (options.token) {
-    headers.set('X-Admin-Token', options.token);
-  }
-  if (options.expectedRevision !== undefined) headers.set('If-Match', `"${options.expectedRevision}"`);
-  const { token: _token, expectedRevision: _revision, ...requestOptions } = options;
+  if (token) headers.set('X-Admin-Token', token);
+  if (expectedRevision !== undefined) headers.set('If-Match', `"${expectedRevision}"`);
+  // Cloudflare Access can return a 401 to AJAX callers instead of redirecting.
+  headers.set('X-Requested-With', 'XMLHttpRequest');
   const response = await fetch(path, {
     ...requestOptions,
     headers,
-    cache: 'no-store'
+    cache: 'no-store',
+    mode: 'same-origin',
+    credentials: 'same-origin',
+    // Treat a gateway redirect as an interruption, never follow it with API credentials.
+    redirect: 'manual'
   });
+  const challenge = response.headers.get('WWW-Authenticate') ?? '';
+  const contentType = response.headers.get('Content-Type') ?? '';
+  if (response.type === 'opaqueredirect' || [301, 302, 303, 307, 308].includes(response.status) ||
+    ((response.status === 401 || response.status === 403) && /\bCloudflare-Access\b/i.test(challenge)) ||
+    (response.status === 401 && contentType.includes('text/html'))) {
+    window.dispatchEvent(new Event(SITE_ACCESS_REQUIRED));
+    // This is separate from a JSON 401 issued by the application's admin-token check.
+    throw new Error('站点访问需要重新登录。');
+  }
+  return response;
+}
+
+export async function apiRequest<T>(path: string, options: ApiOptions = {}): Promise<T> {
+  const response = await apiFetch(path, options);
   const contentType = response.headers.get('content-type') || '';
   let payload: unknown = null;
   if (response.status !== 204) {

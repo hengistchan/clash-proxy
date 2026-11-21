@@ -3,6 +3,8 @@
   "version": "4.0.0",
   "private": true,
   "scripts": {
+    "backup": "node Scripts/manage-backup.mjs",
+    "benchmark": "tsx Scripts/benchmark-config.ts",
     "dev": "node Scripts/start-development.mjs",
     "prebuild": "node Scripts/check-build-data.mjs",
     "build": "next build",

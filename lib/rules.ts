@@ -56,7 +56,7 @@ export function parseRuleLine(raw: string): ParsedRule {
     throw new HttpError(400, 'Rule text is required');
   }
   const parts = splitTopLevel(raw.trim());
-  const type = parts[0].toUpperCase();
+  const type = parts[0].toUpperCase() === 'SRC-IP-CIDR' ? 'SRC-IP' : parts[0].toUpperCase();
   if (!RULE_TYPES.includes(type as (typeof RULE_TYPES)[number])) {
     throw new HttpError(400, `Unsupported rule type: ${type}`);
   }

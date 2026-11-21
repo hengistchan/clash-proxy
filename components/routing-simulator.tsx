@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { StashRule } from '@/lib/types';
 import { apiRequest } from './api-client';
 interface Simulation {
@@ -7,6 +7,7 @@ interface Simulation {
   conclusive: boolean;
   explanation: string;
   uncertainRules: Array<{ priority: number; type: string }>;
+  sourceSnapshots?: Array<{ providerId: number; checkedAt: number | null; usable: boolean }>;
 }
 export function RoutingSimulator({
   profileId,
@@ -24,6 +25,18 @@ export function RoutingSimulator({
   const [result, setResult] = useState<Simulation | null>(null);
   const [error, setError] = useState(''),
     [busy, setBusy] = useState(false);
+  const [sources, setSources] = useState('');
+  const [useCheckedSources, setUseCheckedSources] = useState(false);
+  useEffect(() => { setResult(null); }, [host, ip, network, protocol, process, port, useCheckedSources]);
+  async function checkSources() {
+    setBusy(true); setError(''); setResult(null);
+    try {
+      const response = await apiRequest<{ results: Array<{ state: string }> }>(`/api/profiles/${profileId}/simulate/sources`, { method: 'POST', token });
+      setSources(`已检查 ${response.results.length} 个远程规则集，${response.results.filter(item => item.state === 'failed').length} 个失败。快照有效期 15 分钟；未加载、过期和 MRS 规则仍标为不确定。`);
+      setUseCheckedSources(true);
+    } catch (error) { setError(error instanceof Error ? error.message : '来源检查失败'); }
+    finally { setBusy(false); }
+  }
   async function simulate() {
     setBusy(true);
     setError('');
@@ -34,6 +47,7 @@ export function RoutingSimulator({
           method: 'POST',
           token,
           body: JSON.stringify({
+            useCheckedSources,
             host: host.trim() || undefined,
             ip: ip.trim() || undefined,
             network: network || undefined,
@@ -53,7 +67,7 @@ export function RoutingSimulator({
     <details className="simulator">
       <summary>解释一次路由匹配</summary>
       <p className="delivery-note">
-        按当前页面顺序检查，不发送网络请求。远程规则集、GeoIP、脚本或缺失的输入会标为不确定，不会假装得到真实设备结果。
+        按保存的规则顺序解释匹配。可主动检查远程规则集并使用近期快照；GeoIP、脚本或缺失的输入仍标为不确定，结果需要在设备上验证。
       </p>
       <div className="simulator-fields">
         <label className="field">
@@ -119,6 +133,9 @@ export function RoutingSimulator({
       >
         {busy ? '检查中…' : '解释匹配结果'}
       </button>
+      <button type="button" className="button secondary" disabled={busy} onClick={() => void checkSources()}>检查远程规则集</button>
+      <label className="delivery-note"><input type="checkbox" checked={useCheckedSources} onChange={event => setUseCheckedSources(event.target.checked)} />使用已检查的来源快照</label>
+      {sources ? <p className="delivery-note" role="status">{sources}</p> : null}
       {result ? (
         <div className="simulator-result" role="status">
           <strong>
@@ -130,6 +147,7 @@ export function RoutingSimulator({
               : '未得到规则候选'}
           </p>
           <p>{result.explanation}</p>
+          {result.sourceSnapshots?.length ? <p>来源快照：{result.sourceSnapshots.filter(source => source.usable).length} / {result.sourceSnapshots.length} 个有效。{result.sourceSnapshots.filter(source => source.usable && source.checkedAt).map(source => `规则集 ${source.providerId}：${new Date(source.checkedAt!).toLocaleString('zh-CN')}`).join('；')}</p> : null}
           {result.uncertainRules.length ? (
             <p>
               前序不确定规则：

@@ -7,8 +7,9 @@ import { validateSnapshot } from './validation';
 import type { RemoteResources, RemoteSource } from './shadowrocket-sources';
 import { SHADOWROCKET_BUILTINS } from './types';
 import { unsafeConfLine } from './shadowrocket-import';
+import { extendedNodeParts } from './shadowrocket-node-codec';
 
-export const SHADOWROCKET_COMPILER_VERSION = 3;
+export const SHADOWROCKET_COMPILER_VERSION = 4;
 const MAX_RULES = 50_000;
 const MAX_MEMBERS = 50_000;
 const MAX_FILTER_EVALUATIONS = 250_000;
@@ -106,6 +107,10 @@ function nodeLine(node: Snapshot['proxies'][number], name: string) {
       ((username !== undefined || password !== undefined) &&
         (!atom(username) || !atom(password) || /\s/.test(username + password)))) return null;
     if (username !== undefined) parts.push(`username=${username}`, `password=${password}`);
+  } else if (type === 'trojan' || type === 'vmess') {
+    const extra = extendedNodeParts(type, config);
+    if (!extra) return null;
+    parts.push(...extra);
   } else {
     return null;
   }

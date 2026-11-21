@@ -1,4 +1,6 @@
 import type Database from 'better-sqlite3';
+import { withoutSourceCredentials } from './source-credentials';
+import { proxySourceType } from './client-capabilities';
 
 import { decryptResource, decryptResourceObject, readClientOptions, readNodeSourceRewriteRules } from './config-storage-model';
 import { HttpError } from './http';
@@ -59,8 +61,7 @@ export function mapProxy(row: DbRow): ProxyNode {
 export function mapProxyProvider(row: DbRow): ProxyProvider {
   const config = decryptResourceObject('nodeSource', row.config_ciphertext);
   const rewriteRules = readNodeSourceRewriteRules(row.config_ciphertext);
-  const sourceType =
-    Boolean(row.requires_url) || config.url ? 'remote' : 'local';
+  const sourceType = proxySourceType(config, Boolean(row.requires_url));
   return {
     id: Number(row.id),
     name: String(row.name),
@@ -69,7 +70,7 @@ export function mapProxyProvider(row: DbRow): ProxyProvider {
     requiresUrl: sourceType === 'remote' && !config.url,
     sourceType,
     sourceConfigured:
-      sourceType === 'remote' ? Boolean(config.url) : Boolean(config.path),
+      sourceType === 'inline' ? Array.isArray(config.payload) && config.payload.length > 0 : sourceType === 'remote' ? Boolean(config.url) : Boolean(config.path),
     headersConfigured: Boolean(
       config.headers && Object.keys(config.headers).length
     ),
@@ -310,9 +311,7 @@ export function assertPolicyNameAvailable(
 }
 
 export function publicProvider(provider: ProxyProvider): ProxyProvider {
-  const config = { ...provider.config };
-  delete config.url;
-  delete config.headers;
+  const config = withoutSourceCredentials(provider.config);
   return { ...provider, config };
 }
 

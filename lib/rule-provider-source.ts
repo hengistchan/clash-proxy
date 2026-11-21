@@ -1,5 +1,6 @@
 import { HttpError } from './http';
 import { validateSubscriptionUrl } from './provider-source';
+import { canonicalSourceConfig, withoutSourceCredentials } from './source-credentials';
 import type { ClientOptions, JsonObject, RuleProvider, RuleProviderType } from './types';
 
 export interface RuleProviderInput {
@@ -33,7 +34,7 @@ export function ruleProviderClientOptions(input: RuleProviderInput, current?: Cl
   return Object.keys(options).length ? { shadowrocket: options } : undefined;
 }
 
-const INLINE_IGNORED_FIELDS = ['url', 'path', 'format', 'interval', 'headers'];
+const INLINE_IGNORED_FIELDS = ['url', 'path', 'format', 'interval', 'headers', 'header'];
 
 /** Detect input that Stash would silently interpret differently from the editor. */
 export function ruleProviderConflict(
@@ -61,7 +62,10 @@ export function ruleProviderConflict(
 
 /** Credential changes are explicit; ordinary edits preserve an existing remote source. */
 export function ruleProviderConfig(input: RuleProviderInput, current: JsonObject = {}): JsonObject {
-  const config = { ...input.config };
+  const incoming = { ...input.config };
+  if (input.clearHeaders) { delete incoming.headers; delete incoming.header; }
+  const config = canonicalSourceConfig(incoming);
+  current = input.clearHeaders ? current : canonicalSourceConfig(current);
   const conflict = ruleProviderConflict(input.providerType, config, input.entries);
   if (conflict) throw new HttpError(400, `Rule provider ${conflict}`);
   if (config.behavior !== undefined && config.behavior !== input.behavior) {
@@ -91,9 +95,7 @@ export function ruleProviderConfig(input: RuleProviderInput, current: JsonObject
 }
 
 export function publicRuleProvider(provider: RuleProvider): RuleProvider {
-  const config = { ...provider.config };
-  delete config.url;
-  delete config.headers;
+  const config = withoutSourceCredentials(provider.config);
   const native = provider.clientOptions?.shadowrocket;
   if (!native) return { ...provider, config };
   const { sourceUrl, ...visible } = native;

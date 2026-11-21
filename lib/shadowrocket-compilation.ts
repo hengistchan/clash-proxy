@@ -1,21 +1,21 @@
 import type Database from 'better-sqlite3';
 import { encryptJson } from './crypto';
 import { compileShadowrocket, SHADOWROCKET_COMPILER_VERSION, type ShadowrocketArtifact } from './shadowrocket';
-import type { Snapshot, ValidationIssue } from './types';
+import type { Snapshot, ValidationIssue, ValidationResult } from './types';
 
 export function shadowrocketCompiledRevision(db: Database.Database, profileId: number) {
   const row = db.prepare('SELECT revision FROM shadowrocket_compilations WHERE profile_id = ?').get(profileId) as { revision: number | null } | undefined;
   return row?.revision ?? null;
 }
 
-export function refreshShadowrocketConfig(db: Database.Database, snapshot: Snapshot) {
+export function refreshShadowrocketConfig(db: Database.Database, snapshot: Snapshot, validation?: ValidationResult) {
   const { id, revision } = snapshot.profile;
   const previous = db.prepare('SELECT checked_revision, compiler_version FROM shadowrocket_compilations WHERE profile_id = ?')
     .get(id) as { checked_revision: number; compiler_version: number } | undefined;
   if (previous && (previous.checked_revision > revision ||
     (previous.checked_revision === revision && previous.compiler_version >= SHADOWROCKET_COMPILER_VERSION))) return;
 
-  const { artifact, issues, sources } = compileShadowrocket(snapshot);
+  const { artifact, issues, sources } = compileShadowrocket(snapshot, undefined, validation);
   // Record the new diagnostics independently of the last successful device artifact.
   db.prepare(`INSERT INTO shadowrocket_compilations
       (profile_id, checked_revision, compiler_version, issues_json, remote_sources, revision, artifact_version, artifact_ciphertext, created_at)

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { ZodError } from 'zod';
+import { reportServiceFailure } from './telemetry';
 
 import type { ValidationIssue } from './types';
 
@@ -38,10 +39,10 @@ export function jsonError(error: unknown): NextResponse {
       { status: 400 }
     );
   }
-  console.error('Configuration service request failed');
+  const requestId = reportServiceFailure(error);
   return NextResponse.json(
-    { detail: 'The configuration service could not complete the request.' },
-    { status: 500 }
+    { detail: 'The configuration service could not complete the request.', requestId },
+    { status: 500, headers: { 'X-Request-ID': requestId } }
   );
 }
 

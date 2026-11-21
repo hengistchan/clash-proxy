@@ -17,9 +17,13 @@ export function stashTargetIssues(snapshot: Snapshot): ValidationIssue[] {
 
 export function yamlTargetIssues(snapshot: Snapshot, target: 'stash' | 'mihomo'): ValidationIssue[] {
   const label = target === 'stash' ? 'Stash' : 'Mihomo';
-  if (snapshot.profile.clientOptions?.shadowrocket?.native !== true) return [];
+  const inlineIssues: ValidationIssue[] = target === 'stash' ? snapshot.proxyProviders.filter(provider => provider.sourceType === 'inline').map(provider => ({
+    severity: 'error', code: 'stash.inline-proxy-source', message: '内联代理源使用 Mihomo 格式；请将节点移到直接节点，或改用远程／本地代理源后交付给 Stash。', resource: 'proxy-provider', resourceId: provider.id
+  })) : [];
+  if (target === 'stash') inlineIssues.push(...snapshot.ruleProviders.filter(provider => provider.providerType === 'inline' && provider.behavior === 'classical').map(provider => ({ severity: 'error' as const, code: 'rule-provider.inline-behavior', message: 'Stash 内联规则集支持 domain 和 ipcidr；classical 请改为远程或本地规则集。', resource: 'rule-provider', resourceId: provider.id })));
+  if (snapshot.profile.clientOptions?.shadowrocket?.native !== true) return inlineIssues;
   const options = snapshot.profile.clientOptions.shadowrocket;
-  const issues: ValidationIssue[] = [];
+  const issues: ValidationIssue[] = [...inlineIssues];
   const add = (message: string, resource?: string, resourceId?: number) => issues.push({
     severity: 'error', code: `${target}.shadowrocket-native`, message, resource, resourceId
   });
@@ -79,8 +83,7 @@ function mergeObject(
   } as JsonObject;
 }
 
-export function buildConfigObject(snapshot: Snapshot) {
-  const validation = validateSnapshot(snapshot);
+export function buildConfigObject(snapshot: Snapshot, validation = validateSnapshot(snapshot)) {
   const nativeIssues = stashTargetIssues(snapshot);
   if (nativeIssues.length) throw new HttpError(409, 'Stash compatibility check failed', nativeIssues);
   if (!validation.valid) {
@@ -162,8 +165,8 @@ export function assembleYamlConfig(snapshot: Snapshot) {
   return { config, ...(sources.length ? { proxyRewrites: { profileId: snapshot.profile.id, sources } } : {}) };
 }
 
-export function exportProfile(snapshot: Snapshot): ExportResult {
-  const { config, validation, proxyRewrites } = buildConfigObject(snapshot);
+export function exportProfile(snapshot: Snapshot, checked?: ExportResult['validation']): ExportResult {
+  const { config, validation, proxyRewrites } = buildConfigObject(snapshot, checked);
   return {
     ...serializeYamlConfig(config, `config-${snapshot.profile.id}.yaml`, validation),
     compilerVersion: CONFIG_COMPILER_VERSION,

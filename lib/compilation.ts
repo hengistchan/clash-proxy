@@ -1,5 +1,7 @@
 import type Database from 'better-sqlite3';
-import type { Snapshot } from './types';
+import type { Snapshot, ValidationResult } from './types';
+import { validateSnapshot } from './validation';
+import { recordOperation } from './telemetry';
 import { configTargetIds, type ConfigTarget } from './config-targets';
 import { refreshStashConfig, stashCompiledRevision } from './stash-compilation';
 import { refreshShadowrocketConfig, shadowrocketCompiledRevision } from './shadowrocket-compilation';
@@ -7,7 +9,7 @@ import { refreshShadowrocketConfig, shadowrocketCompiledRevision } from './shado
 import { refreshMihomoConfig, mihomoCompiledRevision } from './mihomo-compilation';
 
 interface CompileAdapter {
-  refresh(db: Database.Database, snapshot: Snapshot): void;
+  refresh(db: Database.Database, snapshot: Snapshot, validation?: ValidationResult): void;
   protectedRevision(db: Database.Database, profileId: number): number | null;
 }
 
@@ -19,7 +21,13 @@ const compilers = {
 
 /** Each adapter owns its validation and publishes only a successful artifact. */
 export function refreshCompiledConfig(db: Database.Database, snapshot: Snapshot) {
-  for (const target of configTargetIds) compilers[target].refresh(db, snapshot);
+  const validation = validateSnapshot(snapshot);
+  for (const target of configTargetIds) {
+    const started = performance.now();
+    let success = false;
+    try { compilers[target].refresh(db, snapshot, validation); success = compilers[target].protectedRevision(db, snapshot.profile.id) === snapshot.profile.revision; }
+    finally { recordOperation(`compile.${target}`, performance.now() - started, success); }
+  }
 }
 
 export function protectedCompiledRevisions(db: Database.Database, profileId: number) {

@@ -49,6 +49,7 @@ export interface ConfigDeliveryStatus {
   remoteCheckedAt?: number | null;
   managedSources?: Array<{ id: number; name: string; state: 'pending' | 'ready' | 'stale' | 'failed' | 'revoked'; lastAttempt: number | null; lastSuccess: number | null }>;
   publications?: Array<{ id: number; revision: number; publishedAt: string }>;
+  candidateSources?: { state: 'none' | 'pending' | 'ready' | 'failed' | 'stale'; checkedAt: number | null; sources: Array<{ id: number; name: string; state: 'pending' | 'ready' | 'failed' }> };
 }
 
 export function configTargetApi(profileId: number, target: ConfigTarget) {
