@@ -91,6 +91,18 @@ export function buildResourceGraph(snapshot: Snapshot): ResourceGraph {
     if (!edges.some((e) => e.from === from && e.to === to && e.label === label))
       edges.push({ from, to, label });
   };
+  for (const proxy of snapshot.proxies) {
+    if (typeof proxy.config['dialer-proxy'] === 'string' && proxy.config['dialer-proxy'].trim()) {
+      const target = proxy.config['dialer-proxy'].trim();
+      link(resourceKey('proxies', proxy.id), policy.get(target) || missing(target, '前置代理'), '链式前置');
+    }
+  }
+  for (const provider of snapshot.proxyProviders) {
+    if (typeof provider.config['dialer-proxy'] === 'string' && provider.config['dialer-proxy'].trim()) {
+      const target = provider.config['dialer-proxy'].trim();
+      link(resourceKey('proxy-providers', provider.id), policy.get(target) || missing(target, '前置代理'), '链式前置');
+    }
+  }
   for (const group of snapshot.proxyGroups) {
     const from = resourceKey('proxy-groups', group.id);
     if (Array.isArray(group.config.proxies))

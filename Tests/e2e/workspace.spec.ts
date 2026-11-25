@@ -521,7 +521,7 @@ test('edits remote proxy rewrites, previews the draft, and downloads a managed S
   await navigate(page, '代理源');
   await page.getByRole('button', { name: '编辑 fixture-source', exact: true }).click();
   const editor = page.getByRole('dialog', { name: '编辑代理源' });
-  await editor.getByText('节点改写 · Stash', { exact: true }).click();
+  await editor.getByText('节点改写', { exact: true }).click();
   await editor.getByRole('button', { name: '添加改写规则', exact: true }).click();
   await editor.getByLabel('节点名称正则').fill('^HK-');
   await editor.getByLabel('协议类型（可选）').fill('ss');
@@ -907,4 +907,26 @@ test('manual publication exposes a separate candidate-source check and keeps dev
     headers: { ...headers, 'If-Match': `"${current.profile.revision}"` },
     data: { action: 'publish', expectedMode: 'manual', expectedPublicationId: (await manual.json()).targets.stash.publicationId }
   })).status()).toBe(409);
+});
+
+test('Stash overrides view installs starter tiles, issues a tokenized download link, and revokes it', async ({ page, request }) => {
+  const initial = await create(request, 'stash-overrides-e2e', 'rules: ["MATCH,DIRECT"]');
+  await login(page, initial);
+  await navigate(page, 'Stash 覆写');
+  await page.getByRole('button', { name: '导入磁贴模板（AI 解锁 + IP 纯净度）' }).click();
+  await expect(page.getByText('stash-tiles.stoverride')).toBeVisible();
+  await page.getByRole('button', { name: '生成订阅链接', exact: true }).click();
+  await page.getByRole('dialog', { name: '生成覆写订阅链接？' }).getByRole('button', { name: '确认', exact: true }).click();
+  const urlLine = page.locator('p.delivery-note.mono').filter({ hasText: 'stash-tiles.stoverride' }).first();
+  await expect(urlLine).toBeVisible();
+  const downloadUrl = (await urlLine.textContent())!.trim();
+  const fetched = await request.get(downloadUrl);
+  expect(fetched.status()).toBe(200);
+  const body = await fetched.text();
+  expect(body).toContain('tiles:');
+  expect(body).not.toContain('{{BASE_URL}}');
+  await page.getByRole('button', { name: '撤销链接', exact: true }).click();
+  await page.getByRole('dialog', { name: '撤销覆写订阅链接？' }).getByRole('button', { name: '确认', exact: true }).click();
+  await expect(urlLine).toHaveCount(0);
+  expect((await request.get(downloadUrl)).status()).toBe(404);
 });

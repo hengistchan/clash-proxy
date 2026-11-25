@@ -1,15 +1,17 @@
 import { posix, win32 } from 'node:path';
 import { isIP } from 'node:net';
-import { assembleYamlConfig, serializeYamlConfig, yamlTargetIssues, type ExportResult } from './exporter';
+import { STASH_SECTIONS } from './client-capabilities';
+import { applyTargetOverrides, assembleYamlConfig, serializeYamlConfig, yamlTargetIssues, type ExportResult } from './exporter';
 import { isLogicalRuleType, splitTopLevel } from './rules';
 import { validateSnapshot } from './validation';
 import { publicGitHubRuleUrl } from './public-rule-mirror';
 import { isJsonObject, type JsonObject, type Snapshot, type ValidationIssue } from './types';
 
-const STASH_SECTIONS = ['http', 'cron', 'script', 'script-providers'];
+const STASH_SECTION_SET = new Set<string>(STASH_SECTIONS);
 const STASH_RULES = new Set(['SCRIPT', 'USER-AGENT', 'URL-REGEX', 'PROTOCOL']);
 const INBOUND_KEYS = ['port', 'socks-port', 'mixed-port', 'redir-port', 'tproxy-port', 'listeners'];
 const GITHUB_RULE_HOST = 'raw.githubusercontent.com';
+const PRIVATE_DNS_PATTERNS = new Set(['geosite:private', '*.lan', '*.local', '+.home.arpa', '+.miwifi.com']);
 
 function httpsUrl(value: JsonObject[string]): URL | undefined {
   if (typeof value !== 'string' || !URL.canParse(value)) return;
@@ -71,11 +73,20 @@ function mihomoCondition(type: string, payload: string, providers: Set<string>, 
 
 export function compileMihomo(snapshot: Snapshot, checked?: ExportResult['validation']): { artifact: ExportResult | null; issues: ValidationIssue[] } {
   const enabled = snapshot.rules.filter(rule => rule.enabled);
-  const omitted = snapshot.advancedSections.filter(section => STASH_SECTIONS.includes(section.key));
+  const omitted = snapshot.advancedSections.filter(section => STASH_SECTION_SET.has(section.key));
+  const warnings: ValidationIssue[] = [];
+  const omittedSsidGroups: string[] = [];
   const compatible = {
     ...snapshot,
     rules: enabled,
-    advancedSections: snapshot.advancedSections.filter(section => !STASH_SECTIONS.includes(section.key))
+    proxyGroups: snapshot.proxyGroups.map(group => {
+      if (!Object.hasOwn(group.config, 'ssid-policy')) return group;
+      omittedSsidGroups.push(group.name);
+      const nextConfig = { ...group.config };
+      delete nextConfig['ssid-policy'];
+      return { ...group, config: nextConfig };
+    }),
+    advancedSections: snapshot.advancedSections.filter(section => !STASH_SECTION_SET.has(section.key))
   };
   const validation = checked && enabled.length === snapshot.rules.length ? checked : validateSnapshot({ ...snapshot, rules: enabled });
   const issues = [...validation.issues.filter(issue => issue.severity === 'error'), ...yamlTargetIssues(compatible, 'mihomo')];
@@ -94,12 +105,12 @@ export function compileMihomo(snapshot: Snapshot, checked?: ExportResult['valida
     const [type, payload] = condition;
     return { ...rule, type, payload };
   });
-  for (const group of snapshot.proxyGroups) {
+  for (const group of compatible.proxyGroups) {
     if (group.type === 'relay') {
       error('relay', 'Mihomo 已移除 relay 策略组；请用节点的 dialer-proxy 表达链路。', 'proxy-group', group.id);
     }
-    if (['use-url', 'ssid-policy', 'dialer-proxy', 'interface-name', 'routing-mark'].some(key => Object.hasOwn(group.config, key))) {
-      error('group-option', '此策略组含 Mihomo 不支持的组设置（use-url、ssid-policy、dialer-proxy、interface-name 或 routing-mark）。', 'proxy-group', group.id);
+    if (['use-url', 'dialer-proxy', 'interface-name', 'routing-mark'].some(key => Object.hasOwn(group.config, key))) {
+      error('group-option', '此策略组含 Mihomo 不支持的组设置（use-url、dialer-proxy、interface-name 或 routing-mark）。', 'proxy-group', group.id);
     }
     if (![group.config.proxies, group.config.use].some(value => Array.isArray(value) && value.length > 0) &&
         !['include-all', 'include-all-proxies', 'include-all-providers'].some(key => group.config[key] === true)) {
@@ -108,7 +119,8 @@ export function compileMihomo(snapshot: Snapshot, checked?: ExportResult['valida
   }
   if (issues.length) return blocked();
 
-  const { config, proxyRewrites } = assembleYamlConfig(compatible);
+  const { config, proxyRewrites } = assembleYamlConfig(compatible, 'mihomo');
+  applyTargetOverrides(config, 'mihomo', snapshot.profile.clientOptions);
   const managedSources = new Map(proxyRewrites?.sources.map(source => [source.id, source]));
   const seenPaths = new Set<string>();
 
@@ -198,6 +210,21 @@ export function compileMihomo(snapshot: Snapshot, checked?: ExportResult['valida
     error('dns-resolver', '启用 DNS 分流时，请为 Mihomo 配置 proxy-server-nameserver，以独立解析代理节点域名。', 'settings');
   }
   if (Object.keys(dns).length && dns.enable === undefined) dns.enable = true;
+  if (isJsonObject(dns['nameserver-policy'])) {
+    const looped = Object.entries(dns['nameserver-policy']).filter(([pattern, resolver]) => {
+      if (!PRIVATE_DNS_PATTERNS.has(pattern.toLowerCase())) return false;
+      const list = Array.isArray(resolver) ? resolver.map(String) : [String(resolver)];
+      return list.some(item => item.trim().toLowerCase() === 'system');
+    }).map(([pattern]) => pattern);
+    if (looped.length) {
+      warnings.push({
+        severity: 'warning',
+        code: 'mihomo.dns-private-system',
+        message: `Mihomo 的 DNS 策略中 ${looped.join('、')} 指向 system；在 Clash Verge TUN 接管系统 DNS 为 127.0.0.1 时可能触发 5 秒自环超时，建议在 Mihomo 专属覆盖中改用 dhcp://en0 或路由器 IP。`,
+        resource: 'settings'
+      });
+    }
+  }
   config.dns = dns;
   if (!INBOUND_KEYS.some(key => Object.hasOwn(config, key)) && !(isJsonObject(config.tun) && config.tun.enable === true)) {
     config['mixed-port'] = 7890;
@@ -205,17 +232,28 @@ export function compileMihomo(snapshot: Snapshot, checked?: ExportResult['valida
   if (issues.length) return blocked();
 
   const comments = ['Clash configuration for Mihomo'];
-  if (omitted.length) comments.push(`未迁移的 Stash 专用区块：${omitted.map(section => section.key).join('、')}`);
+  if (omitted.length) {
+    comments.push(`未迁移的 Stash 专用区块：${omitted.map(section => section.key).join('、')}`);
+    warnings.push({
+      severity: 'warning',
+      code: 'mihomo.omitted-sections',
+      message: `未迁移的 Stash 专用区块：${omitted.map(section => section.key).join('、')}`
+    });
+  }
+  if (omittedSsidGroups.length) {
+    comments.push(`已省略 Mihomo 不支持的 ssid-policy 策略组：${omittedSsidGroups.join('、')}`);
+    warnings.push({
+      severity: 'warning',
+      code: 'mihomo.omitted-group-options',
+      message: `已省略策略组中的 ssid-policy（Mihomo 不支持）：${omittedSsidGroups.join('、')}`
+    });
+  }
   return {
     artifact: {
       ...serializeYamlConfig(config, `mihomo-${snapshot.profile.id}.yaml`, validation, comments),
       ...(proxyRewrites ? { proxyRewrites } : {}),
       ...(publicRules.length ? { publicRules } : {})
     },
-    issues: omitted.length ? [{
-      severity: 'warning',
-      code: 'mihomo.omitted-sections',
-      message: `未迁移的 Stash 专用区块：${omitted.map(section => section.key).join('、')}`
-    }] : []
+    issues: warnings
   };
 }

@@ -11,7 +11,12 @@ export type ProxyGroupType =
   | 'load-balance'
   | 'relay';
 export type RuleProviderType = 'inline' | 'remote' | 'local';
-export type ClientOptions = { shadowrocket?: JsonObject };
+export type YamlClientTarget = 'stash' | 'mihomo';
+export type ClientOptions = {
+  shadowrocket?: JsonObject;
+  stash?: JsonObject;
+  mihomo?: JsonObject;
+};
 export const SHADOWROCKET_BUILTINS = ['PROXY', 'REJECT-NO-DROP', 'REJECT-TINYGIF', 'REJECT-DICT', 'REJECT-ARRAY', 'REJECT-200'] as const;
 
 export interface Profile {
@@ -57,6 +62,7 @@ export interface ProxyRewriteRule {
   operation: 'fill' | 'set';
   field: string;
   value: ProxyRewriteValue;
+  targets?: YamlClientTarget[];
 }
 
 export interface ProxyGroup {

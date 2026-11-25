@@ -85,9 +85,17 @@ test('v8 upgrade adds inspection tables without changing resources or an existin
   const snapshot = getSnapshot(profile.id);
   const token = rotateDownloadLink(profile.id).subscriptionPath!.split('/')[3];
   const artifact = configForToken(token);
-  getDb().exec('DROP TABLE candidate_source_checks; DROP TABLE rule_source_checks; PRAGMA user_version = 8;');
+  getDb().exec(`
+    DROP TABLE stash_override_links;
+    DROP TABLE stash_overrides;
+    DROP TABLE candidate_source_checks;
+    DROP TABLE rule_source_checks;
+    ALTER TABLE managed_proxy_source_cache DROP COLUMN userinfo_ciphertext;
+    ALTER TABLE mihomo_proxy_source_cache DROP COLUMN userinfo_ciphertext;
+    PRAGMA user_version = 8;
+  `);
   closeDbForTests(); resetRepositoryForTests();
-  assert.equal(getDb().pragma('user_version', { simple: true }), 9);
+  assert.equal(getDb().pragma('user_version', { simple: true }), 10);
   assert.deepEqual(getSnapshot(profile.id), snapshot);
   assert.deepEqual(configForToken(token), artifact);
   assert.deepEqual(getDb().pragma('foreign_key_check'), []);
@@ -197,7 +205,7 @@ test('online backups include WAL writes and the matching key, verify decryptabil
   assert.equal(run('restore', destination, restored).status, 0);
   assert.equal(run('restore', destination, restored).status, 1);
   const manifest = JSON.parse(readFileSync(join(destination, 'manifest.json'), 'utf8'));
-  assert.equal(manifest.schemaVersion, 9);
+  assert.equal(manifest.schemaVersion, 10);
   const key = join(destination, ['stash', 'config'].join('-') + '.sqlite3.key');
   writeFileSync(key, Buffer.alloc(32));
   manifest.keySha256 = createHash('sha256').update(Buffer.alloc(32)).digest('hex');

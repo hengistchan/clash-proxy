@@ -9,7 +9,7 @@ import type { ExportResult } from './exporter';
 import { managedSourceTables, sourceCapability, verifySourceCapability, type ManagedSourceTarget } from './managed-source-access';
 import { HttpError } from './http';
 import { transformProxySource } from './proxy-source-transform';
-import { downloadSource, type SourceDownload } from './upstream-download';
+import { downloadSourceWithMetadata, type SourceDownloadWithMeta, type SubscriptionUserinfo } from './upstream-download';
 import { publicGitHubRuleUrl, ruleMirrorCapability } from './public-rule-mirror';
 
 const RETRY_MS = 60_000;
@@ -52,11 +52,12 @@ interface CacheRow {
   successful_fingerprint: string | null;
   successful_at: number | null;
   yaml_ciphertext: string | null;
+  userinfo_ciphertext: string | null;
 }
 
 const inFlight = new Map<string, Promise<void>>();
 
-export async function managedProxySource(capability: string, fetchSource: SourceDownload = downloadSource, now = Date.now) {
+export async function managedProxySource(capability: string, fetchSource: SourceDownloadWithMeta = downloadSourceWithMetadata, now = Date.now) {
   const { profileId, providerId, target, source } = resolveSource(capability);
   const { sourceKey, specKey } = sourceFingerprints(source);
   const db = getDb();
@@ -80,8 +81,11 @@ export async function managedProxySource(capability: string, fetchSource: Source
     } else if (!pending) {
       pending = (async () => {
         let yaml: string | undefined;
+        let userinfo: SubscriptionUserinfo | undefined;
         try {
-          const text = await fetchSource(source.upstream, AbortSignal.timeout(12_000));
+          const fetched = await fetchSource(source.upstream, AbortSignal.timeout(12_000));
+          const text = typeof fetched === 'string' ? fetched : fetched.text;
+          userinfo = typeof fetched === 'string' ? undefined : fetched.userinfo;
           yaml = transformProxySource(text, source.rules).yaml;
         } catch {
           // Neither parser errors nor upstream errors are safe to expose.
@@ -89,8 +93,8 @@ export async function managedProxySource(capability: string, fetchSource: Source
         db.transaction(() => {
           if (!current()) throw new HttpError(503, 'Proxy source changed during refresh; try again shortly');
           db.prepare(`INSERT INTO ${cache}
-            (profile_id, provider_id, source_fingerprint, attempt_fingerprint, attempted_at, successful_fingerprint, successful_at, yaml_ciphertext)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (profile_id, provider_id, source_fingerprint, attempt_fingerprint, attempted_at, successful_fingerprint, successful_at, yaml_ciphertext, userinfo_ciphertext)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(profile_id, provider_id) DO UPDATE SET
               source_fingerprint = excluded.source_fingerprint,
               attempt_fingerprint = excluded.attempt_fingerprint, attempted_at = excluded.attempted_at,
@@ -99,9 +103,16 @@ export async function managedProxySource(capability: string, fetchSource: Source
               successful_at = CASE WHEN excluded.yaml_ciphertext IS NULL AND source_fingerprint = excluded.source_fingerprint
                 THEN successful_at ELSE excluded.successful_at END,
               yaml_ciphertext = CASE WHEN excluded.yaml_ciphertext IS NULL AND source_fingerprint = excluded.source_fingerprint
-                THEN yaml_ciphertext ELSE excluded.yaml_ciphertext END
+                THEN yaml_ciphertext ELSE excluded.yaml_ciphertext END,
+              userinfo_ciphertext = CASE WHEN excluded.yaml_ciphertext IS NULL AND source_fingerprint = excluded.source_fingerprint
+                THEN userinfo_ciphertext ELSE excluded.userinfo_ciphertext END
             WHERE excluded.attempted_at >= attempted_at`)
-            .run(profileId, providerId, sourceKey, specKey, attemptAt, yaml ? specKey : null, yaml ? attemptAt : null, yaml ? encryptJson(yaml) : null);
+            .run(
+              profileId, providerId, sourceKey, specKey, attemptAt,
+              yaml ? specKey : null, yaml ? attemptAt : null,
+              yaml ? encryptJson(yaml) : null,
+              yaml && userinfo ? encryptJson(userinfo as unknown as Record<string, number>) : null
+            );
         }).immediate();
       })().finally(() => inFlight.delete(key));
       inFlight.set(key, pending);
@@ -113,6 +124,11 @@ export async function managedProxySource(capability: string, fetchSource: Source
     const saved = read();
     if (saved?.source_fingerprint !== sourceKey || !saved.yaml_ciphertext)
       throw new HttpError(502, 'No successfully transformed proxy source is available');
-    return { yaml: decryptJson<string>(saved.yaml_ciphertext), stale: deferred || saved.successful_fingerprint !== specKey || saved.successful_at !== saved.attempted_at };
+    const userinfo = saved.userinfo_ciphertext ? decryptJson<SubscriptionUserinfo>(saved.userinfo_ciphertext) : undefined;
+    return {
+      yaml: decryptJson<string>(saved.yaml_ciphertext),
+      stale: deferred || saved.successful_fingerprint !== specKey || saved.successful_at !== saved.attempted_at,
+      ...(userinfo ? { userinfo } : {})
+    };
   })();
 }

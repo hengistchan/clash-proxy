@@ -3,14 +3,15 @@ import { HttpError } from './http';
 import { providerConfig } from './proxy-repository';
 import { getCompilationSnapshot } from './repository';
 import { proxyProviderSchema, proxyRewriteRulesSchema } from './schemas';
-import { transformProxySource, validateProxyRewrites } from './proxy-source-transform';
+import { analyzeProxyGroupCoverage, transformProxySource, validateProxyRewrites } from './proxy-source-transform';
 import { downloadSource, PrivateSourceAddressError, type SourceDownload } from './upstream-download';
 
 export const proxySourcePreviewSchema = proxyProviderSchema.pick({
   config: true, sourceUrl: true, sourceHeaders: true, clearSource: true, clearHeaders: true
 }).extend({
   providerId: z.number().int().positive().optional(),
-  rewriteRules: proxyRewriteRulesSchema.min(1)
+  providerName: z.string().trim().max(160).optional(),
+  rewriteRules: proxyRewriteRulesSchema.default([])
 });
 
 let active = 0;
@@ -34,7 +35,13 @@ export async function previewProxySource(
       throw new HttpError(502, '无法下载代理源。请检查订阅地址、认证请求头或服务端网络。');
     }
     try {
-      return transformProxySource(body, input.rewriteRules).preview;
+      const transformed = transformProxySource(body, input.rewriteRules);
+      const targetName = existing?.name ?? input.providerName;
+      const groupCoverage = analyzeProxyGroupCoverage(transformed.nodeNames, snapshot.proxyGroups, targetName);
+      return {
+        ...transformed.preview,
+        ...(groupCoverage.groups.length ? { groupCoverage } : {})
+      };
     } catch {
       throw new HttpError(502, '代理源必须是包含非空 proxies 列表的 Stash / Clash YAML，且不能超过大小限制。');
     }

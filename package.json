@@ -5,6 +5,7 @@
   "scripts": {
     "backup": "node Scripts/manage-backup.mjs",
     "benchmark": "tsx Scripts/benchmark-config.ts",
+    "devices:check": "node Scripts/check-devices.mjs",
     "dev": "node Scripts/start-development.mjs",
     "prebuild": "node Scripts/check-build-data.mjs",
     "build": "next build",

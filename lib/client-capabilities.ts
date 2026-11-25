@@ -1,6 +1,7 @@
 /** Shared by import classification, editors and compiler diagnostics. */
 export const CONFIG_FORMAT_LABELS = { stash: 'Stash YAML', mihomo: 'Clash (Mihomo) YAML', shadowrocket: 'Shadowrocket .conf' } as const;
 export const SHADOWROCKET_NODE_TYPES = ['ss', 'socks5', 'http', 'trojan', 'vmess'] as const;
+export const STASH_SECTIONS = ['http', 'cron', 'script', 'script-providers', 'tiles'] as const;
 export const MIHOMO_SECTIONS = ['tun', 'sniffer', 'listeners', 'geodata-mode', 'geox-url', 'profile', 'external-controller', 'external-ui', 'secret'] as const;
 export const PROXY_SOURCE_OPTIONS = [
   { value: 'remote', label: '远程订阅（加密保存 URL）' },

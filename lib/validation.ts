@@ -171,9 +171,42 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
         proxy.id
       );
     }
+    const dialer = typeof proxy.config['dialer-proxy'] === 'string' ? proxy.config['dialer-proxy'].trim() : '';
+    if (dialer) {
+      if (dialer === proxy.name) {
+        issue(
+          issues,
+          'error',
+          'proxy.dialer-self',
+          `Direct proxy “${proxy.name}” cannot use itself as dialer-proxy`,
+          'proxy',
+          proxy.id
+        );
+      } else if (!policyNames.has(dialer)) {
+        issue(
+          issues,
+          'error',
+          'proxy.dialer-missing',
+          `Direct proxy “${proxy.name}” dialer-proxy references missing policy “${dialer}”`,
+          'proxy',
+          proxy.id
+        );
+      }
+    }
   }
 
   for (const provider of snapshot.proxyProviders) {
+    const providerDialer = typeof provider.config['dialer-proxy'] === 'string' ? provider.config['dialer-proxy'].trim() : '';
+    if (providerDialer && !policyNames.has(providerDialer)) {
+      issue(
+        issues,
+        'error',
+        'proxy-provider.dialer-missing',
+        `代理源 “${provider.name}” 的 dialer-proxy 引用了不存在的策略 “${providerDialer}”。`,
+        'proxy-provider',
+        provider.id
+      );
+    }
     if (provider.sourceType === 'inline') {
       const payload = provider.config.payload;
       if (!Array.isArray(payload) || !payload.length || payload.length > 2000 || !payload.every(node => isJsonObject(node) && typeof node.name === 'string' && node.name.trim() && typeof node.type === 'string' && node.type.trim())) {
@@ -527,9 +560,14 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
         );
       }
     }
+    const classicalRuleProviderNames = new Set(
+      snapshot.ruleProviders
+        .filter((provider) => provider.behavior === 'classical')
+        .map((provider) => provider.name)
+    );
     const noResolveSupported =
       IP_RULE_TYPES.has(rule.type) ||
-      (rule.type === 'RULE-SET' && ipRuleProviderNames.has(rule.payload));
+      (rule.type === 'RULE-SET' && (ipRuleProviderNames.has(rule.payload) || classicalRuleProviderNames.has(rule.payload)));
     if (rule.options.includes('no-resolve') && !noResolveSupported) {
       issue(
         issues,
@@ -683,6 +721,110 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
           section.id
         );
       }
+    }
+  }
+
+  const dns = isJsonObject(snapshot.profile.settings.dns) ? snapshot.profile.settings.dns : {};
+  const mihomoDns = isJsonObject(snapshot.profile.clientOptions?.mihomo) && isJsonObject(snapshot.profile.clientOptions.mihomo.dns)
+    ? snapshot.profile.clientOptions.mihomo.dns
+    : {};
+  const overseasResolvers = [
+    '8.8.8.8', '8.8.4.4', '1.1.1.1', '1.0.0.1', '9.9.9.9',
+    'dns.google', 'cloudflare-dns.com', 'dns.quad9.net'
+  ];
+  const nameservers = Array.isArray(dns.nameserver) ? dns.nameserver.map(String) : [];
+  const usesOverseasDns = nameservers.some((entry) =>
+    overseasResolvers.some((resolver) => entry.toLowerCase().includes(resolver))
+  );
+  const followsRules = dns['follow-rule'] === true || dns['respect-rules'] === true;
+  const hasDirectNameserver =
+    (Array.isArray(dns['direct-nameserver']) && dns['direct-nameserver'].length > 0) ||
+    (Array.isArray(mihomoDns['direct-nameserver']) && mihomoDns['direct-nameserver'].length > 0);
+  if (usesOverseasDns && followsRules && !hasDirectNameserver) {
+    const providerMap = new Map(snapshot.ruleProviders.map((provider) => [provider.name, provider]));
+    const uncoveredDirect = [...new Set(
+      snapshot.rules
+        .filter((rule) => rule.enabled && rule.type === 'RULE-SET' && rule.policy === 'DIRECT')
+        .map((rule) => rule.payload)
+        .filter((name) => {
+          const provider = providerMap.get(name);
+          return provider && provider.behavior !== 'ipcidr' && !dnsReferences.has(name);
+        })
+    )];
+    if (uncoveredDirect.length) {
+      issue(
+        issues,
+        'warning',
+        'dns.direct-overseas-resolver',
+        `直连规则集 ${uncoveredDirect.slice(0, 5).join('、')} 未配置国内 nameserver-policy 或 direct-nameserver，在海外上游 DNS 下可能解析到海外 CDN 导致直连变慢。`,
+        'settings'
+      );
+    }
+  }
+  if (
+    snapshot.profile.ipv6 === true &&
+    typeof dns['fake-ip-range'] === 'string' &&
+    dns['fake-ip-range'].trim().length > 0 &&
+    dns.ipv6 !== false &&
+    mihomoDns.ipv6 !== false
+  ) {
+    issue(
+      issues,
+      'info',
+      'dns.fake-ip-ipv6',
+      '顶层已开启 ipv6 且未显式关闭 dns.ipv6；在无原生公网 IPv6 的宽带环境中，Fake-IP 伪造 AAAA 可能导致直连回退延迟或代理 IPv6 风控，跨环境建议保留 ipv6: true 并设 dns.ipv6: false。',
+      'settings'
+    );
+  }
+
+  const usedRuleProviders = new Set<string>(dnsReferences);
+  for (const rule of snapshot.rules) {
+    if (rule.enabled && rule.type === 'RULE-SET') usedRuleProviders.add(rule.payload);
+  }
+  for (const section of snapshot.advancedSections) {
+    scanRuleSetReferences(section.value, usedRuleProviders);
+  }
+  for (const provider of snapshot.ruleProviders) {
+    if (!usedRuleProviders.has(provider.name)) {
+      issue(
+        issues,
+        'info',
+        'rule-provider.unused',
+        `规则集 “${provider.displayName || provider.name}” 未被任何启用的路由规则、DNS 策略或高级区块引用。`,
+        'rule-provider',
+        provider.id
+      );
+    }
+  }
+
+  const usedGroups = new Set<string>();
+  for (const rule of snapshot.rules) {
+    if (rule.enabled) usedGroups.add(rule.policy);
+  }
+  for (const group of snapshot.proxyGroups) {
+    if (Array.isArray(group.config.proxies)) {
+      for (const member of group.config.proxies) usedGroups.add(String(member));
+    }
+    if (isJsonObject(group.config['ssid-policy'])) {
+      for (const target of Object.values(group.config['ssid-policy'])) usedGroups.add(String(target));
+    }
+  }
+  for (const proxy of snapshot.proxies) {
+    if (typeof proxy.config['dialer-proxy'] === 'string') usedGroups.add(proxy.config['dialer-proxy']);
+  }
+  for (const provider of snapshot.proxyProviders) {
+    if (typeof provider.config['dialer-proxy'] === 'string') usedGroups.add(provider.config['dialer-proxy']);
+  }
+  for (const group of snapshot.proxyGroups) {
+    if (!usedGroups.has(group.name)) {
+      issue(
+        issues,
+        'info',
+        'proxy-group.unused',
+        `策略组 “${group.name}” 未被任何启用的规则、其他策略组或 dialer-proxy 引用。`,
+        'proxy-group',
+        group.id
+      );
     }
   }
 

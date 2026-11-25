@@ -8,7 +8,38 @@ import { isJsonObject, type JsonObject } from './types';
 
 const MAX_BYTES = 2 * 1024 * 1024;
 type Address = { address: string; family: number };
-type DownloadResponse = { redirect: string } | { text: string };
+export interface SubscriptionUserinfo {
+  upload?: number;
+  download?: number;
+  total?: number;
+  expire?: number;
+}
+type DownloadResponse = { redirect: string } | { text: string; userinfo?: SubscriptionUserinfo };
+
+export function parseSubscriptionUserinfo(raw: string | string[] | undefined): SubscriptionUserinfo | undefined {
+  const text = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof text !== 'string' || !text.trim() || text.length > 512) return undefined;
+  const parsed: SubscriptionUserinfo = {};
+  for (const part of text.split(';')) {
+    const match = part.trim().match(/^(upload|download|total|expire)=(\d{1,18})$/i);
+    if (!match) continue;
+    const key = match[1].toLowerCase() as keyof SubscriptionUserinfo;
+    const value = Number(match[2]);
+    if (Number.isSafeInteger(value) && value >= 0) parsed[key] = value;
+  }
+  return Object.keys(parsed).length ? parsed : undefined;
+}
+
+export function formatSubscriptionUserinfo(info: SubscriptionUserinfo): string {
+  const entries: string[] = [];
+  for (const key of ['upload', 'download', 'total', 'expire'] as const) {
+    const value = info[key];
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+      entries.push(`${key}=${value}`);
+    }
+  }
+  return entries.join('; ');
+}
 const blocked = new BlockList();
 for (const [network, prefix] of [
   ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
@@ -135,8 +166,11 @@ async function get(target: URL, headers: Record<string, string | string[]>, sign
         else chunks.push(chunk);
       });
       response.on('end', () => {
-        try { resolve({ text: new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)) }); }
-        catch (error) { reject(error); }
+        try {
+          const text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
+          const userinfo = parseSubscriptionUserinfo(response.headers['subscription-userinfo']);
+          resolve(userinfo ? { text, userinfo } : { text });
+        } catch (error) { reject(error); }
       });
     });
     req.on('error', reject);
@@ -144,9 +178,11 @@ async function get(target: URL, headers: Record<string, string | string[]>, sign
   });
 }
 
+export type SourceDownloadResult = { text: string; userinfo?: SubscriptionUserinfo };
 export type SourceDownload = (config: JsonObject, signal: AbortSignal) => Promise<string>;
+export type SourceDownloadWithMeta = (config: JsonObject, signal: AbortSignal) => Promise<string | SourceDownloadResult>;
 
-const fetchSource: SourceDownload = async (config, signal) => {
+async function fetchSourceWithMeta(config: JsonObject, signal: AbortSignal): Promise<SourceDownloadResult> {
   if (typeof config.url !== 'string') throw new Error('Missing source URL');
   let target = new URL(validateSubscriptionUrl(config.url));
   const custom = sourceHeaders(config.headers);
@@ -159,7 +195,7 @@ const fetchSource: SourceDownload = async (config, signal) => {
   const headers = { 'user-agent': 'Stash Config Forge', ...custom, 'accept-encoding': 'identity' };
   for (let attempt = 0; attempt <= 3; attempt++) {
     const result = await get(target, headers, signal);
-    if ('text' in result) return result.text;
+    if ('text' in result) return result;
     const redirected = new URL(validateSubscriptionUrl(new URL(result.redirect, target).href));
     if (redirected.username || redirected.password ||
       (target.protocol === 'https:' && redirected.protocol !== 'https:') ||
@@ -167,11 +203,13 @@ const fetchSource: SourceDownload = async (config, signal) => {
     target = redirected;
   }
   throw new Error('Too many upstream redirects');
-};
+}
 
-export const downloadSource: SourceDownload = async (config, signal) => {
+export async function downloadSourceWithMetadata(config: JsonObject, signal: AbortSignal): Promise<SourceDownloadResult> {
   const started = performance.now();
   let success = false;
-  try { const text = await fetchSource(config, signal); success = true; return text; }
+  try { const result = await fetchSourceWithMeta(config, signal); success = true; return result; }
   finally { recordOperation('source.download', performance.now() - started, success); }
-};
+}
+
+export const downloadSource: SourceDownload = async (config, signal) => (await downloadSourceWithMetadata(config, signal)).text;

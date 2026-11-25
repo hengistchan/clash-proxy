@@ -67,9 +67,15 @@ export function storeResource(kind: StoredResourceKind, value: JsonValue, option
     delete result.extensions.stash.dns;
     result.common.dns = separate(value.dns, fields.dns);
   }
-  return options?.shadowrocket && Object.keys(options.shadowrocket).length
-    ? { ...result, extensions: { ...result.extensions, shadowrocket: options.shadowrocket } }
-    : result;
+  const nextExtensions: Record<string, JsonValue> = { ...result.extensions };
+  if (options?.shadowrocket && Object.keys(options.shadowrocket).length) {
+    nextExtensions.shadowrocket = options.shadowrocket;
+  }
+  const targetOverrides: Record<string, JsonValue> = {};
+  if (options?.stash && Object.keys(options.stash).length) targetOverrides.stash = options.stash;
+  if (options?.mihomo && Object.keys(options.mihomo).length) targetOverrides.mihomo = options.mihomo;
+  if (Object.keys(targetOverrides).length) nextExtensions.targetOverrides = targetOverrides;
+  return Object.keys(nextExtensions).length > 1 ? { ...result, extensions: nextExtensions } : result;
 }
 
 function projectResource(kind: StoredResourceKind, stored: JsonValue): JsonValue {
@@ -111,9 +117,14 @@ export function readNodeSourceRewriteRules(ciphertext: unknown) {
 }
 
 function clientOptionsOf(stored: JsonValue): ClientOptions | undefined {
-  if (isJsonObject(stored) && isJsonObject(stored.extensions) && isJsonObject(stored.extensions.shadowrocket)) {
-    return { shadowrocket: stored.extensions.shadowrocket };
+  if (!isJsonObject(stored) || !isJsonObject(stored.extensions)) return undefined;
+  const options: ClientOptions = {};
+  if (isJsonObject(stored.extensions.shadowrocket)) options.shadowrocket = stored.extensions.shadowrocket;
+  if (isJsonObject(stored.extensions.targetOverrides)) {
+    if (isJsonObject(stored.extensions.targetOverrides.stash)) options.stash = stored.extensions.targetOverrides.stash;
+    if (isJsonObject(stored.extensions.targetOverrides.mihomo)) options.mihomo = stored.extensions.targetOverrides.mihomo;
   }
+  return Object.keys(options).length ? options : undefined;
 }
 
 export function readClientOptions(ciphertext: unknown) {

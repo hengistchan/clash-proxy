@@ -35,6 +35,12 @@ function settingsDraft(snapshot: Snapshot) {
   const dns = isJsonObject(snapshot.profile.settings.dns)
     ? snapshot.profile.settings.dns
     : {};
+  const mihomoOverride = isJsonObject(snapshot.profile.clientOptions?.mihomo)
+    ? snapshot.profile.clientOptions.mihomo
+    : {};
+  const stashOverride = isJsonObject(snapshot.profile.clientOptions?.stash)
+    ? snapshot.profile.clientOptions.stash
+    : {};
   return {
     mode: snapshot.profile.mode,
     targetPlatform: snapshot.profile.targetPlatform,
@@ -48,7 +54,9 @@ function settingsDraft(snapshot: Snapshot) {
     fakeIpFilter: lines(dns['fake-ip-filter']),
     advancedDns: JSON.stringify(Object.fromEntries(
       Object.entries(dns).filter(([key]) => !MANAGED_DNS_KEYS.has(key))
-    ), null, 2)
+    ), null, 2),
+    mihomoOverride: JSON.stringify(mihomoOverride, null, 2),
+    stashOverride: JSON.stringify(stashOverride, null, 2)
   };
 }
 
@@ -77,6 +85,8 @@ export function SettingsView({
   const [fakeIpRange, setFakeIpRange] = useState('');
   const [fakeIpFilter, setFakeIpFilter] = useState('');
   const [advancedDns, setAdvancedDns] = useState('{}');
+  const [mihomoOverride, setMihomoOverride] = useState('{}');
+  const [stashOverride, setStashOverride] = useState('{}');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [conflict, setConflict] = useState(false);
@@ -84,7 +94,8 @@ export function SettingsView({
   const [baseline, setBaseline] = useState<string | null>(null);
   const fingerprint = JSON.stringify({
     mode, targetPlatform, logLevel, ipv6, nameserver, defaultNameserver,
-    proxyNameserver, fallback, fakeIpRange, fakeIpFilter, advancedDns
+    proxyNameserver, fallback, fakeIpRange, fakeIpFilter, advancedDns,
+    mihomoOverride, stashOverride
   });
   const dirty = baseline !== null && fingerprint !== baseline;
   const dirtyRef = useRef(dirty);
@@ -109,6 +120,8 @@ export function SettingsView({
     setFakeIpRange(draft.fakeIpRange);
     setFakeIpFilter(draft.fakeIpFilter);
     setAdvancedDns(draft.advancedDns);
+    setMihomoOverride(draft.mihomoOverride);
+    setStashOverride(draft.stashOverride);
     setBaseline(JSON.stringify(draft));
     setError('');
   }
@@ -139,6 +152,17 @@ export function SettingsView({
       if (!rest || typeof rest !== 'object' || Array.isArray(rest)) {
         throw new Error('DNS 高级配置必须是 JSON 对象');
       }
+      const parseOverride = (raw: string, label: string): JsonObject => {
+        let parsed: unknown = {};
+        try { parsed = JSON.parse(raw || '{}'); }
+        catch { throw new Error(`${label}不是合法 JSON`); }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error(`${label}必须是 JSON 对象`);
+        }
+        return parsed as JsonObject;
+      };
+      const mihomoParsed = parseOverride(mihomoOverride, 'Mihomo 专属覆盖');
+      const stashParsed = parseOverride(stashOverride, 'Stash 专属覆盖');
       const dns: JsonObject = {
         ...(rest as JsonObject),
         nameserver: splitLines(nameserver),
@@ -157,7 +181,11 @@ export function SettingsView({
           targetPlatform,
           logLevel,
           ipv6,
-          settings: { ...snapshot.profile.settings, dns }
+          settings: { ...snapshot.profile.settings, dns },
+          clientOptions: {
+            ...(Object.keys(mihomoParsed).length ? { mihomo: mihomoParsed } : {}),
+            ...(Object.keys(stashParsed).length ? { stash: stashParsed } : {})
+          }
         })
       });
       dirtyRef.current = false;
@@ -303,9 +331,74 @@ export function SettingsView({
           label="其他 DNS 字段"
           text={advancedDns}
           onChange={setAdvancedDns}
-          suggestions={{ 'nameserver-policy': {}, 'follow-rule': false }}
+          suggestions={{ 'nameserver-policy': {}, 'follow-rule': false, ipv6: false }}
         />
       </div>
+
+      <details className="wide" style={{ marginTop: '1rem' }}>
+        <summary>客户端专属覆盖（Mihomo / Stash）</summary>
+        <p className="delivery-note">
+          支持按客户端覆盖 <code>dns</code>（含 <code>nameserver-policy</code> 局部合并，设 <code>null</code> 可移除字段）和顶层 <code>sections</code>（如 Mihomo 的 <code>sniffer</code> / <code>tun</code>，或 Stash 的 <code>tiles</code>）。
+        </p>
+        <div style={{ margin: '0.5rem 0' }}>
+          <button
+            type="button"
+            className="button secondary"
+            onClick={() => {
+              let current: JsonObject = {};
+              try {
+                const parsed = JSON.parse(mihomoOverride || '{}');
+                if (isJsonObject(parsed)) current = parsed;
+              } catch { /* ignore invalid draft */ }
+              const next: JsonObject = {
+                ...current,
+                dns: {
+                  ...(isJsonObject(current.dns) ? current.dns : {}),
+                  'direct-nameserver': ['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query'],
+                  'direct-nameserver-follow-policy': true,
+                  'nameserver-policy': {
+                    ...(isJsonObject(current.dns) && isJsonObject(current.dns['nameserver-policy']) ? current.dns['nameserver-policy'] : {}),
+                    'geosite:private': ['dhcp://en0']
+                  }
+                },
+                sections: {
+                  ...(isJsonObject(current.sections) ? current.sections : {}),
+                  sniffer: {
+                    enable: true,
+                    sniff: { HTTP: { ports: [80, '8080-8880'] }, TLS: { ports: [443, 8443] }, QUIC: { ports: [443, 8443] } },
+                    'skip-domain': ['Mijia Cloud', '+.push.apple.com']
+                  }
+                }
+              };
+              setMihomoOverride(JSON.stringify(next, null, 2));
+            }}
+          >
+            套用 Mihomo 推荐预设（防 TUN DNS 自环 + TLS/HTTP 嗅探）
+          </button>
+        </div>
+        <div className="settings-grid">
+          <label className="field">
+            <span>Mihomo 专属覆盖（JSON）</span>
+            <textarea
+              className="code-input compact"
+              rows={8}
+              value={mihomoOverride}
+              onChange={(event) => setMihomoOverride(event.target.value)}
+              placeholder={'{\n  "dns": { "nameserver-policy": { "geosite:private": ["dhcp://en0"] } },\n  "sections": { "sniffer": { "enable": true } }\n}'}
+            />
+          </label>
+          <label className="field">
+            <span>Stash 专属覆盖（JSON）</span>
+            <textarea
+              className="code-input compact"
+              rows={8}
+              value={stashOverride}
+              onChange={(event) => setStashOverride(event.target.value)}
+              placeholder={'{\n  "dns": { "direct-nameserver": null },\n  "sections": {}\n}'}
+            />
+          </label>
+        </div>
+      </details>
       {error ? <pre className="inline-error">{error}</pre> : null}
     </section>
   );

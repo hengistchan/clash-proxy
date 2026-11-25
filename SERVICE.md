@@ -213,3 +213,24 @@ Stash / Mihomo 手动发布版包含托管代理源时，先点击「检查待�
 `GET /api/diagnostics` 需要管理员认证，返回当前进程的各端编译耗时、未生成当前版的次数，以及来源下载耗时和失败次数。统计在进程重启后重置，不含来源地址、资源名称、节点信息或请求头。未知 API 异常返回 `requestId` 和 `X-Request-ID`，服务日志只记录同一编号与固定错误类别，便于关联排障。
 
 `npm run benchmark` 在内存中测量 1,000／10,000 条规则的导入、公共校验和三端编译，不连接上游、不读取用户数据库；结果是本机基准，不代表生产并发或设备性能。规则页每页最多渲染 100 条；搜索和批量选择仍覆盖全部筛选结果。
+
+## Tailscale Serve 内网入口与多端一致性巡检
+
+公网部署建议保留 Cloudflare Access / HTTPS 反向代理保护管理后台；如果在私有 Tailnet 内也希望免 Access 二次验证直接管理与拉取 Stash 覆写，可在宿主机启用仅限 Tailnet 可达的 `tailscale serve`（切勿使用 `funnel`）：
+
+```bash
+# 仅限 Tailnet 内网可达（HTTP；若已在 Tailscale Admin 开启 HTTPS Certificates 可改用 --https=443）
+tailscale serve --bg --http=80 http://127.0.0.1:3010
+tailscale serve status
+```
+
+管理接口仍受 `STASH_ADMIN_TOKEN` 保护；iPhone Stash 启用内置 Tailscale 后，可直接通过 `http://<node>.<tailnet>.ts.net` 访问工作台并订阅托管的 `.stoverride` 覆写链接。
+
+需要比对线上版本与各设备（iPhone Stash / Mac Mihomo）的实时状态（节点存活、规则集条数漂移、单节点钉死告警）时，可运行只读巡检脚本：
+
+```bash
+STASH_ADMIN_TOKEN='...' npm run devices:check -- \
+  --forge http://node.tailnet.ts.net \
+  --stash http://192.0.2.10:9090 \
+  --mihomo unix:/var/run/clash-verge-service/users/501/verge-mihomo.sock
+```

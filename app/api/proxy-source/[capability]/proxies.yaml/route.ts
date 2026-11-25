@@ -1,5 +1,6 @@
 import { jsonError } from '@/lib/http';
 import { managedProxySource } from '@/lib/managed-proxy-source';
+import { formatSubscriptionUserinfo } from '@/lib/upstream-download';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -8,9 +9,11 @@ export async function GET(_request: Request, context: { params: Promise<{ capabi
   const headers = { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' };
   try {
     const result = await managedProxySource((await context.params).capability);
+    const userinfo = result.userinfo ? formatSubscriptionUserinfo(result.userinfo) : '';
     return new Response(result.yaml, { headers: {
       ...headers, 'Content-Type': 'application/yaml; charset=utf-8',
-      'X-Proxy-Source-Status': result.stale ? 'stale' : 'fresh'
+      'X-Proxy-Source-Status': result.stale ? 'stale' : 'fresh',
+      ...(userinfo ? { 'Subscription-Userinfo': userinfo } : {})
     } });
   } catch (error) {
     const response = jsonError(error);

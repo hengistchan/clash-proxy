@@ -320,6 +320,41 @@ const MIGRATIONS = [
         );
       `);
     }
+  },
+  {
+    version: 10,
+    apply(db: Database.Database) {
+      const hasColumn = (table: string, name: string) =>
+        (db.pragma(`table_info(${table})`) as Array<{ name: string }>).some((col) => col.name === name);
+      if (!hasColumn('managed_proxy_source_cache', 'userinfo_ciphertext')) {
+        db.exec('ALTER TABLE managed_proxy_source_cache ADD COLUMN userinfo_ciphertext TEXT;');
+      }
+      if (!hasColumn('mihomo_proxy_source_cache', 'userinfo_ciphertext')) {
+        db.exec('ALTER TABLE mihomo_proxy_source_cache ADD COLUMN userinfo_ciphertext TEXT;');
+      }
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS stash_overrides (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          slug TEXT NOT NULL,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          kind TEXT NOT NULL CHECK (kind IN ('override', 'script')),
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+          content_ciphertext TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(profile_id, slug)
+        );
+        CREATE INDEX IF NOT EXISTS stash_overrides_profile ON stash_overrides(profile_id, kind, slug);
+        CREATE TABLE IF NOT EXISTS stash_override_links (
+          profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+          token_hash TEXT NOT NULL UNIQUE,
+          token_ciphertext TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+      `);
+    }
   }
 ] as const;
 

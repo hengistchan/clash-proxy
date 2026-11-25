@@ -47,7 +47,14 @@ export interface ConfigDeliveryStatus {
   publicationId?: number | null;
   remoteState?: 'none' | 'pending' | 'ready' | 'failed';
   remoteCheckedAt?: number | null;
-  managedSources?: Array<{ id: number; name: string; state: 'pending' | 'ready' | 'stale' | 'failed' | 'revoked'; lastAttempt: number | null; lastSuccess: number | null }>;
+  managedSources?: Array<{
+    id: number;
+    name: string;
+    state: 'pending' | 'ready' | 'stale' | 'failed' | 'revoked';
+    lastAttempt: number | null;
+    lastSuccess: number | null;
+    userinfo?: { upload?: number; download?: number; total?: number; expire?: number };
+  }>;
   publications?: Array<{ id: number; revision: number; publishedAt: string }>;
   candidateSources?: { state: 'none' | 'pending' | 'ready' | 'failed' | 'stale'; checkedAt: number | null; sources: Array<{ id: number; name: string; state: 'pending' | 'ready' | 'failed' }> };
 }

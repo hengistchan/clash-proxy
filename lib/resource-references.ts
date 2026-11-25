@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 
-import { decryptResource, decryptResourceObject, encryptResource, readClientOptions, storeMatchType } from './config-storage-model';
+import { decryptResource, decryptResourceObject, encryptNodeSource, encryptResource, readClientOptions, readNodeSourceRewriteRules, storeMatchType } from './config-storage-model';
 import { HttpError } from './http';
 import { ruleSetNames } from './rules';
 import type { JsonObject, JsonValue, ProxyGroup, Snapshot } from './types';
@@ -147,6 +147,30 @@ export function rewriteRenamedResource(
         ).run(encryptResource('policyGroup', updated, options), Number(group.id));
       }
     }
+    const proxies = db
+      .prepare('SELECT id, config_ciphertext FROM proxies WHERE profile_id = ?')
+      .all(profileId) as Record<string, unknown>[];
+    for (const proxy of proxies) {
+      const config = decryptResourceObject('node', proxy.config_ciphertext);
+      if (config['dialer-proxy'] === oldName) {
+        db.prepare('UPDATE proxies SET config_ciphertext = ? WHERE id = ?').run(
+          encryptResource('node', { ...config, 'dialer-proxy': newName }),
+          Number(proxy.id)
+        );
+      }
+    }
+    const providers = db
+      .prepare('SELECT id, config_ciphertext FROM proxy_providers WHERE profile_id = ?')
+      .all(profileId) as Record<string, unknown>[];
+    for (const provider of providers) {
+      const config = decryptResourceObject('nodeSource', provider.config_ciphertext);
+      if (config['dialer-proxy'] === oldName) {
+        db.prepare('UPDATE proxy_providers SET config_ciphertext = ? WHERE id = ?').run(
+          encryptNodeSource({ ...config, 'dialer-proxy': newName }, readNodeSourceRewriteRules(provider.config_ciphertext)),
+          Number(provider.id)
+        );
+      }
+    }
   }
 }
 
@@ -197,6 +221,16 @@ export function collectReferences(
     for (const rule of snapshot.rules) {
       if (rule.policy === name) {
         references.add(`rule priority ${rule.priority} targets “${name}”`);
+      }
+    }
+    for (const proxy of snapshot.proxies) {
+      if (proxy.config['dialer-proxy'] === name) {
+        references.add(`direct proxy “${proxy.name}” dialer-proxy targets “${name}”`);
+      }
+    }
+    for (const provider of snapshot.proxyProviders) {
+      if (provider.config['dialer-proxy'] === name) {
+        references.add(`proxy provider “${provider.name}” dialer-proxy targets “${name}”`);
       }
     }
   } else if (kind === 'rule-providers') {

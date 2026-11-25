@@ -132,6 +132,28 @@ export function DeliveryPublication({ profileId, revision, token, target, status
   </section>;
 }
 
+function formatBytes(bytes: number) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let idx = 0;
+  while (value >= 1024 && idx < units.length - 1) { value /= 1024; idx += 1; }
+  return `${value.toFixed(idx >= 3 ? 2 : 1)} ${units[idx]}`;
+}
+
+function userinfoLabel(info?: { upload?: number; download?: number; total?: number; expire?: number }) {
+  if (!info) return '';
+  const parts: string[] = [];
+  if (typeof info.total === 'number' && info.total > 0) {
+    const used = (info.upload ?? 0) + (info.download ?? 0);
+    const pct = Math.min(100, Math.round((used / info.total) * 100));
+    parts.push(`流量 ${formatBytes(used)} / ${formatBytes(info.total)}（${pct}%）`);
+  }
+  if (typeof info.expire === 'number' && info.expire > 0) {
+    parts.push(`到期 ${new Date(info.expire * 1000).toLocaleDateString('zh-CN')}`);
+  }
+  return parts.length ? ` · ${parts.join(' · ')}` : '';
+}
+
 export function ManagedSourceControls({ profileId, token, status, delivery, disabled, target }: Controls & { target: ConfigTarget }) {
   type Source = NonNullable<ConfigDeliveryStatus['managedSources']>[number];
   const [pending, setPending] = useState<{ source: Source; action: 'rotate' | 'revoke' }>();
@@ -161,7 +183,8 @@ export function ManagedSourceControls({ profileId, token, status, delivery, disa
     <ul className="delivery-release-list">
       {status.managedSources?.map(source => <li key={source.id}>
         <div><strong>{source.name}</strong><p className="delivery-note">{sourceLabels[source.state]}
-          {source.lastSuccess ? ` · 上次成功 ${dateLabel(source.lastSuccess)}` : ''}</p></div>
+          {source.lastSuccess ? ` · 上次成功 ${dateLabel(source.lastSuccess)}` : ''}
+          {userinfoLabel(source.userinfo)}</p></div>
         <div className="delivery-actions">
           {source.state !== 'revoked' ? <>
             <button className="button secondary small" disabled={disabled || working !== null} onClick={() => void run(source.id, 'check')}>检查来源</button>

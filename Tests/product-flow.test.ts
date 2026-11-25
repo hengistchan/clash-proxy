@@ -133,7 +133,7 @@ test('v4 data migrates into common fields and dialect extensions without changin
   assert.deepEqual(getCompilationSnapshot(profile.id), before);
   assert.equal(configForToken(stashToken).yaml, originalYaml);
   assert.deepEqual(await shadowrocketConfigForToken(shadowToken), originalConf);
-  assert.equal(getDb().pragma('user_version', { simple: true }), 9);
+  assert.equal(getDb().pragma('user_version', { simple: true }), 10);
   const stored = getDb().prepare('SELECT config_ciphertext FROM proxy_groups WHERE id = ?').pluck()
     .get(before.proxyGroups[0].id) as string;
   assert.match(stored, /^model1:v2\./);
@@ -656,7 +656,7 @@ test('platform-aware rules and direct-only configurations do not require demo gr
   assert.equal(getDeliveryStatus(p.id).current, true);
   assert.equal(simulateRouting(getSnapshot(p.id), {}).mode, 'direct');
   assert.equal(getCompilationSnapshot(p.id).profile.targetPlatform, 'ios');
-  assert.equal(getDb().pragma('user_version', { simple: true }), 9);
+  assert.equal(getDb().pragma('user_version', { simple: true }), 10);
 });
 
 test('supported HTTP and URL authentication sources are preserved while warnings stay redacted', () => {
@@ -1042,6 +1042,6 @@ test('database v6 upgrades without rotating existing device links or changing th
   resetRepositoryForTests();
   assert.deepEqual(configForToken(stashToken), stash);
   assert.deepEqual(await shadowrocketConfigForToken(shadowToken), shadow);
-  assert.equal(getDb().pragma('user_version', { simple: true }), 9);
+  assert.equal(getDb().pragma('user_version', { simple: true }), 10);
   assert.equal(getShadowrocketStatus(profile.id).deliveryMode, 'auto');
 });

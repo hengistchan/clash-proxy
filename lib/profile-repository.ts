@@ -160,12 +160,21 @@ export function createProfileRepository({
       logLevel: LogLevel;
       ipv6?: boolean | null;
       settings: JsonObject;
+      clientOptions?: { stash?: JsonObject; mihomo?: JsonObject };
       targetPlatform?: Profile['targetPlatform'];
     }
   ): Snapshot {
     ensureInitialized();
     return transaction((db) => {
       const current = getProfileRow(db, profileId);
+      const existingOptions = readClientOptions(current.settings_ciphertext);
+      const mergedOptions = input.clientOptions !== undefined
+        ? {
+            ...(existingOptions?.shadowrocket ? { shadowrocket: existingOptions.shadowrocket } : {}),
+            ...(input.clientOptions.stash && Object.keys(input.clientOptions.stash).length ? { stash: input.clientOptions.stash } : {}),
+            ...(input.clientOptions.mihomo && Object.keys(input.clientOptions.mihomo).length ? { mihomo: input.clientOptions.mihomo } : {})
+          }
+        : existingOptions;
       db.prepare(
         `UPDATE profiles
        SET mode = ?, log_level = ?, ipv6 = ?, settings_ciphertext = ?, updated_at = ?, target_platform = COALESCE(?, target_platform)
@@ -176,7 +185,7 @@ export function createProfileRepository({
         input.ipv6 === undefined || input.ipv6 === null
           ? null
           : Number(input.ipv6),
-        encryptResource('settings', input.settings, readClientOptions(current.settings_ciphertext)),
+        encryptResource('settings', input.settings, mergedOptions && Object.keys(mergedOptions).length ? mergedOptions : undefined),
         now(),
         input.targetPlatform ?? null,
         profileId

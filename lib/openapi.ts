@@ -253,6 +253,35 @@ const paths: Record<string, object> = {
       responses: { '200': shadowrocketFile, '400': errors['400'], '404': errors['404'], '409': errors['409'] }
     }
   },
+  '/api/profiles/{profileId}/overrides': {
+    parameters: [id],
+    get: operation('列出此配置托管的 Stash 覆写（.stoverride）与磁贴 JS 脚本及只读链接状态'),
+    post: operation('新增 Stash 覆写/脚本，或传入 {"preset":"starter-tiles"} 导入内置磁贴模板')
+  },
+  '/api/profiles/{profileId}/overrides/{overrideId}': {
+    parameters: [id, { name: 'overrideId', in: 'path', required: true, schema: { type: 'integer' } }],
+    put: operation('更新指定 Stash 覆写或脚本'),
+    delete: { summary: '删除指定 Stash 覆写或脚本', responses: { '204': { description: '已删除' }, ...errors } }
+  },
+  '/api/profiles/{profileId}/overrides/download-link': {
+    parameters: [id],
+    post: operation('生成或轮换 Stash 覆写与脚本的独立只读订阅令牌'),
+    delete: { summary: '撤销 Stash 覆写只读订阅令牌', responses: { '204': { description: '已撤销' }, ...errors } }
+  },
+  '/api/override_download/{token}/{slug}': {
+    parameters: [
+      configToken,
+      { name: 'slug', in: 'path', required: true, schema: { type: 'string' } }
+    ],
+    get: {
+      security: [],
+      summary: '按只读覆写令牌拉取指定 .stoverride 或 .js；自动展开 {{BASE_URL}} 占位符',
+      responses: {
+        '200': { description: 'YAML 覆写或 JS 脚本' },
+        '404': { description: '令牌或文件不存在或已停用' }
+      }
+    }
+  },
   '/api/profiles/{profileId}/rules/order': {
     parameters: [id],
     put: operation('提交全部规则 ID 的顺序，MATCH 必须在最后', {

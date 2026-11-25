@@ -21,7 +21,8 @@ export async function GET(request: Request, context: Context) {
       mode: snapshot.profile.mode,
       logLevel: snapshot.profile.logLevel,
       ipv6: snapshot.profile.ipv6,
-      settings: snapshot.profile.settings
+      settings: snapshot.profile.settings,
+      ...(snapshot.profile.clientOptions ? { clientOptions: snapshot.profile.clientOptions } : {})
     });
   } catch (error) {
     return jsonError(error);
@@ -40,6 +41,7 @@ export async function PUT(request: Request, context: Context) {
         logLevel: snapshot.profile.logLevel,
         ipv6: snapshot.profile.ipv6,
         settings: snapshot.profile.settings,
+        ...(snapshot.profile.clientOptions ? { clientOptions: snapshot.profile.clientOptions } : {}),
         validation: validateSnapshot(getCompilationSnapshot(snapshot.profile.id))
       });
     });

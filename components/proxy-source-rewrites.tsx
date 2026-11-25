@@ -2,14 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import type { ProxyRewriteRule, ProxyRewriteValue } from '@/lib/types';
-import type { transformProxySource } from '@/lib/proxy-source-transform';
+import type { ProxyGroupCoverage, transformProxySource } from '@/lib/proxy-source-transform';
 import { SelectField } from './ui';
 import {
   isProxyRewriteField, isProxyRewriteValue, isRewriteShortcut, PROXY_REWRITE_SHORTCUTS,
   PROXY_REWRITE_FIELD_ERROR, PROXY_REWRITE_FIELD_PATTERN, PROXY_REWRITE_VALUE_MAX
 } from '@/lib/proxy-rewrite-fields';
 
-type Preview = ReturnType<typeof transformProxySource>['preview'];
+type Preview = ReturnType<typeof transformProxySource>['preview'] & { groupCoverage?: ProxyGroupCoverage };
 export type ProxyRewriteDraft = Omit<ProxyRewriteRule, 'value'> & { value: ProxyRewriteValue | null; custom?: true };
 
 export function serializeProxyRewrites(rules: ProxyRewriteDraft[]): ProxyRewriteRule[] {
@@ -66,15 +66,15 @@ export function ProxySourceRewrites({ rules, onChange, sourceKey, onPreview }: {
   const valueLabel = (value: ProxyRewriteValue) => typeof value === 'string' ? JSON.stringify(value) : String(value);
   const previousLabel = (value: Preview['examples'][number]['before']) =>
     value === 'missing' ? '未设置' : value === 'other' ? '原值已隐藏' : valueLabel(value);
-  const canPreview = rules.length > 0 && rules.every(({ field, value }) =>
+  const canPreview = rules.every(({ field, value }) =>
     isProxyRewriteField(field.trim()) && isProxyRewriteValue(value) &&
     (!isRewriteShortcut(field.trim()) || typeof value === 'boolean'));
 
 
   return (
     <details className="wide">
-      <summary>节点改写 · Stash{rules.length > 0 ? `（${rules.length} 条）` : ''}</summary>
-      <p>按顺序匹配节点并修改字段。留空匹配条件表示全部节点。「仅补缺失」保留来源已有的值。</p>
+      <summary>节点改写{rules.length > 0 ? `（${rules.length} 条）` : ''}</summary>
+      <p>按顺序匹配节点并修改字段。留空匹配条件表示全部节点。「仅补缺失」保留来源已有的值；可按客户端（全部 / 仅 Stash / 仅 Mihomo）分别生效。</p>
       {rules.map((rule, index) => {
         const custom = rule.custom || !isRewriteShortcut(rule.field);
         const valueType = rule.value === null ? 'number' : typeof rule.value;
@@ -93,6 +93,18 @@ export function ProxySourceRewrites({ rules, onChange, sourceKey, onPreview }: {
           </label>
           <SelectField label="操作" value={rule.operation} onValueChange={(value) => patch(index, { operation: value === 'set' ? 'set' : 'fill' })}
             options={[{ value: 'fill', label: '仅补缺失' }, { value: 'set', label: '覆盖已有值' }]} />
+          <SelectField
+            label="生效客户端"
+            value={!rule.targets?.length || rule.targets.length === 2 ? 'all' : rule.targets[0]}
+            onValueChange={(value) => patch(index, {
+              targets: value === 'all' ? undefined : [value as 'stash' | 'mihomo']
+            })}
+            options={[
+              { value: 'all', label: '全部（Stash + Mihomo）' },
+              { value: 'stash', label: '仅 Stash' },
+              { value: 'mihomo', label: '仅 Mihomo' }
+            ]}
+          />
           <SelectField label="节点字段" value={custom ? 'custom' : rule.field} onValueChange={(value) => {
             if (value === 'custom') patch(index, { field: '', custom: true });
             else patch(index, { field: value, custom: undefined, value: typeof rule.value === 'boolean' ? rule.value : true });
@@ -147,6 +159,25 @@ export function ProxySourceRewrites({ rules, onChange, sourceKey, onPreview }: {
             节点 #{example.node} · {example.field}：{previousLabel(example.before)} → {valueLabel(example.after)}
           </li>)}
         </ul>}
+        {preview.groupCoverage && preview.groupCoverage.groups.length > 0 && (
+          <div style={{ marginTop: '0.5rem' }}>
+            <p><strong>策略组筛选覆盖（{preview.groupCoverage.groups.length} 个组）：</strong></p>
+            <ul>
+              {preview.groupCoverage.groups.map((group) => (
+                <li key={group.id}>
+                  {group.name}（{group.type}）：命中 {group.matchedCount} 个
+                  {group.invalidRegex ? '（正则无效）' : group.matchedCount === 0 ? '（未命中任何节点）' : ''}
+                  {group.sampleNames.length > 0 ? ` — ${group.sampleNames.join(', ')}` : ''}
+                </li>
+              ))}
+            </ul>
+            {preview.groupCoverage.uncoveredAutoCount > 0 && (
+              <p className="delivery-note">
+                有 {preview.groupCoverage.uncoveredAutoCount} 个节点未进入任何自动测速/备援策略组：{preview.groupCoverage.uncoveredAutoSamples.join(', ')}
+              </p>
+            )}
+          </div>
+        )}
       </div>}
     </details>
   );

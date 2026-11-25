@@ -37,6 +37,7 @@ import type {
 } from '@/lib/types';
 
 import { AdvancedView } from './advanced-view';
+import { OverridesView } from './overrides-view';
 import { SiteAccessDialog } from './site-access-dialog';
 import { apiRequest } from './api-client';
 import { useWorkspaceSession, useWorkspaceNotifications } from './use-workspace-session';
@@ -57,7 +58,7 @@ import { resourceKey, type ResourceNode } from '@/lib/resource-graph';
 import { UnsavedChangesProvider, useNavigationGuard } from './unsaved-changes';
 
 type SectionId = 'relationships' | 'overview' | 'settings' | 'proxy-providers' | 'proxies' |
-  'proxy-groups' | 'rule-providers' | 'rules' | 'hosts' | 'advanced' | 'export' | 'history';
+  'proxy-groups' | 'rule-providers' | 'rules' | 'hosts' | 'advanced' | 'overrides' | 'export' | 'history';
 const NAV = [
   { id: 'overview', label: '总览', icon: Sparkles },
   { id: 'relationships', label: '关联关系', icon: Network },
@@ -69,6 +70,7 @@ const NAV = [
   { id: 'rules', label: '路由规则', icon: Activity },
   { id: 'hosts', label: 'Hosts', icon: Globe2 },
   { id: 'advanced', label: '高级区块', icon: FileCode2 },
+  { id: 'overrides', label: 'Stash 覆写', icon: Sparkles },
   { id: 'export', label: '下载配置', icon: Download },
   { id: 'history', label: '版本', icon: History }
 ] as const;
@@ -550,6 +552,13 @@ function Workspace() {
                 profileId={snapshot.profile.id}
                 token={token}
                 onSaved={reload}
+              />
+            ) : null}
+
+            {section === 'overrides' ? (
+              <OverridesView
+                profileId={snapshot.profile.id}
+                token={token}
               />
             ) : null}
 

@@ -3,7 +3,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 import { HttpError } from './http';
 import { ruleListToYaml } from './rules';
-import type { JsonObject, JsonValue, ProxyRewriteRule, Snapshot } from './types';
+import type { ClientOptions, JsonObject, JsonValue, ProxyRewriteRule, Snapshot, YamlClientTarget } from './types';
 import { RESERVED_TOP_LEVEL_KEYS, isJsonObject } from './types';
 import { validateSnapshot } from './validation';
 import { exportRuleProvider } from './rule-provider-source';
@@ -83,6 +83,40 @@ function mergeObject(
   } as JsonObject;
 }
 
+export function applyTargetOverrides(
+  config: Record<string, unknown>,
+  target: YamlClientTarget,
+  clientOptions?: ClientOptions
+): void {
+  const overrides = clientOptions?.[target];
+  if (!isJsonObject(overrides)) return;
+  if (isJsonObject(overrides.dns)) {
+    const dns: Record<string, unknown> = isJsonObject(config.dns) ? { ...config.dns } : {};
+    for (const [key, value] of Object.entries(overrides.dns)) {
+      if (value === null) {
+        delete dns[key];
+      } else if (key === 'nameserver-policy' && isJsonObject(value) && isJsonObject(dns['nameserver-policy'])) {
+        const policy: Record<string, unknown> = { ...dns['nameserver-policy'] };
+        for (const [pattern, resolver] of Object.entries(value)) {
+          if (resolver === null) delete policy[pattern];
+          else policy[pattern] = resolver;
+        }
+        dns['nameserver-policy'] = policy;
+      } else {
+        dns[key] = value;
+      }
+    }
+    config.dns = dns;
+  }
+  if (isJsonObject(overrides.sections)) {
+    for (const [key, value] of Object.entries(overrides.sections)) {
+      if (RESERVED_TOP_LEVEL_KEYS.has(key)) continue;
+      if (value === null) delete config[key];
+      else config[key] = value;
+    }
+  }
+}
+
 export function buildConfigObject(snapshot: Snapshot, validation = validateSnapshot(snapshot)) {
   const nativeIssues = stashTargetIssues(snapshot);
   if (nativeIssues.length) throw new HttpError(409, 'Stash compatibility check failed', nativeIssues);
@@ -94,10 +128,12 @@ export function buildConfigObject(snapshot: Snapshot, validation = validateSnaps
     );
   }
 
-  return { ...assembleYamlConfig(snapshot), validation };
+  const assembled = assembleYamlConfig(snapshot, 'stash');
+  applyTargetOverrides(assembled.config, 'stash', snapshot.profile.clientOptions);
+  return { ...assembled, validation };
 }
 
-export function assembleYamlConfig(snapshot: Snapshot) {
+export function assembleYamlConfig(snapshot: Snapshot, target?: YamlClientTarget) {
   const advanced = new Map(
     snapshot.advancedSections.map((item) => [item.key, item.value])
   );
@@ -140,9 +176,12 @@ export function assembleYamlConfig(snapshot: Snapshot) {
   const providers = Object.fromEntries(
     snapshot.proxyProviders.map((item) => {
       const provider = { ...item.config };
-      if (item.sourceType === 'remote' && item.rewriteRules?.length && typeof provider.url === 'string') {
+      const effectiveRules = item.rewriteRules?.filter((rule) =>
+        !target || !rule.targets?.length || rule.targets.includes(target)
+      );
+      if (item.sourceType === 'remote' && effectiveRules?.length && typeof provider.url === 'string') {
         const { url, headers } = provider;
-        sources.push({ id: item.id, name: item.name, upstream: { url, ...(headers !== undefined ? { headers } : {}) }, rules: item.rewriteRules });
+        sources.push({ id: item.id, name: item.name, upstream: { url, ...(headers !== undefined ? { headers } : {}) }, rules: effectiveRules });
         provider.url = 'https://managed-source.invalid/proxies.yaml';
         delete provider.headers;
       }

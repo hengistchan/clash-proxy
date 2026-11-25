@@ -30,7 +30,8 @@ export const proxyRewriteRulesSchema = z.array(z.object({
   protocol: z.string().trim().regex(/^[a-z0-9-]{1,32}$/).optional(),
   operation: z.enum(['fill', 'set']),
   field: z.string().trim().refine(isProxyRewriteField, PROXY_REWRITE_FIELD_ERROR),
-  value: z.union([z.boolean(), z.number().finite(), z.string().max(PROXY_REWRITE_VALUE_MAX)])
+  value: z.union([z.boolean(), z.number().finite(), z.string().max(PROXY_REWRITE_VALUE_MAX)]),
+  targets: z.array(z.enum(['stash', 'mihomo'])).min(1).max(2).optional()
 }).strict().refine(rule => !isRewriteShortcut(rule.field) || typeof rule.value === 'boolean', {
   path: ['value'], message: 'udp、udp-over-tcp 和 tfo 只接受布尔值。'
 })).max(20);
@@ -46,11 +47,20 @@ export const profileUpdateSchema = z.object({
   active: z.boolean().optional()
 });
 
+const targetOverrideSchema = z.object({
+  dns: jsonObject.optional(),
+  sections: jsonObject.optional()
+}).strict();
+
 export const settingsSchema = z.object({
   mode: z.enum(['rule', 'global', 'direct']),
   logLevel: z.enum(['silent', 'info', 'warning', 'error', 'debug']),
   ipv6: z.boolean().nullable().optional(),
   settings: jsonObject,
+  clientOptions: z.object({
+    stash: targetOverrideSchema.optional(),
+    mihomo: targetOverrideSchema.optional()
+  }).strict().optional(),
   targetPlatform: z.enum(['any', 'ios', 'tvos', 'macos']).optional()
 });
 

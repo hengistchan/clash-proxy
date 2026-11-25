@@ -25,3 +25,11 @@
 验证：138 项服务测试、生产构建、39 项 Chromium 回归、固定 Mihomo v1.19.33 样例校验、依赖审计（0 漏洞）及 diff 空白检查通过。内存基准的 10,001 条规则导入／公共校验／三端编译合计约 162ms，不包含数据库写入或网络请求。测试均使用隔离数据。
 
 本机 Docker 守护进程未运行，本次未完成容器验收；未执行真机导入、发布部署或操作现有生产数据库。
+
+## 2026-11-25 多端差异化与实网运维增强
+
+- [x] 按目标客户端覆盖（`clientOptions.mihomo` / `clientOptions.stash`）：支持 DNS（含 `nameserver-policy` 局部合并与 `null` 删键）及顶层区块覆盖；Mihomo 导出自动剥离 `tiles` 并优雅忽略 `ssid-policy`（发 warning 不再阻断编译）；节点改写支持按 `targets`（Stash / Mihomo）分别生效。
+- [x] 网络语义诊断与节点筛选覆盖：`dns.direct-overseas-resolver`、`dns.fake-ip-ipv6`、`mihomo.dns-private-system`、未引用资源提示、允许 `classical` 规则集使用 `no-resolve`；代理源预览输出各策略组正则实际命中与未入自动池节点。
+- [x] `Subscription-Userinfo` 流量与到期头加密缓存、交付页展示及 `/api/proxy-source/[capability]/proxies.yaml` 透传；`dialer-proxy` 校验、删除保护、重命名传播与关系图边。
+- [x] SQLite v10 迁移：新增 Stash 覆写（`.stoverride`）与磁贴 JS 脚本一等托管、独立只读令牌（自动展开 `{{BASE_URL}}`）、一键内置磁贴模板及工作台界面。
+- [x] 新增 `Scripts/check-devices.mjs`（`npm run devices:check`）多端运行态只读比对脚本及 Tailscale Serve 双入口文档。

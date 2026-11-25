@@ -3,9 +3,87 @@ import { stringify } from 'yaml';
 import { HttpError } from './http';
 import { proxyRewriteRulesSchema } from './schemas';
 import { readRemoteNodes } from './remote-proxy-nodes';
-import type { JsonObject, ProxyRewriteRule, ProxyRewriteValue } from './types';
+import type { JsonObject, ProxyGroup, ProxyRewriteRule, ProxyRewriteValue } from './types';
 
 const MAX_TRANSFORMED_BYTES = 8 * 1024 * 1024;
+
+export interface ProxyGroupCoverageEntry {
+  id: number;
+  name: string;
+  type: ProxyGroup['type'];
+  filter: string | null;
+  excludeFilter: string | null;
+  matchedCount: number;
+  sampleNames: string[];
+  invalidRegex?: boolean;
+}
+
+export interface ProxyGroupCoverage {
+  groups: ProxyGroupCoverageEntry[];
+  uncoveredAutoCount: number;
+  uncoveredAutoSamples: string[];
+}
+
+function compileOptionalRegex(pattern: unknown): { regex: RE2JS | null; invalid: boolean } {
+  if (typeof pattern !== 'string' || !pattern) return { regex: null, invalid: false };
+  try {
+    return { regex: RE2JS.compile(pattern), invalid: false };
+  } catch {
+    return { regex: null, invalid: true };
+  }
+}
+
+export function analyzeProxyGroupCoverage(
+  nodeNames: string[],
+  proxyGroups: ProxyGroup[],
+  providerName?: string
+): ProxyGroupCoverage {
+  const relevant = proxyGroups.filter((group) => {
+    const uses = Array.isArray(group.config.use) ? group.config.use.map(String) : [];
+    const includeAll = group.config['include-all'] === true || group.config['include-all-providers'] === true;
+    return includeAll || (providerName ? uses.includes(providerName) : uses.length > 0);
+  });
+  const coveredByAuto = new Set<string>();
+  const groups: ProxyGroupCoverageEntry[] = relevant.map((group) => {
+    const inc = compileOptionalRegex(group.config.filter);
+    const exc = compileOptionalRegex(group.config['exclude-filter']);
+    if (inc.invalid || exc.invalid) {
+      return {
+        id: group.id,
+        name: group.name,
+        type: group.type,
+        filter: typeof group.config.filter === 'string' ? group.config.filter : null,
+        excludeFilter: typeof group.config['exclude-filter'] === 'string' ? group.config['exclude-filter'] : null,
+        matchedCount: 0,
+        sampleNames: [],
+        invalidRegex: true
+      };
+    }
+    const matched = nodeNames.filter((name) =>
+      (!inc.regex || inc.regex.test(name)) && (!exc.regex || !exc.regex.test(name))
+    );
+    if (['url-test', 'fallback', 'load-balance'].includes(group.type)) {
+      for (const name of matched) coveredByAuto.add(name);
+    }
+    return {
+      id: group.id,
+      name: group.name,
+      type: group.type,
+      filter: typeof group.config.filter === 'string' ? group.config.filter : null,
+      excludeFilter: typeof group.config['exclude-filter'] === 'string' ? group.config['exclude-filter'] : null,
+      matchedCount: matched.length,
+      sampleNames: matched.slice(0, 6)
+    };
+  });
+  const uncovered = relevant.some((group) => ['url-test', 'fallback', 'load-balance'].includes(group.type))
+    ? nodeNames.filter((name) => !coveredByAuto.has(name))
+    : [];
+  return {
+    groups,
+    uncoveredAutoCount: uncovered.length,
+    uncoveredAutoSamples: uncovered.slice(0, 10)
+  };
+}
 
 export function validateProxyRewrites(rules: ProxyRewriteRule[]) {
   const normalized = proxyRewriteRulesSchema.parse(rules);
@@ -55,6 +133,7 @@ export function transformProxySource(text: string, rules: ProxyRewriteRule[]) {
   if (Buffer.byteLength(yaml) > MAX_TRANSFORMED_BYTES) throw new Error('Transformed proxy list is too large');
   return {
     yaml,
+    nodeNames: nodes.map((node) => node.name),
     preview: { totalNodes: nodes.length, matchedNodes: matched.size, changedNodes: changed.size, examples }
   };
 }
