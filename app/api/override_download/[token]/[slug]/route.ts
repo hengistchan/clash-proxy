@@ -15,7 +15,7 @@ export async function GET(request: Request, context: Context) {
   };
   try {
     const { token, slug } = await context.params;
-    const baseUrl = absoluteDownloadUrl(request, `/api/override_download/${token}`);
+    const baseUrl = absoluteDownloadUrl(request, `/api/config_download/${token}/override`);
     const item = overrideForToken(token, slug, baseUrl);
     return new Response(item.content, {
       status: 200,

@@ -268,14 +268,14 @@ const paths: Record<string, object> = {
     post: operation('生成或轮换 Stash 覆写与脚本的独立只读订阅令牌'),
     delete: { summary: '撤销 Stash 覆写只读订阅令牌', responses: { '204': { description: '已撤销' }, ...errors } }
   },
-  '/api/override_download/{token}/{slug}': {
+  '/api/config_download/{token}/override/{slug}': {
     parameters: [
       configToken,
       { name: 'slug', in: 'path', required: true, schema: { type: 'string' } }
     ],
     get: {
       security: [],
-      summary: '按只读覆写令牌拉取指定 .stoverride 或 .js；自动展开 {{BASE_URL}} 占位符',
+      summary: '按独立只读覆写令牌拉取指定 .stoverride 或 .js；复用 /api/config_download/* 放行路径并自动展开 {{BASE_URL}}',
       responses: {
         '200': { description: 'YAML 覆写或 JS 脚本' },
         '404': { description: '令牌或文件不存在或已停用' }

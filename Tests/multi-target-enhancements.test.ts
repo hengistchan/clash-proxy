@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { after, beforeEach, test } from 'node:test';
 import { parse, stringify } from 'yaml';
 
-import { GET as overrideDownload } from '../app/api/override_download/[token]/[slug]/route';
+import { GET as overrideDownload } from '../app/api/config_download/[token]/override/[slug]/route';
 import { POST as rotateOverrideLinkRoute, DELETE as revokeOverrideLinkRoute } from '../app/api/profiles/[profileId]/overrides/download-link/route';
 import { GET as listOverridesRoute, POST as createOverrideRoute } from '../app/api/profiles/[profileId]/overrides/route';
 import { PUT as updateOverrideRoute, DELETE as deleteOverrideRoute } from '../app/api/profiles/[profileId]/overrides/[overrideId]/route';
@@ -326,23 +326,23 @@ test('Stash overrides CRUD, starter tile bundle, tokenized download with BASE_UR
   );
   assert.equal(tokenRes.status, 200);
   const { basePath } = await tokenRes.json();
-  assert.match(basePath, /^\/api\/override_download\/[A-Za-z0-9_-]{43}$/);
+  assert.match(basePath, /^\/api\/config_download\/[A-Za-z0-9_-]{43}\/override$/);
   const token = basePath.split('/')[3];
 
   const ovRes = await overrideDownload(
-    new Request(`https://forge.example.test/api/override_download/${token}/stash-tiles.stoverride`),
+    new Request(`https://forge.example.test/api/config_download/${token}/override/stash-tiles.stoverride`),
     { params: Promise.resolve({ token, slug: 'stash-tiles.stoverride' }) }
   );
   assert.equal(ovRes.status, 200);
   assert.equal(ovRes.headers.get('Cache-Control'), 'no-store');
   const ovText = await ovRes.text();
   assert.doesNotMatch(ovText, /\{\{BASE_URL\}\}/);
-  assert.match(ovText, new RegExp(`https://forge\\.example\\.test/api/override_download/${token}/ai-media-check\\.js`));
+  assert.match(ovText, new RegExp(`https://forge\\.example\\.test/api/config_download/${token}/override/ai-media-check\\.js`));
   const parsedOv = parse(ovText);
   assert.ok(Array.isArray(parsedOv.tiles) && parsedOv.tiles.length >= 4);
 
   const jsRes = await overrideDownload(
-    new Request(`https://forge.example.test/api/override_download/${token}/ai-media-check.js`),
+    new Request(`https://forge.example.test/api/config_download/${token}/override/ai-media-check.js`),
     { params: Promise.resolve({ token, slug: 'ai-media-check.js' }) }
   );
   assert.equal(jsRes.status, 200);

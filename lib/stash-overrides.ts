@@ -111,7 +111,7 @@ export function listStashOverrides(profileId: number) {
   return {
     items: rows.map(mapRow),
     tokenConfigured: Boolean(token),
-    basePath: token ? `/api/override_download/${token}` : null
+    basePath: token ? `/api/config_download/${token}/override` : null
   };
 }
 
