@@ -85,7 +85,7 @@ export const proxyProviderSchema = z.object({
 
 export const proxyGroupSchema = z.object({
   name,
-  type: z.enum(['select', 'url-test', 'fallback', 'load-balance', 'relay']),
+  type: z.enum(['select', 'smart', 'url-test', 'fallback', 'load-balance', 'relay']),
   config: jsonObject.default({}),
   clientOptions: z.object({
     shadowrocket: z.object({

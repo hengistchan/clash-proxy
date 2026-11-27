@@ -34,6 +34,21 @@ export function snapshotResources(snapshot: Snapshot, resource: ResourceKind) {
   }[resource];
 }
 
+export const MANAGED_GROUP_COMMON_KEYS = ['proxies', 'use', 'filter', 'hidden'];
+export const MANAGED_GROUP_STASH_KEYS = [
+  'proxies',
+  'use',
+  'filter',
+  'hidden',
+  'exclude-filter',
+  'exclude-type',
+  'include-all',
+  'include-all-proxies',
+  'include-all-providers',
+  'policy-priority',
+  'benchmark-disabled'
+];
+
 export function resourceEditorDraft(snapshot: Snapshot, resource: ResourceKind, existing: EditableResource, initialValues?: EditorPreset) {
     const item = existing as unknown as Record<string, unknown> | null;
     const config = (item?.config || {}) as JsonObject;
@@ -59,10 +74,20 @@ export function resourceEditorDraft(snapshot: Snapshot, resource: ResourceKind, 
               : '')
       ),
       configText: JSON.stringify(
-        resource === 'proxy-groups' ? configWithout(separated.common, ['proxies', 'use', 'filter']) : separated.common,
+        resource === 'proxy-groups' ? configWithout(separated.common, MANAGED_GROUP_COMMON_KEYS) : separated.common,
         null, 2
       ),
-      stashText: JSON.stringify(configWithout(separated.stash, resource === 'rule-providers' ? ['type', 'payload', 'behavior'] : []), null, 2),
+      stashText: JSON.stringify(
+        configWithout(
+          separated.stash,
+          resource === 'rule-providers'
+            ? ['type', 'payload', 'behavior']
+            : resource === 'proxy-groups'
+              ? MANAGED_GROUP_STASH_KEYS
+              : []
+        ),
+        null, 2
+      ),
       shadowrocketText: JSON.stringify(scoped ? clients?.shadowrocket ?? {} : {}, null, 2),
       shadowrocketSourceUrl: '',
       clearShadowrocketSource: false,
@@ -82,6 +107,14 @@ export function resourceEditorDraft(snapshot: Snapshot, resource: ResourceKind, 
       groupProxies: (initialValues?.groupProxies || textArray(config.proxies)).join('\n'),
       groupUse: (initialValues?.groupUse || textArray(config.use)).join('\n'),
       groupFilter: String(config.filter || ''),
+      groupExcludeFilter: String(config['exclude-filter'] || ''),
+      groupExcludeType: String(config['exclude-type'] || ''),
+      groupPolicyPriority: String(config['policy-priority'] || ''),
+      groupIncludeAll: config['include-all'] === true,
+      groupIncludeAllProxies: config['include-all-proxies'] === true,
+      groupIncludeAllProviders: config['include-all-providers'] === true,
+      groupHidden: config.hidden === true,
+      groupBenchmarkDisabled: config['benchmark-disabled'] === true,
       rulePayload: itemType === 'RULE-SET' && !itemPayload
         ? snapshot.ruleProviders[0]?.name || ''
         : itemPayload,

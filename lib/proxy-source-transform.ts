@@ -24,20 +24,45 @@ export interface ProxyGroupCoverage {
   uncoveredAutoSamples: string[];
 }
 
-function compileOptionalRegex(pattern: unknown): { regex: RE2JS | null; invalid: boolean } {
-  if (typeof pattern !== 'string' || !pattern) return { regex: null, invalid: false };
-  try {
-    return { regex: RE2JS.compile(pattern), invalid: false };
-  } catch {
-    return { regex: null, invalid: true };
+const AUTO_GROUP_TYPES = new Set<ProxyGroup['type']>(['smart', 'url-test', 'fallback', 'load-balance']);
+
+const PROTOCOL_ALIASES: Record<string, string> = {
+  ss: 'shadowsocks',
+  ssr: 'shadowsocksr',
+  hy2: 'hysteria2',
+  wg: 'wireguard'
+};
+
+function canonicalProtocolName(value: string): string {
+  const lower = value.trim().toLowerCase();
+  return PROTOCOL_ALIASES[lower] ?? lower;
+}
+
+function compileOptionalRegex(pattern: unknown): { regexes: RE2JS[]; invalid: boolean } {
+  if (typeof pattern !== 'string' || !pattern) return { regexes: [], invalid: false };
+  const regexes: RE2JS[] = [];
+  for (const segment of pattern.split('`')) {
+    if (!segment) continue;
+    try {
+      regexes.push(RE2JS.compile(segment));
+    } catch {
+      return { regexes: [], invalid: true };
+    }
   }
+  return { regexes, invalid: false };
+}
+
+function matchesAny(regexes: RE2JS[], value: string): boolean {
+  return regexes.some((regex) => regex.test(value));
 }
 
 export function analyzeProxyGroupCoverage(
-  nodeNames: string[],
+  nodesInput: Array<string | { name: string; type?: string }>,
   proxyGroups: ProxyGroup[],
   providerName?: string
 ): ProxyGroupCoverage {
+  const nodes = nodesInput.map((item) => (typeof item === 'string' ? { name: item } : item));
+  const nodeNames = nodes.map((item) => item.name);
   const relevant = proxyGroups.filter((group) => {
     const uses = Array.isArray(group.config.use) ? group.config.use.map(String) : [];
     const includeAll = group.config['include-all'] === true || group.config['include-all-providers'] === true;
@@ -47,6 +72,15 @@ export function analyzeProxyGroupCoverage(
   const groups: ProxyGroupCoverageEntry[] = relevant.map((group) => {
     const inc = compileOptionalRegex(group.config.filter);
     const exc = compileOptionalRegex(group.config['exclude-filter']);
+    const excludedTypes =
+      typeof group.config['exclude-type'] === 'string' && group.config['exclude-type'].trim()
+        ? new Set(
+            group.config['exclude-type']
+              .split('|')
+              .map((item) => item.trim().toLowerCase())
+              .filter(Boolean)
+          )
+        : null;
     if (inc.invalid || exc.invalid) {
       return {
         id: group.id,
@@ -59,10 +93,18 @@ export function analyzeProxyGroupCoverage(
         invalidRegex: true
       };
     }
-    const matched = nodeNames.filter((name) =>
-      (!inc.regex || inc.regex.test(name)) && (!exc.regex || !exc.regex.test(name))
-    );
-    if (['url-test', 'fallback', 'load-balance'].includes(group.type)) {
+    const matched = nodes
+      .filter((node) => {
+        if (inc.regexes.length && !matchesAny(inc.regexes, node.name)) return false;
+        if (exc.regexes.length && matchesAny(exc.regexes, node.name)) return false;
+        if (excludedTypes && node.type) {
+          const lower = node.type.toLowerCase();
+          if (excludedTypes.has(lower) || excludedTypes.has(canonicalProtocolName(lower))) return false;
+        }
+        return true;
+      })
+      .map((node) => node.name);
+    if (AUTO_GROUP_TYPES.has(group.type)) {
       for (const name of matched) coveredByAuto.add(name);
     }
     return {
@@ -75,7 +117,7 @@ export function analyzeProxyGroupCoverage(
       sampleNames: matched.slice(0, 6)
     };
   });
-  const uncovered = relevant.some((group) => ['url-test', 'fallback', 'load-balance'].includes(group.type))
+  const uncovered = relevant.some((group) => AUTO_GROUP_TYPES.has(group.type))
     ? nodeNames.filter((name) => !coveredByAuto.has(name))
     : [];
   return {
@@ -134,6 +176,7 @@ export function transformProxySource(text: string, rules: ProxyRewriteRule[]) {
   return {
     yaml,
     nodeNames: nodes.map((node) => node.name),
+    nodes: nodes.map((node) => ({ name: node.name, type: node.type })),
     preview: { totalNodes: nodes.length, matchedNodes: matched.size, changedNodes: changed.size, examples }
   };
 }

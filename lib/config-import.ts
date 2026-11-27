@@ -22,7 +22,9 @@ export function classifyConfig(text: string, doc = parseConfigDocument(text)) {
   const stash = new Set<string>();
   const native = new Set<string>();
   const publicStashFields = new Set([
-    'lazy', 'ssid-policy', 'include-all', 'use-url', 'fake-ip-range', 'fake-ip-filter',
+    'lazy', 'ssid-policy', 'include-all', 'include-all-proxies', 'include-all-providers',
+    'exclude-filter', 'exclude-type', 'policy-priority', 'benchmark-disabled',
+    'use-url', 'fake-ip-range', 'fake-ip-filter',
     'nameserver-policy', 'script', 'http', 'cron', 'script-providers', 'plugin', 'plugin-opts'
   ]);
   const addStash = (label: string, keys: string[]) => {

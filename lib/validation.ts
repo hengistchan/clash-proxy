@@ -69,6 +69,51 @@ function duplicates<T>(items: T[], key: (item: T) => string): string[] {
   return [...repeated];
 }
 
+const EXCLUDE_TYPE_SHORTHANDS = new Set(['ss', 'ssr', 'hy', 'hy2', 'wg']);
+
+function isValidStashMultiRegex(pattern: string): boolean {
+  for (const segment of pattern.split('`')) {
+    try {
+      new RegExp(segment);
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+function validatePolicyPriority(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim()) {
+    return 'policy-priority 必须是非空字符串，格式为 “正则:权重;正则:权重”。';
+  }
+  const trimmed = value.trim().replace(/;$/, '');
+  if (!trimmed) {
+    return 'policy-priority 至少需要包含一条 “正则:权重” 规则。';
+  }
+  for (const rawEntry of trimmed.split(';')) {
+    const entry = rawEntry.trim();
+    const colon = entry.lastIndexOf(':');
+    if (!entry || colon <= 0 || colon === entry.length - 1) {
+      return `policy-priority 条目 “${entry}” 格式无效，应为 “正则:正数权重”（例如 HK:0.8）。`;
+    }
+    const expr = entry.slice(0, colon).trim();
+    const weightText = entry.slice(colon + 1).trim();
+    if (!expr || !/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(weightText)) {
+      return `policy-priority 条目 “${entry}” 的权重必须是大于 0 的数字。`;
+    }
+    const weight = Number(weightText);
+    if (!Number.isFinite(weight) || weight <= 0) {
+      return `policy-priority 条目 “${entry}” 的权重必须大于 0（默认 1，越小越优先）。`;
+    }
+    try {
+      new RegExp(expr);
+    } catch {
+      return `policy-priority 条目 “${entry}” 包含无效正则表达式。`;
+    }
+  }
+  return null;
+}
+
 function validCidr(payload: string): boolean {
   const [address, prefixText, extra] = payload.split('/');
   if (extra !== undefined || !address) return false;
@@ -326,6 +371,22 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
           'proxy-group',
           group.id
         );
+        continue;
+      }
+      if (
+        group.type === 'smart' &&
+        (groupNames.has(member) ||
+          (BUILTIN_POLICIES as readonly string[]).includes(member) ||
+          (SHADOWROCKET_BUILTINS as readonly string[]).includes(member))
+      ) {
+        issue(
+          issues,
+          'error',
+          'group.smart-nested-member',
+          `Smart 策略组 “${group.name}” 只能包含实际代理节点，不能嵌套策略组或内置策略 “${member}”。`,
+          'proxy-group',
+          group.id
+        );
       }
     }
     for (const provider of use) {
@@ -340,10 +401,24 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
         );
       }
     }
+    for (const boolKey of ['include-all', 'include-all-proxies', 'include-all-providers', 'benchmark-disabled'] as const) {
+      if (group.config[boolKey] !== undefined && typeof group.config[boolKey] !== 'boolean') {
+        issue(
+          issues,
+          'error',
+          boolKey === 'benchmark-disabled' ? 'group.benchmark-disabled-invalid' : 'group.include-all-invalid',
+          `策略组 “${group.name}” 的 ${boolKey} 必须是布尔值。`,
+          'proxy-group',
+          group.id
+        );
+      }
+    }
     if (
       proxies.length === 0 &&
       use.length === 0 &&
       group.config['include-all'] !== true &&
+      group.config['include-all-proxies'] !== true &&
+      group.config['include-all-providers'] !== true &&
       group.config['use-url'] === undefined
     ) {
       issue(
@@ -355,19 +430,89 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
         group.id
       );
     }
-    if (typeof group.config.filter === 'string') {
-      try {
-        new RegExp(group.config.filter);
-      } catch {
+    if (typeof group.config.filter === 'string' && !isValidStashMultiRegex(group.config.filter)) {
+      issue(
+        issues,
+        'error',
+        'group.filter-invalid',
+        `Strategy group “${group.name}” has an invalid filter regular expression`,
+        'proxy-group',
+        group.id
+      );
+    }
+    if (group.config['exclude-filter'] !== undefined) {
+      if (typeof group.config['exclude-filter'] !== 'string' || !isValidStashMultiRegex(group.config['exclude-filter'])) {
         issue(
           issues,
           'error',
-          'group.filter-invalid',
-          `Strategy group “${group.name}” has an invalid filter regular expression`,
+          'group.exclude-filter-invalid',
+          `策略组 “${group.name}” 的 exclude-filter 正则表达式无效。`,
           'proxy-group',
           group.id
         );
       }
+    }
+    if (group.config['exclude-type'] !== undefined) {
+      if (typeof group.config['exclude-type'] !== 'string') {
+        issue(
+          issues,
+          'error',
+          'group.exclude-type-invalid',
+          `策略组 “${group.name}” 的 exclude-type 必须是字符串（使用 | 分隔完整协议名，如 Shadowsocks|VMess）。`,
+          'proxy-group',
+          group.id
+        );
+      } else {
+        const shorthands = group.config['exclude-type']
+          .split('|')
+          .map((item) => item.trim())
+          .filter((item) => EXCLUDE_TYPE_SHORTHANDS.has(item.toLowerCase()));
+        if (shorthands.length) {
+          issue(
+            issues,
+            'warning',
+            'group.exclude-type-shorthand',
+            `策略组 “${group.name}” 的 exclude-type 包含简写（${shorthands.join('、')}）；Stash 5.1+ 要求完整协议名（如 Shadowsocks、ShadowsocksR、Hysteria2、WireGuard）。`,
+            'proxy-group',
+            group.id
+          );
+        }
+      }
+    }
+    if (group.config['policy-priority'] !== undefined) {
+      const priorityError = validatePolicyPriority(group.config['policy-priority']);
+      if (priorityError) {
+        issue(
+          issues,
+          'error',
+          'group.policy-priority-invalid',
+          `策略组 “${group.name}”：${priorityError}`,
+          'proxy-group',
+          group.id
+        );
+      } else if (group.type !== 'smart') {
+        issue(
+          issues,
+          'warning',
+          'group.policy-priority-unused',
+          `策略组 “${group.name}” 设置了 policy-priority，但该权重仅对 smart 策略组生效。`,
+          'proxy-group',
+          group.id
+        );
+      }
+    }
+    if (
+      group.type === 'smart' &&
+      ['interval', 'lazy', 'tolerance'].some((key) => group.config[key] !== undefined)
+    ) {
+      issue(
+        issues,
+        'info',
+        'group.smart-ignored-options',
+        `Smart 策略组 “${group.name}” 采用按需轻量探测，interval / lazy / tolerance 在 Stash 5.1+ 中不生效（降级编译为 Mihomo url-test 时会自动复用）；如需关闭后台探测请使用 benchmark-disabled: true。`,
+        'proxy-group',
+        group.id
+      );
     }
     if (group.type === 'load-balance' && group.config.strategy === undefined) {
       issue(
@@ -839,7 +984,10 @@ export function validateSnapshot(snapshot: Snapshot): ValidationResult {
   }
   if (
     snapshot.proxyGroups.some(
-      (g) => Array.isArray(g.config.use) && g.config.use.length > 0
+      (g) =>
+        (Array.isArray(g.config.use) && g.config.use.length > 0) ||
+        g.config['include-all'] === true ||
+        g.config['include-all-providers'] === true
     )
   ) {
     issue(

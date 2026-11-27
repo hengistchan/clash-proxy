@@ -14,7 +14,15 @@ import type {
   Snapshot,
   StashRule
 } from '@/lib/types';
-import { parseObject, textArray, configWithout, snapshotResources, resourceEditorDraft } from './resource-editor-draft';
+import {
+  MANAGED_GROUP_COMMON_KEYS,
+  MANAGED_GROUP_STASH_KEYS,
+  parseObject,
+  textArray,
+  configWithout,
+  snapshotResources,
+  resourceEditorDraft
+} from './resource-editor-draft';
 import { BUILTIN_POLICIES, SHADOWROCKET_BUILTINS } from '@/lib/types';
 
 import { ApiError, apiRequest } from './api-client';
@@ -82,6 +90,14 @@ export function EditorDialog({
   const [groupProxies, setGroupProxies] = useState('');
   const [groupUse, setGroupUse] = useState('');
   const [groupFilter, setGroupFilter] = useState('');
+  const [groupExcludeFilter, setGroupExcludeFilter] = useState('');
+  const [groupExcludeType, setGroupExcludeType] = useState('');
+  const [groupPolicyPriority, setGroupPolicyPriority] = useState('');
+  const [groupIncludeAll, setGroupIncludeAll] = useState(false);
+  const [groupIncludeAllProxies, setGroupIncludeAllProxies] = useState(false);
+  const [groupIncludeAllProviders, setGroupIncludeAllProviders] = useState(false);
+  const [groupHidden, setGroupHidden] = useState(false);
+  const [groupBenchmarkDisabled, setGroupBenchmarkDisabled] = useState(false);
   const [rulePayload, setRulePayload] = useState('');
   const [rulePolicy, setRulePolicy] = useState('DIRECT');
   const [ruleOptions, setRuleOptions] = useState<string[]>([]);
@@ -98,7 +114,9 @@ export function EditorDialog({
   const fingerprint = JSON.stringify({
     name, displayName, type, configText, stashText, shadowrocketText, shadowrocketSourceUrl, clearShadowrocketSource, sourceType, sourceUrl, sourceHeaders,
     clearSource, clearHeaders, rewriteRules, providerBehavior, providerType, entriesText,
-    groupProxies, groupUse, groupFilter, rulePayload, rulePolicy, ruleOptions,
+    groupProxies, groupUse, groupFilter, groupExcludeFilter, groupExcludeType, groupPolicyPriority,
+    groupIncludeAll, groupIncludeAllProxies, groupIncludeAllProviders, groupHidden, groupBenchmarkDisabled,
+    rulePayload, rulePolicy, ruleOptions,
     ruleEnabled, ruleNote, rulePriority, hostPattern, hostValue
   });
   const dirty = baseline !== null && fingerprint !== baseline;
@@ -179,6 +197,14 @@ export function EditorDialog({
     setGroupProxies(draft.groupProxies);
     setGroupUse(draft.groupUse);
     setGroupFilter(draft.groupFilter);
+    setGroupExcludeFilter(draft.groupExcludeFilter);
+    setGroupExcludeType(draft.groupExcludeType);
+    setGroupPolicyPriority(draft.groupPolicyPriority);
+    setGroupIncludeAll(draft.groupIncludeAll);
+    setGroupIncludeAllProxies(draft.groupIncludeAllProxies);
+    setGroupIncludeAllProviders(draft.groupIncludeAllProviders);
+    setGroupHidden(draft.groupHidden);
+    setGroupBenchmarkDisabled(draft.groupBenchmarkDisabled);
     setRulePayload(draft.rulePayload);
     setRulePolicy(draft.rulePolicy);
     setRuleOptions(draft.ruleOptions);
@@ -312,27 +338,33 @@ export function EditorDialog({
           ...(sourceType === 'remote' ? { rewriteRules: serializeProxyRewrites(rewriteRules) } : {})
         };
       } else if (resource === 'proxy-groups') {
-        const rest = configWithout(parseObject(configText, '策略组高级配置'), [
-          'proxies',
-          'use',
-          'filter'
-        ]);
+        const rest = configWithout(parseObject(configText, '策略组高级配置'), MANAGED_GROUP_COMMON_KEYS);
+        const proxiesList = groupProxies
+          .split('\n')
+          .map((item) => item.trim())
+          .filter(Boolean);
+        const useList = groupUse
+          .split('\n')
+          .map((item) => item.trim())
+          .filter(Boolean);
         body = {
           name: name.trim(),
           type,
           clientOptions: { shadowrocket: parseObject(shadowrocketText, 'Shadowrocket 专用参数') },
           config: {
-            ...configWithout(parseObject(stashText, 'Stash 专用参数'), ['proxies', 'use', 'filter']),
+            ...configWithout(parseObject(stashText, 'Stash 专用参数'), MANAGED_GROUP_STASH_KEYS),
             ...rest,
-            proxies: groupProxies
-              .split('\n')
-              .map((item) => item.trim())
-              .filter(Boolean),
-            use: groupUse
-              .split('\n')
-              .map((item) => item.trim())
-              .filter(Boolean),
-            ...(groupFilter.trim() ? { filter: groupFilter.trim() } : {})
+            ...(proxiesList.length ? { proxies: proxiesList } : {}),
+            ...(useList.length ? { use: useList } : {}),
+            ...(groupFilter.trim() ? { filter: groupFilter.trim() } : {}),
+            ...(groupExcludeFilter.trim() ? { 'exclude-filter': groupExcludeFilter.trim() } : {}),
+            ...(groupExcludeType.trim() ? { 'exclude-type': groupExcludeType.trim() } : {}),
+            ...(groupPolicyPriority.trim() ? { 'policy-priority': groupPolicyPriority.trim() } : {}),
+            ...(groupIncludeAll ? { 'include-all': true } : {}),
+            ...(groupIncludeAllProxies ? { 'include-all-proxies': true } : {}),
+            ...(groupIncludeAllProviders ? { 'include-all-providers': true } : {}),
+            ...(groupHidden ? { hidden: true } : {}),
+            ...(groupBenchmarkDisabled ? { 'benchmark-disabled': true } : {})
           }
         };
       } else if (resource === 'rule-providers') {
@@ -460,9 +492,20 @@ export function EditorDialog({
             setConfigText={setConfigText} type={type} setType={setType}
             groupProxies={groupProxies} setGroupProxies={setGroupProxies} groupUse={groupUse}
             setGroupUse={setGroupUse} groupFilter={groupFilter} setGroupFilter={setGroupFilter}
+            groupExcludeFilter={groupExcludeFilter} setGroupExcludeFilter={setGroupExcludeFilter}
+            groupExcludeType={groupExcludeType} setGroupExcludeType={setGroupExcludeType}
+            groupPolicyPriority={groupPolicyPriority} setGroupPolicyPriority={setGroupPolicyPriority}
+            groupIncludeAll={groupIncludeAll} setGroupIncludeAll={setGroupIncludeAll}
+            groupIncludeAllProxies={groupIncludeAllProxies} setGroupIncludeAllProxies={setGroupIncludeAllProxies}
+            groupIncludeAllProviders={groupIncludeAllProviders} setGroupIncludeAllProviders={setGroupIncludeAllProviders}
+            groupHidden={groupHidden} setGroupHidden={setGroupHidden}
+            groupBenchmarkDisabled={groupBenchmarkDisabled} setGroupBenchmarkDisabled={setGroupBenchmarkDisabled}
             stashText={stashText} setStashText={setStashText} shadowrocketText={shadowrocketText}
-            setShadowrocketText={setShadowrocketText} memberOptions={[...BUILTIN_POLICIES, ...snapshot.proxies.map(node => node.name),
-              ...snapshot.proxyGroups.filter(group => group.id !== existing?.id).map(group => group.name)]} providers={snapshot.proxyProviders}
+            setShadowrocketText={setShadowrocketText}
+            memberOptions={[...BUILTIN_POLICIES, ...snapshot.proxies.map(node => node.name),
+              ...snapshot.proxyGroups.filter(group => group.id !== existing?.id).map(group => group.name)]}
+            directNodeNames={snapshot.proxies.map(node => node.name)}
+            providers={snapshot.proxyProviders}
           />
         ) : null}
 

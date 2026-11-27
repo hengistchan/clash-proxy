@@ -599,7 +599,7 @@ export const openapi = {
           name,
           clientOptions: { ...object, description: '可选 Shadowrocket 专用策略组参数' },
           type: {
-            enum: ['select', 'url-test', 'fallback', 'load-balance', 'relay']
+            enum: ['select', 'smart', 'url-test', 'fallback', 'load-balance', 'relay']
           },
           config: {
             ...object,

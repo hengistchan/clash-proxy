@@ -930,3 +930,41 @@ test('Stash overrides view installs starter tiles, issues a tokenized download l
   await expect(urlLine).toHaveCount(0);
   expect((await request.get(downloadUrl)).status()).toBe(404);
 });
+
+test('creates a Stash 5.1 smart proxy group with priority weights and 5.1 filter fields', async ({ page, request }) => {
+  const initial = await create(request, 'stash-smart-e2e', [
+    'proxy-providers:',
+    '  feed:',
+    '    type: http',
+    '    url: https://provider.example.test/sub.yaml',
+    'proxies:',
+    '  - { name: DirectHK, type: socks5, server: 192.0.2.1, port: 1080 }',
+    'rules: ["MATCH,DIRECT"]'
+  ].join('\n'));
+  await login(page, initial);
+  await navigate(page, '策略组');
+  await page.getByRole('button', { name: '新增', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '新增策略组' });
+  await dialog.getByLabel('策略组名称').fill('SmartAuto');
+  await dialog.getByRole('combobox').filter({ hasText: 'select / 手动选择' }).click();
+  await page.getByRole('option', { name: 'smart / 智能优选（Stash 5.1+）' }).click();
+  await expect(dialog.getByLabel('Smart 策略权重（policy-priority · Stash 5.1+）')).toBeVisible();
+  await dialog.getByLabel('include-all-providers · 全部代理源').check();
+  await dialog.getByLabel('hidden · 隐藏策略组').check();
+  await dialog.getByLabel('benchmark-disabled · 关闭后台探测').check();
+  await dialog.getByLabel('节点过滤正则（filter）').fill('HK|香港`JP|日本');
+  await dialog.getByLabel('排除节点正则（exclude-filter · 5.1+）').fill('官网`到期');
+  await dialog.getByLabel('排除协议类型（exclude-type · 5.1+）').fill('Shadowsocks|VMess');
+  await dialog.getByLabel('Smart 策略权重（policy-priority · Stash 5.1+）').fill('Premium:0.7;HK:0.85');
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  const saved = (await snapshot(request, initial.profile.id)).proxyGroups.find((g: { name: string }) => g.name === 'SmartAuto');
+  expect(saved?.type).toBe('smart');
+  expect(saved?.config['include-all-providers']).toBe(true);
+  expect(saved?.config.hidden).toBe(true);
+  expect(saved?.config['benchmark-disabled']).toBe(true);
+  expect(saved?.config.filter).toBe('HK|香港`JP|日本');
+  expect(saved?.config['exclude-filter']).toBe('官网`到期');
+  expect(saved?.config['exclude-type']).toBe('Shadowsocks|VMess');
+  expect(saved?.config['policy-priority']).toBe('Premium:0.7;HK:0.85');
+});

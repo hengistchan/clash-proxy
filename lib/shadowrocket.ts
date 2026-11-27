@@ -351,14 +351,14 @@ export function compileShadowrocket(snapshot: Snapshot, remote?: RemoteResources
     const group = override ? { ...originalGroup, config: { ...originalGroup.config } } : originalGroup;
     if (override) {
       const replacement = Array.isArray(explicitMembers) || typeof override['policy-regex-filter'] === 'string';
-      const specific = ['ssid-policy', ...(replacement ? ['include-all', 'use-url'] : [])]
+      const specific = ['ssid-policy', ...(replacement ? ['include-all', 'include-all-proxies', 'include-all-providers', 'use-url'] : [])]
         .filter((key) => group.config[key] !== undefined);
       if (specific.length) {
         for (const key of specific) delete group.config[key];
         diagnose('group.client-options', '此策略组使用独立的 Shadowrocket 选项。', 'proxy-group', group.id, 'warning');
       }
     }
-    if (group.config['include-all'] === true) {
+    if (group.config['include-all'] === true || group.config['include-all-proxies'] === true || group.config['include-all-providers'] === true) {
       diagnose('group.provider', '暂不支持自动纳入全部来源。请在策略组中逐个选择要使用的代理源。', 'proxy-group', group.id);
       continue;
     }

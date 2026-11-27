@@ -400,3 +400,148 @@ test('Stash overrides CRUD, starter tile bundle, tokenized download with BASE_UR
     404
   );
 });
+
+test('Stash 5.1 smart proxy groups validate, export, downgrade cleanly for Mihomo, and support 5.1 filters', async () => {
+  const { profile } = createProfile('Stash 5.1 smart', stringify({
+    dns: {
+      'follow-rule': true,
+      nameserver: ['223.5.5.5'],
+      'proxy-server-nameserver': ['223.5.5.5']
+    },
+    proxies: [
+      { name: 'DirectHK', type: 'socks5', server: '192.0.2.10', port: 1080 }
+    ],
+    'proxy-providers': {
+      MainFeed: {
+        type: 'http',
+        url: 'https://provider.example.test/main.yaml',
+        interval: 3600
+      }
+    },
+    'proxy-groups': [
+      {
+        name: 'SmartAuto',
+        type: 'smart',
+        proxies: ['DirectHK'],
+        'include-all-providers': true,
+        filter: 'HK|香港`JP|日本',
+        'exclude-filter': '官网`到期',
+        'exclude-type': 'Shadowsocks|VMess',
+        'policy-priority': 'Premium:0.7;HK|香港:0.85;x3:1.5;',
+        hidden: true,
+        'benchmark-disabled': true
+      },
+      {
+        name: 'Proxy',
+        type: 'select',
+        proxies: ['SmartAuto', 'DIRECT']
+      }
+    ],
+    rules: ['MATCH,Proxy']
+  }));
+
+  const snap = getCompilationSnapshot(profile.id);
+  const validation = validateSnapshot(snap);
+  assert.equal(validation.valid, true, JSON.stringify(validation.issues));
+  assert.equal(validation.issues.some((i) => i.code === 'group.empty'), false);
+
+  // Resource graph links include-all-providers
+  const graph = buildResourceGraph(getSnapshot(profile.id));
+  const smartGroup = snap.proxyGroups.find((g) => g.name === 'SmartAuto')!;
+  const provider = snap.proxyProviders[0]!;
+  assert.ok(graph.edges.some((e) => e.from === `proxy-groups:${smartGroup.id}` && e.to === `proxy-providers:${provider.id}` && e.label === '包含全部来源'));
+
+  // Stash export preserves full Stash 5.1 smart schema
+  const stashYaml = parse(getLatestConfig(profile.id).yaml);
+  const stashSmart = stashYaml['proxy-groups'].find((g: { name: string }) => g.name === 'SmartAuto');
+  assert.equal(stashSmart.type, 'smart');
+  assert.equal(stashSmart['policy-priority'], 'Premium:0.7;HK|香港:0.85;x3:1.5;');
+  assert.equal(stashSmart['include-all-providers'], true);
+  assert.equal(stashSmart.filter, 'HK|香港`JP|日本');
+  assert.equal(stashSmart['exclude-filter'], '官网`到期');
+  assert.equal(stashSmart['exclude-type'], 'Shadowsocks|VMess');
+  assert.equal(stashSmart['benchmark-disabled'], true);
+  assert.equal(stashSmart.hidden, true);
+
+  // Mihomo compilation downgrades smart -> url-test, strips policy-priority & benchmark-disabled, converts backtick regexes
+  const mihomo = compileMihomo(snap);
+  assert.ok(mihomo.artifact, JSON.stringify(mihomo.issues));
+  assert.ok(mihomo.issues.some((i) => i.code === 'mihomo.smart-downgraded' && i.message.includes('SmartAuto')));
+  assert.ok(mihomo.issues.some((i) => i.code === 'mihomo.omitted-group-options' && i.message.includes('benchmark-disabled')));
+  const mihomoYaml = parse(mihomo.artifact.yaml);
+  const mihomoSmart = mihomoYaml['proxy-groups'].find((g: { name: string }) => g.name === 'SmartAuto');
+  assert.equal(mihomoSmart.type, 'url-test');
+  assert.equal(mihomoSmart['policy-priority'], undefined);
+  assert.equal(mihomoSmart['benchmark-disabled'], undefined);
+  assert.equal(mihomoSmart.interval, 300);
+  assert.equal(mihomoSmart.tolerance, 50);
+  assert.equal(mihomoSmart.filter, '(?:HK|香港)|(?:JP|日本)');
+  assert.equal(mihomoSmart['exclude-filter'], '(?:官网)|(?:到期)');
+  assert.equal(mihomoSmart['exclude-type'], 'Shadowsocks|VMess');
+
+  // Verify real verge-mihomo kernel validates the downgraded config
+  if (process.env.MIHOMO_TEST_BIN) {
+    const work = join(dir, `kernel-smart-${serial}`);
+    mkdirSync(work);
+    const file = join(work, 'config.yaml');
+    writeFileSync(file, mihomo.artifact.yaml);
+    const kernel = spawnSync(process.env.MIHOMO_TEST_BIN, ['-t', '-d', work, '-f', file], {
+      encoding: 'utf8', timeout: 20_000
+    });
+    assert.ifError(kernel.error);
+    assert.equal(kernel.status, 0, kernel.stdout + kernel.stderr);
+  }
+
+  // Proxy source preview handles smart auto-coverage, backtick multi-regex, and exclude-type
+  const preview = await previewProxySource(
+    profile.id,
+    { providerId: provider.id, config: {}, rewriteRules: [] },
+    async () => stringify({
+      proxies: [
+        { name: 'HK-Trojan-01', type: 'trojan', server: '192.0.2.1', port: 443, password: 'p' },
+        { name: 'JP-Trojan-02', type: 'trojan', server: '192.0.2.2', port: 443, password: 'p' },
+        { name: 'HK-SS-Excluded', type: 'ss', server: '192.0.2.3', port: 443, cipher: 'aes-128-gcm', password: 'p' },
+        { name: 'HK-官网公告', type: 'trojan', server: '192.0.2.4', port: 443, password: 'p' },
+        { name: 'US-Uncovered', type: 'trojan', server: '192.0.2.5', port: 443, password: 'p' }
+      ]
+    })
+  );
+  const smartCov = preview.groupCoverage?.groups.find((g) => g.name === 'SmartAuto');
+  assert.equal(smartCov?.matchedCount, 2);
+  assert.deepEqual(smartCov?.sampleNames, ['HK-Trojan-01', 'JP-Trojan-02']);
+  assert.equal(preview.groupCoverage?.uncoveredAutoCount, 3);
+});
+
+test('Stash 5.1 smart validation catches nested members, bad policy-priority, shorthand exclude-type, and ignored timing fields', () => {
+  const { profile } = createProfile('Smart validation');
+  createProxy(profile.id, {
+    name: 'NodeA',
+    type: 'socks5',
+    config: { server: '192.0.2.1', port: 1080 }
+  });
+  createProxyGroup(profile.id, {
+    name: 'ChildSelect',
+    type: 'select',
+    config: { proxies: ['NodeA'], 'policy-priority': 'HK:0.8' }
+  });
+  createProxyGroup(profile.id, {
+    name: 'BadSmart',
+    type: 'smart',
+    config: {
+      proxies: ['NodeA', 'ChildSelect', 'DIRECT'],
+      'policy-priority': 'HK:0;BadWeight:-1',
+      'exclude-type': 'ss|hy2',
+      interval: 300,
+      tolerance: 50
+    }
+  });
+
+  const validation = validateSnapshot(getCompilationSnapshot(profile.id));
+  assert.equal(validation.valid, false);
+  assert.ok(validation.issues.some((i) => i.code === 'group.smart-nested-member' && i.message.includes('ChildSelect')));
+  assert.ok(validation.issues.some((i) => i.code === 'group.smart-nested-member' && i.message.includes('DIRECT')));
+  assert.ok(validation.issues.some((i) => i.code === 'group.policy-priority-invalid'));
+  assert.ok(validation.issues.some((i) => i.code === 'group.policy-priority-unused' && i.severity === 'warning'));
+  assert.ok(validation.issues.some((i) => i.code === 'group.exclude-type-shorthand' && i.severity === 'warning'));
+  assert.ok(validation.issues.some((i) => i.code === 'group.smart-ignored-options' && i.severity === 'info'));
+});

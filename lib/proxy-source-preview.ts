@@ -37,7 +37,7 @@ export async function previewProxySource(
     try {
       const transformed = transformProxySource(body, input.rewriteRules);
       const targetName = existing?.name ?? input.providerName;
-      const groupCoverage = analyzeProxyGroupCoverage(transformed.nodeNames, snapshot.proxyGroups, targetName);
+      const groupCoverage = analyzeProxyGroupCoverage(transformed.nodes, snapshot.proxyGroups, targetName);
       return {
         ...transformed.preview,
         ...(groupCoverage.groups.length ? { groupCoverage } : {})

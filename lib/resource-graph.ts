@@ -115,6 +115,14 @@ export function buildResourceGraph(snapshot: Snapshot): ResourceGraph {
       for (const key of sources.values()) link(from, key, '包含全部来源');
       for (const node of snapshot.proxies)
         link(from, resourceKey('proxies', node.id), '包含全部节点');
+    } else {
+      if (group.config['include-all-providers'] === true) {
+        for (const key of sources.values()) link(from, key, '包含全部来源');
+      }
+      if (group.config['include-all-proxies'] === true) {
+        for (const node of snapshot.proxies)
+          link(from, resourceKey('proxies', node.id), '包含全部节点');
+      }
     }
     if (isJsonObject(group.config['ssid-policy']))
       for (const [network, name] of Object.entries(

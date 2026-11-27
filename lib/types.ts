@@ -6,6 +6,7 @@ export type ProfileMode = 'rule' | 'global' | 'direct';
 export type LogLevel = 'silent' | 'info' | 'warning' | 'error' | 'debug';
 export type ProxyGroupType =
   | 'select'
+  | 'smart'
   | 'url-test'
   | 'fallback'
   | 'load-balance'
@@ -207,6 +208,7 @@ export const RULE_OPTIONS = ['no-resolve', 'no-track', 'pre-matching'] as const;
 
 export const PROXY_GROUP_TYPES: ProxyGroupType[] = [
   'select',
+  'smart',
   'url-test',
   'fallback',
   'load-balance',

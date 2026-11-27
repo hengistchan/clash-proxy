@@ -44,6 +44,7 @@ export const BUILTIN_POLICY_DESCRIPTIONS = {
 
 export const PROXY_GROUP_TYPE_DESCRIPTIONS = {
   select: '手动选择出口成员',
+  smart: '按真实流量表现分站点智能优选节点（Stash 5.1+）',
   'url-test': '自动选择延迟最低的可用成员',
   fallback: '按成员顺序使用首个可用节点',
   'load-balance': '将请求分摊到多个成员',

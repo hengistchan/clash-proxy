@@ -93,7 +93,7 @@ const SECTION_COPY: Partial<
   'proxy-groups': {
     title: '策略组',
     subtitle:
-      '维护 select、url-test、fallback、load-balance、relay，以及成员、代理源、filter 和延迟测试参数。',
+      '维护 select、smart（Stash 5.1+）、url-test、fallback、load-balance、relay，以及成员、代理源、filter / exclude-filter / exclude-type 和权重参数。',
     kind: 'proxy-groups'
   },
   'rule-providers': {

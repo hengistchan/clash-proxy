@@ -71,20 +71,56 @@ function mihomoCondition(type: string, payload: string, providers: Set<string>, 
   return [type, `(${conditions.join(',')})`];
 }
 
+function convertStashMultiRegex(pattern: string): string {
+  const parts = pattern.split('`').filter((part) => part.length > 0);
+  if (parts.length <= 1) return parts[0] ?? pattern;
+  return parts.map((part) => `(?:${part})`).join('|');
+}
+
 export function compileMihomo(snapshot: Snapshot, checked?: ExportResult['validation']): { artifact: ExportResult | null; issues: ValidationIssue[] } {
   const enabled = snapshot.rules.filter(rule => rule.enabled);
   const omitted = snapshot.advancedSections.filter(section => STASH_SECTION_SET.has(section.key));
   const warnings: ValidationIssue[] = [];
   const omittedSsidGroups: string[] = [];
+  const omittedBenchmarkDisabledGroups: string[] = [];
+  const downgradedSmartGroups: string[] = [];
   const compatible = {
     ...snapshot,
     rules: enabled,
     proxyGroups: snapshot.proxyGroups.map(group => {
-      if (!Object.hasOwn(group.config, 'ssid-policy')) return group;
-      omittedSsidGroups.push(group.name);
+      let changed = false;
+      let nextType = group.type;
       const nextConfig = { ...group.config };
-      delete nextConfig['ssid-policy'];
-      return { ...group, config: nextConfig };
+      if (Object.hasOwn(nextConfig, 'ssid-policy')) {
+        omittedSsidGroups.push(group.name);
+        delete nextConfig['ssid-policy'];
+        changed = true;
+      }
+      if (Object.hasOwn(nextConfig, 'benchmark-disabled')) {
+        omittedBenchmarkDisabledGroups.push(group.name);
+        delete nextConfig['benchmark-disabled'];
+        changed = true;
+      }
+      if (nextType === 'smart') {
+        nextType = 'url-test';
+        downgradedSmartGroups.push(group.name);
+        delete nextConfig['policy-priority'];
+        if (nextConfig.interval === undefined) nextConfig.interval = 300;
+        if (nextConfig.tolerance === undefined) nextConfig.tolerance = 50;
+        changed = true;
+      } else if (Object.hasOwn(nextConfig, 'policy-priority')) {
+        delete nextConfig['policy-priority'];
+        changed = true;
+      }
+      if (typeof nextConfig.filter === 'string' && nextConfig.filter.includes('`')) {
+        nextConfig.filter = convertStashMultiRegex(nextConfig.filter);
+        changed = true;
+      }
+      if (typeof nextConfig['exclude-filter'] === 'string' && nextConfig['exclude-filter'].includes('`')) {
+        nextConfig['exclude-filter'] = convertStashMultiRegex(nextConfig['exclude-filter']);
+        changed = true;
+      }
+      return changed ? { ...group, type: nextType, config: nextConfig } : group;
     }),
     advancedSections: snapshot.advancedSections.filter(section => !STASH_SECTION_SET.has(section.key))
   };
@@ -240,12 +276,28 @@ export function compileMihomo(snapshot: Snapshot, checked?: ExportResult['valida
       message: `未迁移的 Stash 专用区块：${omitted.map(section => section.key).join('、')}`
     });
   }
+  if (downgradedSmartGroups.length) {
+    comments.push(`已将 Stash smart 策略组降级为 Mihomo url-test：${downgradedSmartGroups.join('、')}`);
+    warnings.push({
+      severity: 'warning',
+      code: 'mihomo.smart-downgraded',
+      message: `标准 Mihomo 内核不支持 smart 策略组，已自动降级为 url-test 并移除 policy-priority：${downgradedSmartGroups.join('、')}`
+    });
+  }
   if (omittedSsidGroups.length) {
     comments.push(`已省略 Mihomo 不支持的 ssid-policy 策略组：${omittedSsidGroups.join('、')}`);
     warnings.push({
       severity: 'warning',
       code: 'mihomo.omitted-group-options',
       message: `已省略策略组中的 ssid-policy（Mihomo 不支持）：${omittedSsidGroups.join('、')}`
+    });
+  }
+  if (omittedBenchmarkDisabledGroups.length) {
+    comments.push(`已省略 Mihomo 不支持的 benchmark-disabled 策略组：${omittedBenchmarkDisabledGroups.join('、')}`);
+    warnings.push({
+      severity: 'warning',
+      code: 'mihomo.omitted-group-options',
+      message: `已省略策略组中的 benchmark-disabled（Mihomo 不支持）：${omittedBenchmarkDisabledGroups.join('、')}`
     });
   }
   return {

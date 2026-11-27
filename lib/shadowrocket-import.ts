@@ -154,7 +154,7 @@ export function parseShadowrocketDocument(text: string): ImportedDocument {
   const commonPolicies = new Set([...policies, 'DIRECT', 'REJECT']);
   const proxyGroups: ImportedDocument['proxyGroups'] = groupLines.map(({ name, value, line }) => {
     const [type, ...parts] = tokens(value);
-    if (!PROXY_GROUP_TYPES.includes(type as ProxyGroupType) || type === 'relay') invalid(line, '策略组类型暂不支持。');
+    if (!PROXY_GROUP_TYPES.includes(type as ProxyGroupType) || type === 'relay' || type === 'smart') invalid(line, '策略组类型暂不支持。');
     const { options, members } = optionPairs(parts, line);
     const config: JsonObject = {};
     const native: JsonObject = {};
