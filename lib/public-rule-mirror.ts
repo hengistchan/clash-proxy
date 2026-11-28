@@ -3,17 +3,24 @@ import { getEncryptionKey } from './crypto';
 import { HttpError } from './http';
 import { downloadSource, type SourceDownload } from './upstream-download';
 
-const HOST = 'raw.githubusercontent.com';
-const MAX_ENTRIES = 16;
+export const PUBLIC_RULE_HOSTS = new Set([
+  'raw.githubusercontent.com',
+  'ruleset.skk.moe',
+  'ruleset-mirror.skk.moe'
+]);
+const MAX_ENTRIES = 32;
 const CACHE_MS = 15 * 60_000;
 const RETRY_MS = 30_000;
 
-export function publicGitHubRuleUrl(value: unknown): URL | undefined {
+export function publicRuleUrl(value: unknown): URL | undefined {
   if (typeof value !== 'string' || value.length > 1024 || !URL.canParse(value)) return;
   const url = new URL(value);
-  if (url.protocol === 'https:' && url.host === HOST && !url.username && !url.password &&
-      !url.search && !url.hash && url.href.length <= 1024 && url.pathname.split('/').length >= 5) return url;
+  const minSegments = url.host === 'raw.githubusercontent.com' ? 5 : 3;
+  if (url.protocol === 'https:' && PUBLIC_RULE_HOSTS.has(url.host) && !url.username && !url.password &&
+      !url.search && !url.hash && url.href.length <= 1024 && url.pathname.split('/').length >= minSegments) return url;
 }
+
+export const publicGitHubRuleUrl = publicRuleUrl;
 
 function signature(encoded: string) {
   return createHmac('sha256', getEncryptionKey()).update('mihomo-public-rule:').update(encoded).digest();

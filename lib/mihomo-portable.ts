@@ -56,7 +56,7 @@ export async function portableMihomoYaml(
       });
     }
   }
-  if (tasks.length > 24) throw new HttpError(409, '单文件订阅最多支持 24 个托管来源。');
+  if (tasks.length > 32) throw new HttpError(409, '单文件订阅最多支持 32 个托管来源。');
   for (let start = 0; start < tasks.length; start += 8) {
     try {
       await Promise.all(tasks.slice(start, start + 8).map(task => task()));

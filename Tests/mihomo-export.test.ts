@@ -158,6 +158,7 @@ dns:
   fallback: [https://1.1.1.1/dns-query, https://dns.example.test/dns-query]
 rule-providers:
   github: {url: https://raw.githubusercontent.com/fixture/rules/main/sample.yaml, behavior: classical}
+  sukka: {url: https://ruleset.skk.moe/Clash/ip/ai.txt, behavior: classical, format: text}
   explicit: {url: https://raw.githubusercontent.com/fixture/rules/main/other.yaml, behavior: classical, proxy: REJECT}
   other: {url: https://rules.example.test/fixture, behavior: classical}
 rules: ["MATCH,DIRECT"]
@@ -176,6 +177,16 @@ rules: ["MATCH,DIRECT"]
     assert.equal(url, 'https://raw.githubusercontent.com/fixture/rules/main/sample.yaml');
     return contents;
   }), contents);
+  assert.equal(config['rule-providers'].sukka.proxy, 'DIRECT');
+  const sukkaMirror = new URL(config['rule-providers'].sukka.url);
+  assert.equal(sukkaMirror.origin, 'https://forge.example.test');
+  const sukkaCapability = sukkaMirror.pathname.split('/')[3];
+  assert.match(sukkaMirror.pathname, /^\/api\/proxy-source\/r1\.[\w-]+\.[a-f0-9]{64}\/rules\.yaml$/);
+  const sukkaContents = '# comment\nIP-CIDR,4.150.48.254/32,no-resolve\nIP-ASN,399358\n';
+  assert.equal(await mirroredRuleSource(sukkaCapability, async ({ url }) => {
+    assert.equal(url, 'https://ruleset.skk.moe/Clash/ip/ai.txt');
+    return sukkaContents;
+  }), sukkaContents);
   const tampered = capability.slice(0, -1) + (capability.endsWith('0') ? '1' : '0');
   await assert.rejects(mirroredRuleSource(tampered, async () => assert.fail('tampered path reached upstream')), { status: 404 });
   assert.equal(config['rule-providers'].explicit.proxy, 'REJECT');
@@ -188,6 +199,7 @@ rules: ["MATCH,DIRECT"]
   assert.equal(customResponse.status, 200);
   assert.deepEqual(parse(await customResponse.text()).dns['nameserver-policy'], { 'raw.githubusercontent.com': '9.9.9.9' });
   assert.equal(parse(getLatestConfig(profile.id).yaml)['rule-providers'].github.proxy, undefined);
+  assert.equal(parse(getLatestConfig(profile.id).yaml)['rule-providers'].sukka.url, 'https://ruleset.skk.moe/Clash/ip/ai.txt');
 });
 
 test('incompatible routing returns a targeted diagnostic rather than a partially working file', async () => {

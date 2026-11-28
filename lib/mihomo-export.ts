@@ -4,13 +4,12 @@ import { STASH_SECTIONS } from './client-capabilities';
 import { applyTargetOverrides, assembleYamlConfig, serializeYamlConfig, yamlTargetIssues, type ExportResult } from './exporter';
 import { isLogicalRuleType, splitTopLevel } from './rules';
 import { validateSnapshot } from './validation';
-import { publicGitHubRuleUrl } from './public-rule-mirror';
+import { PUBLIC_RULE_HOSTS, publicRuleUrl } from './public-rule-mirror';
 import { isJsonObject, type JsonObject, type Snapshot, type ValidationIssue } from './types';
 
 const STASH_SECTION_SET = new Set<string>(STASH_SECTIONS);
 const STASH_RULES = new Set(['SCRIPT', 'USER-AGENT', 'URL-REGEX', 'PROTOCOL']);
 const INBOUND_KEYS = ['port', 'socks-port', 'mixed-port', 'redir-port', 'tproxy-port', 'listeners'];
-const GITHUB_RULE_HOST = 'raw.githubusercontent.com';
 const PRIVATE_DNS_PATTERNS = new Set(['geosite:private', '*.lan', '*.local', '+.home.arpa', '+.miwifi.com']);
 
 function httpsUrl(value: JsonObject[string]): URL | undefined {
@@ -202,19 +201,20 @@ export function compileMihomo(snapshot: Snapshot, checked?: ExportResult['valida
   }
   const ruleProviders = config['rule-providers'] as Record<string, JsonObject>;
   const publicRules: NonNullable<ExportResult['publicRules']> = [];
-  let directGitHubRuleProvider = false;
+  const directPublicRuleHosts = new Set<string>();
   for (const provider of snapshot.ruleProviders) {
     const type = provider.providerType === 'remote' ? 'http' : provider.providerType === 'local' ? 'file' : 'inline';
     const source = ruleProviders[provider.name];
     configureProvider(source, type, 'rule-provider', provider.id);
-    if (type === 'http' && httpsUrl(source.url)?.hostname === GITHUB_RULE_HOST && source.proxy === undefined) {
+    const host = type === 'http' ? httpsUrl(source.url)?.hostname : undefined;
+    if (host && PUBLIC_RULE_HOSTS.has(host) && source.proxy === undefined) {
       source.proxy = 'DIRECT';
-      const upstream = publicGitHubRuleUrl(source.url);
+      const upstream = publicRuleUrl(source.url);
       if (upstream && !Object.hasOwn(source, 'header') && !Object.hasOwn(source, 'headers') &&
           (source.format === undefined || source.format === 'yaml' || source.format === 'text')) {
         publicRules.push({ name: provider.name, upstream: upstream.href });
       } else {
-        directGitHubRuleProvider = true;
+        directPublicRuleHosts.add(host);
       }
     }
   }
@@ -229,9 +229,9 @@ export function compileMihomo(snapshot: Snapshot, checked?: ExportResult['valida
       }
     }
   }
-  if (directGitHubRuleProvider && dns.enable !== false && dns['nameserver-policy'] === undefined &&
+  if (directPublicRuleHosts.size && dns.enable !== false && dns['nameserver-policy'] === undefined &&
       dns['direct-nameserver'] === undefined) {
-    if (resolvers.length) dns['nameserver-policy'] = { [GITHUB_RULE_HOST]: resolvers };
+    if (resolvers.length) dns['nameserver-policy'] = Object.fromEntries([...directPublicRuleHosts].map(host => [host, resolvers]));
   }
   if (Object.hasOwn(dns, 'follow-rule')) {
     if (typeof dns['follow-rule'] !== 'boolean' || (dns['respect-rules'] !== undefined && dns['respect-rules'] !== dns['follow-rule'])) {
